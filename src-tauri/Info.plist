@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>AppFlower records your microphone during meetings and transcribes the audio on-device. Nothing is uploaded.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>AppFlower captures system audio (the other participants) during meetings to transcribe them on-device. Nothing is uploaded.</string>
+</dict>
+</plist>

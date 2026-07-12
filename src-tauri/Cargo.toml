@@ -1,0 +1,49 @@
+[package]
+name = "appflower"
+version = "0.1.0"
+description = "AppFlower — local-first workspace with on-device meeting notes"
+authors = ["AppFlower"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "appflower_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2" }
+
+[dependencies]
+appflower-core = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+tauri = { version = "2.11.2" }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+rusqlite = { workspace = true }
+notify = "6.1"
+notify-debouncer-full = "0.3"
+blake3 = "1.5"
+cpal = "0.17.1"
+hound = "3.5"
+screencapturekit = "7.0.1"
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+sherpa-onnx = "1.13.2"
+tar = "0.4.46"
+bzip2-rs = "0.1.2"
+
+# Whisper: Metal acceleration on Apple Silicon, CPU on Intel.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+
+[target.'cfg(not(target_arch = "aarch64"))'.dependencies]
+whisper-rs = { version = "0.16", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
