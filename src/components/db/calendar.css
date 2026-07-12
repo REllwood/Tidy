@@ -1,0 +1,55 @@
+/* Theme react-big-calendar with Tidy tokens (light + dark). */
+.appflower-calendar .rbc-calendar {
+  color: var(--text);
+}
+.appflower-calendar .rbc-toolbar button {
+  color: var(--text-muted);
+  border-color: var(--border-c);
+  background: var(--surface);
+}
+.appflower-calendar .rbc-toolbar button:hover,
+.appflower-calendar .rbc-toolbar button:focus {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.appflower-calendar .rbc-toolbar button.rbc-active {
+  background: var(--brand);
+  color: var(--brand-fg);
+  border-color: var(--brand);
+}
+.appflower-calendar .rbc-toolbar-label {
+  font-weight: 600;
+  color: var(--text);
+}
+.appflower-calendar .rbc-month-view,
+.appflower-calendar .rbc-header,
+.appflower-calendar .rbc-day-bg,
+.appflower-calendar .rbc-month-row,
+.appflower-calendar .rbc-time-content {
+  border-color: var(--border-c) !important;
+}
+.appflower-calendar .rbc-header {
+  color: var(--text-faint);
+  padding: 6px 0;
+  font-weight: 600;
+  font-size: 12px;
+}
+.appflower-calendar .rbc-off-range-bg {
+  background: var(--bg-subtle);
+}
+.appflower-calendar .rbc-today {
+  background: var(--brand-soft);
+}
+.appflower-calendar .rbc-event {
+  background: var(--brand);
+  color: var(--brand-fg);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 1px 6px;
+}
+.appflower-calendar .rbc-date-cell {
+  color: var(--text-muted);
+  padding: 4px 6px;
+  font-size: 13px;
+}
