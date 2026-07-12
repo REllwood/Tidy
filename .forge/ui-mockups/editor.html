@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AppFlower — Document Editor (mockup)</title>
+<style>
+  :root {
+    --bg:#fff;--bg-subtle:#f7f7f5;--bg-sidebar:#fbfbfa;--surface:#fff;--surface-hover:#efefed;
+    --border:#ebeae8;--border-strong:#dddcd9;--text:#1f1f1d;--text-muted:#6b6a66;--text-faint:#9b9a95;
+    --accent:#2f6f4e;--accent-fg:#fff;--accent-soft:#e7f1ec;--danger:#b4453a;
+    --radius:8px;--radius-sm:6px;--shadow-md:0 4px 16px rgba(20,20,18,.10);
+    --font:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
+  }
+  [data-theme="dark"]{
+    --bg:#1a1a19;--bg-subtle:#202020;--bg-sidebar:#161615;--surface:#1f1f1e;--surface-hover:#2a2a28;
+    --border:#2e2e2c;--border-strong:#3a3a37;--text:#ededeb;--text-muted:#a3a29d;--text-faint:#6f6e69;
+    --accent:#5fae84;--accent-fg:#11261c;--accent-soft:#1e3329;--danger:#e0796d;
+    --shadow-md:0 6px 22px rgba(0,0,0,.5);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
+  body{font-family:var(--font);color:var(--text);background:var(--bg);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:260px 1fr;height:100vh}
+  .sidebar{background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:8px 8px 12px;overflow-y:auto}
+  .traffic{display:flex;gap:8px;padding:10px 8px 14px}.traffic span{width:12px;height:12px;border-radius:50%}
+  .traffic .r{background:#ff5f57}.traffic .y{background:#febc2e}.traffic .g{background:#28c840}
+  .ws{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:var(--radius-sm);cursor:pointer}
+  .ws:hover{background:var(--surface-hover)}
+  .ws .logo{width:22px;height:22px;border-radius:6px;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-weight:700;font-size:13px}
+  .ws .name{font-weight:600;font-size:14px}.ws .chev{margin-left:auto;color:var(--text-faint)}
+  .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border:0;background:none;color:var(--text-muted);font:inherit;font-size:14px;border-radius:var(--radius-sm);cursor:pointer;text-align:left}
+  .nav-btn:hover{background:var(--surface-hover);color:var(--text)}.nav-btn .ico{width:16px;text-align:center;opacity:.8}
+  .nav-btn.accent{color:var(--accent);font-weight:600}
+  .nav-btn kbd{margin-left:auto;font-size:11px;color:var(--text-faint);background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-family:var(--font)}
+  .sec-label{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint);padding:14px 8px 4px}
+  .tree-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-muted);font-size:14px}
+  .tree-item:hover{background:var(--surface-hover);color:var(--text)}
+  .tree-item.active{background:var(--accent-soft);color:var(--text);font-weight:500}
+  .tree-item .twirl{color:var(--text-faint);font-size:10px;width:12px}.tree-item .emoji{font-size:15px}.tree-item.nested{margin-left:18px}
+  .spacer{flex:1}
+  .main{display:flex;flex-direction:column;overflow:hidden}
+  .topbar{height:48px;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:13px;flex-shrink:0}
+  .crumb{display:flex;align-items:center;gap:6px}.crumb b{color:var(--text);font-weight:500}
+  .topbar .right{margin-left:auto;display:flex;gap:6px}
+  .icon-btn{width:30px;height:30px;border:0;background:none;border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:15px}
+  .icon-btn:hover{background:var(--surface-hover);color:var(--text)}
+  .doc-scroll{overflow-y:auto;flex:1}.doc{max-width:720px;margin:0 auto;padding:56px 48px 200px}
+  .page-emoji{font-size:60px;line-height:1;margin-bottom:12px}
+  h1.title{font-size:40px;font-weight:700;letter-spacing:-.02em;line-height:1.15;margin-bottom:8px}
+  .meta{color:var(--text-faint);font-size:13px;margin-bottom:28px}
+  .block{position:relative;padding:3px 0}.block:hover .handle{opacity:1}
+  .handle{position:absolute;left:-28px;top:6px;display:flex;gap:2px;opacity:0;transition:opacity .12s}
+  .handle span{width:20px;height:22px;border-radius:5px;color:var(--text-faint);display:grid;place-items:center;cursor:grab;font-size:13px}
+  .handle span:hover{background:var(--surface-hover);color:var(--text)}
+  h2.b{font-size:26px;font-weight:650;letter-spacing:-.01em;margin:18px 0 2px}p.b{color:var(--text)}
+  .li{display:flex;gap:10px;align-items:flex-start}.li .bullet{color:var(--text-muted);line-height:1.6}
+  .li .check{width:17px;height:17px;border:1.5px solid var(--border-strong);border-radius:4px;margin-top:5px;flex-shrink:0}
+  .li .check.done{background:var(--accent);border-color:var(--accent);display:grid;place-items:center;color:var(--accent-fg);font-size:11px}
+  .li.done span.txt{color:var(--text-faint);text-decoration:line-through}
+  .callout{display:flex;gap:12px;background:var(--accent-soft);border-radius:var(--radius);padding:14px 16px;margin:10px 0}
+  pre.code{background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin:10px 0;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px;color:var(--text);overflow-x:auto}
+  .divider{border:none;border-top:1px solid var(--border);margin:20px 0}
+  .slash{position:absolute;left:0;top:32px;width:300px;z-index:20;background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;box-shadow:var(--shadow-md);padding:6px;overflow:hidden}
+  .slash .grp{font-size:11px;color:var(--text-faint);padding:6px 8px 2px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .slash .opt{display:flex;align-items:center;gap:12px;padding:7px 8px;border-radius:6px;cursor:pointer}
+  .slash .opt.sel{background:var(--accent-soft)}.slash .opt:hover{background:var(--surface-hover)}
+  .slash .opt .gi{width:34px;height:34px;border:1px solid var(--border);border-radius:6px;display:grid;place-items:center;font-size:16px;background:var(--bg);flex-shrink:0}
+  .slash .opt .ot{font-size:14px;font-weight:500}.slash .opt .od{font-size:12px;color:var(--text-faint)}
+  .toggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:var(--surface)}
+  .toggle button{border:0;background:none;padding:5px 12px;font:inherit;font-size:12px;color:var(--text-muted);cursor:pointer}
+  .toggle button.on{background:var(--accent);color:var(--accent-fg)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head>
+<body><div class="app">
+  <aside class="sidebar" aria-label="Workspace navigation">
+    <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="ws"><div class="logo">A</div><span class="name">My Workspace</span><span class="chev">⌄</span></div>
+    <div style="margin-top:6px">
+      <button class="nav-btn"><span class="ico">⌕</span> Search <kbd>⌘K</kbd></button>
+      <button class="nav-btn accent"><span class="ico">●</span> New meeting</button>
+      <button class="nav-btn"><span class="ico">⊞</span> All pages</button>
+    </div>
+    <div class="sec-label">Favorites</div>
+    <div class="tree-item"><span class="emoji">📌</span> Project Hub</div>
+    <div class="tree-item"><span class="emoji">🗓️</span> Weekly 1:1s</div>
+    <div class="sec-label">Workspace</div>
+    <div class="tree-item"><span class="twirl">▾</span><span class="emoji">📁</span> Projects</div>
+    <div class="tree-item nested active"><span class="twirl"> </span><span class="emoji">📝</span> Q3 Kickoff Notes</div>
+    <div class="tree-item nested"><span class="twirl">▸</span><span class="emoji">🗂️</span> Roadmap (DB)</div>
+    <div class="tree-item"><span class="twirl">▸</span><span class="emoji">🧠</span> Knowledge Base</div>
+    <div class="tree-item"><span class="twirl"> </span><span class="emoji">🎙️</span> Meeting Notes</div>
+    <div class="spacer"></div>
+    <button class="nav-btn"><span class="ico">＋</span> New page</button>
+    <button class="nav-btn"><span class="ico">⚙︎</span> Settings</button>
+    <div style="padding:8px"><span class="toggle" role="group" aria-label="Theme">
+      <button onclick="setTheme('light')" id="tl" class="on">Light</button>
+      <button onclick="setTheme('dark')" id="td">Dark</button></span></div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div class="crumb">Projects <span>/</span> <b>Q3 Kickoff Notes</b></div>
+      <div class="right"><button class="icon-btn" title="Share" aria-label="Share">↗</button>
+        <button class="icon-btn" title="Favorite" aria-label="Favorite">☆</button>
+        <button class="icon-btn" title="More" aria-label="More options">⋯</button></div></div>
+    <div class="doc-scroll"><div class="doc">
+      <div class="page-emoji">📝</div>
+      <h1 class="title">Q3 Kickoff Notes</h1>
+      <div class="meta">Edited 2 minutes ago · Autosaved</div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><p class="b">Kickoff for the Q3 cycle. Goals, owners, and the first two weeks of work captured below.</p></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><h2 class="b">Goals</h2></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><div class="li"><span class="bullet">•</span><span class="txt">Ship the meeting recorder beta to internal testers.</span></div></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><div class="li"><span class="bullet">•</span><span class="txt">Cut editor typing latency to imperceptible.</span></div></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><div class="callout"><span>💡</span><span>Privacy is the headline: everything runs on-device. No transcript ever leaves the Mac.</span></div></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><h2 class="b">Action items</h2></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><div class="li done"><span class="check done">✓</span><span class="txt">Pin the dependency versions in RESEARCH.</span></div></div>
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><div class="li"><span class="check"></span><span class="txt">Wire up the Whisper model manager UI.</span></div></div>
+      <div class="block" style="min-height:120px"><div class="handle" style="opacity:1"><span>＋</span><span>⠿</span></div>
+        <p class="b" style="color:var(--text-faint)">/</p>
+        <div class="slash" role="listbox" aria-label="Insert block">
+          <div class="grp">Basic blocks</div>
+          <div class="opt sel" role="option" aria-selected="true"><span class="gi">H1</span><span><div class="ot">Heading 1</div><div class="od">Big section heading</div></span></div>
+          <div class="opt" role="option"><span class="gi">☰</span><span><div class="ot">Bulleted list</div><div class="od">Simple bullet points</div></span></div>
+          <div class="opt" role="option"><span class="gi">☑</span><span><div class="ot">To-do</div><div class="od">Track tasks with checkboxes</div></span></div>
+          <div class="opt" role="option"><span class="gi">▸</span><span><div class="ot">Toggle</div><div class="od">Collapsible content</div></span></div>
+          <div class="opt" role="option"><span class="gi">{ }</span><span><div class="ot">Code</div><div class="od">Monospace code block</div></span></div>
+        </div></div>
+      <hr class="divider" />
+      <div class="block"><div class="handle"><span>＋</span><span>⠿</span></div><pre class="code">$ ollama serve        # local summaries
+$ appflower --record  # mic + system audio</pre></div>
+    </div></div>
+  </main>
+</div>
+<script>function setTheme(t){document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'');document.getElementById('tl').classList.toggle('on',t==='light');document.getElementById('td').classList.toggle('on',t==='dark');}</script>
+</body></html>

@@ -1,0 +1,19 @@
+[package]
+name = "appflower-core"
+version = "0.1.0"
+description = "AppFlower shared core: SQLite store, migrations, LLM client, ingest"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

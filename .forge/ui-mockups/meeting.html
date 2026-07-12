@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AppFlower — Meeting recorder (mockup)</title>
+<style>
+  :root{--bg:#fff;--bg-subtle:#f7f7f5;--surface:#fff;--surface-hover:#efefed;--border:#ebeae8;--border-strong:#dddcd9;
+    --text:#1f1f1d;--text-muted:#6b6a66;--text-faint:#9b9a95;--accent:#2f6f4e;--accent-fg:#fff;--accent-soft:#e7f1ec;
+    --rec:#d23b30;--success:#2f7d54;--radius:8px;--radius-lg:14px;--shadow-md:0 4px 16px rgba(20,20,18,.10);
+    --font:-apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif;}
+  [data-theme="dark"]{--bg:#1a1a19;--bg-subtle:#202020;--surface:#1f1f1e;--surface-hover:#2a2a28;--border:#2e2e2c;--border-strong:#3a3a37;
+    --text:#ededeb;--text-muted:#a3a29d;--text-faint:#6f6e69;--accent:#5fae84;--accent-fg:#11261c;--accent-soft:#1e3329;
+    --rec:#e0796d;--success:#5fae84;--shadow-md:0 6px 22px rgba(0,0,0,.5);}
+  *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
+  body{font-family:var(--font);color:var(--text);background:var(--bg-subtle);font-size:15px;-webkit-font-smoothing:antialiased;padding:32px}
+  .header{max-width:920px;margin:0 auto 20px;display:flex;align-items:center}
+  .header h1{font-size:18px;font-weight:650}
+  .toggle{margin-left:auto;display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:var(--surface)}
+  .toggle button{border:0;background:none;padding:5px 12px;font:inherit;font-size:12px;color:var(--text-muted);cursor:pointer}
+  .toggle button.on{background:var(--accent);color:var(--accent-fg)}
+  .grid{max-width:920px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:28px;box-shadow:var(--shadow-md)}
+  .state-label{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-faint);margin-bottom:20px}
+  .rec-head{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+  .rec-dot{width:14px;height:14px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 0 color-mix(in srgb,var(--rec) 50%,transparent);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--rec) 55%,transparent)}70%{box-shadow:0 0 0 12px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  .rec-label{font-size:14px;font-weight:600;color:var(--rec)}
+  .timer{font-size:46px;font-weight:700;letter-spacing:.01em;font-variant-numeric:tabular-nums;margin-bottom:6px}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--success);background:color-mix(in srgb,var(--success) 14%,transparent);padding:3px 10px;border-radius:999px;font-weight:600;margin-bottom:24px}
+  .src{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}
+  .src .name{font-size:14px;font-weight:500}.src .sub{font-size:12px;color:var(--text-faint)}
+  .meter{margin-left:auto;display:flex;gap:3px;align-items:flex-end;height:24px}
+  .meter i{width:4px;background:var(--accent);border-radius:2px;display:block}
+  .controls{display:flex;gap:10px;margin-top:24px}
+  .btn{flex:1;border:1px solid var(--border);background:var(--surface);font:inherit;font-size:14px;font-weight:600;color:var(--text);padding:12px;border-radius:var(--radius);cursor:pointer}
+  .btn:hover{background:var(--surface-hover)}
+  .btn.stop{background:var(--rec);color:#fff;border-color:var(--rec)}
+  .steps{display:flex;flex-direction:column;gap:0;margin:8px 0 22px}
+  .step{display:flex;align-items:center;gap:14px;padding:12px 0}
+  .step .ico{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:14px;flex-shrink:0;border:1.5px solid var(--border-strong);color:var(--text-faint)}
+  .step.done .ico{background:var(--success);border-color:var(--success);color:#fff}
+  .step.active .ico{border-color:var(--accent);color:var(--accent)}
+  .step .lbl{font-size:14px;font-weight:500}.step.pending .lbl{color:var(--text-faint)}
+  .step .sub{font-size:12px;color:var(--text-faint)}
+  .progress{height:8px;background:var(--bg-subtle);border-radius:999px;overflow:hidden;margin:4px 0 6px}
+  .progress i{display:block;height:100%;width:62%;background:var(--accent);border-radius:999px}
+  .pct{font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+  .privacy{display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft);border-radius:var(--radius);padding:12px 14px;margin-top:18px;font-size:13px;color:var(--text-muted);line-height:1.5}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (prefers-reduced-motion:reduce){.rec-dot,.spin{animation:none}*{transition:none!important}}
+</style></head>
+<body>
+  <div class="header"><h1>🎙️ Meeting recorder</h1>
+    <span class="toggle" role="group" aria-label="Theme">
+      <button onclick="setTheme('light')" id="tl" class="on">Light</button>
+      <button onclick="setTheme('dark')" id="td">Dark</button></span></div>
+  <div class="grid">
+    <!-- STATE: RECORDING -->
+    <section class="card" aria-label="Recording in progress">
+      <div class="state-label">State · Recording</div>
+      <div class="rec-head"><span class="rec-dot" aria-hidden="true"></span><span class="rec-label">Recording</span></div>
+      <div class="timer" role="timer">00:14:32</div>
+      <span class="badge">● On-device · nothing is uploaded</span>
+      <div class="src"><span aria-hidden="true">🎤</span><span><div class="name">Microphone</div><div class="sub">MacBook Pro Mic</div></span>
+        <span class="meter" aria-label="Mic input level"><i style="height:8px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:12px"></i><i style="height:18px"></i></span></div>
+      <div class="src"><span aria-hidden="true">🔊</span><span><div class="name">System audio</div><div class="sub">ScreenCaptureKit</div></span>
+        <span class="meter" aria-label="System audio level"><i style="height:14px"></i><i style="height:20px"></i><i style="height:10px"></i><i style="height:16px"></i><i style="height:6px"></i></span></div>
+      <div class="controls"><button class="btn">⏸ Pause</button><button class="btn stop">⏹ Stop &amp; transcribe</button></div>
+    </section>
+    <!-- STATE: TRANSCRIBING / SUMMARIZING -->
+    <section class="card" aria-label="Processing recording">
+      <div class="state-label">State · Processing</div>
+      <div class="steps">
+        <div class="step done"><span class="ico">✓</span><span><div class="lbl">Captured audio</div><div class="sub">14:32 · mic + system</div></span></div>
+        <div class="step active"><span class="ico">●</span><span style="flex:1">
+          <div class="lbl">Transcribing on-device</div>
+          <div class="progress" role="progressbar" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100"><i></i></div>
+          <div class="pct">62% · Whisper base · ~40s left</div></span></div>
+        <div class="step pending"><span class="ico">⟳</span><span><div class="lbl">Summarizing</div><div class="sub">llama3.2:3b (local) — queued</div></span></div>
+        <div class="step pending"><span class="ico">＋</span><span><div class="lbl">Save as page</div><div class="sub">→ Meeting Notes</div></span></div>
+      </div>
+      <div class="privacy"><span aria-hidden="true">🔒</span><span><b>Fully local.</b> Your audio and transcript never leave this Mac. Summaries run on your local Ollama; if it isn't running, the transcript still saves.</span></div>
+      <div style="margin-top:14px;font-size:12px;color:var(--text-faint);display:flex;align-items:center;gap:8px"><span class="spin" aria-hidden="true"></span> This runs in the background — keep working if you like.</div>
+    </section>
+  </div>
+<script>function setTheme(t){document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'');document.getElementById('tl').classList.toggle('on',t==='light');document.getElementById('td').classList.toggle('on',t==='dark');}</script>
+</body></html>

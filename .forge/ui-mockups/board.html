@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AppFlower — Board view (mockup)</title>
+<style>
+  :root{--bg:#fff;--bg-subtle:#f7f7f5;--bg-sidebar:#fbfbfa;--surface:#fff;--surface-hover:#efefed;
+    --border:#ebeae8;--border-strong:#dddcd9;--text:#1f1f1d;--text-muted:#6b6a66;--text-faint:#9b9a95;
+    --accent:#2f6f4e;--accent-fg:#fff;--accent-soft:#e7f1ec;--radius:8px;--radius-sm:6px;
+    --shadow-sm:0 1px 2px rgba(20,20,18,.06);--shadow-md:0 4px 16px rgba(20,20,18,.10);
+    --font:-apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif;
+    --c-blue:#3b6fb0;--c-amber:#a8730f;--c-green:#2f7d54;--c-grey:#6b6a66;}
+  [data-theme="dark"]{--bg:#1a1a19;--bg-subtle:#202020;--bg-sidebar:#161615;--surface:#1f1f1e;--surface-hover:#2a2a28;
+    --border:#2e2e2c;--border-strong:#3a3a37;--text:#ededeb;--text-muted:#a3a29d;--text-faint:#6f6e69;
+    --accent:#5fae84;--accent-fg:#11261c;--accent-soft:#1e3329;--shadow-md:0 6px 22px rgba(0,0,0,.5);
+    --c-blue:#7aa6dd;--c-amber:#d6a13e;--c-green:#5fae84;--c-grey:#a3a29d;}
+  *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
+  body{font-family:var(--font);color:var(--text);background:var(--bg);font-size:15px;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:260px 1fr;height:100vh}
+  .sidebar{background:var(--bg-sidebar);border-right:1px solid var(--border);padding:8px;display:flex;flex-direction:column}
+  .traffic{display:flex;gap:8px;padding:10px 8px 14px}.traffic span{width:12px;height:12px;border-radius:50%}
+  .traffic .r{background:#ff5f57}.traffic .y{background:#febc2e}.traffic .g{background:#28c840}
+  .tree-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;color:var(--text-muted);font-size:14px;cursor:pointer}
+  .tree-item:hover{background:var(--surface-hover);color:var(--text)}.tree-item.active{background:var(--accent-soft);color:var(--text);font-weight:500}
+  .sec-label{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint);padding:14px 8px 4px}
+  .spacer{flex:1}
+  .toggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:var(--surface)}
+  .toggle button{border:0;background:none;padding:5px 12px;font:inherit;font-size:12px;color:var(--text-muted);cursor:pointer}
+  .toggle button.on{background:var(--accent);color:var(--accent-fg)}
+  .main{display:flex;flex-direction:column;overflow:hidden}
+  .topbar{height:48px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--border);flex-shrink:0}
+  .title{font-weight:600;font-size:15px;display:flex;align-items:center;gap:8px}
+  .views{display:flex;gap:2px;margin-left:8px}
+  .view-tab{border:0;background:none;font:inherit;font-size:13px;color:var(--text-muted);padding:6px 10px;border-radius:6px;cursor:pointer}
+  .view-tab:hover{background:var(--surface-hover);color:var(--text)}
+  .view-tab.on{background:var(--accent-soft);color:var(--text);font-weight:600}
+  .tb-right{margin-left:auto;display:flex;gap:6px}
+  .pill{border:1px solid var(--border);background:var(--surface);font:inherit;font-size:13px;color:var(--text-muted);padding:5px 10px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .pill:hover{background:var(--surface-hover);color:var(--text)}
+  .pill.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+  .board{flex:1;overflow-x:auto;display:flex;gap:16px;padding:20px;align-items:flex-start}
+  .col{width:288px;flex-shrink:0;background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:8px;display:flex;flex-direction:column;gap:8px}
+  .col-head{display:flex;align-items:center;gap:8px;padding:4px 6px 2px}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .col-title{font-size:13px;font-weight:600}.col-count{font-size:12px;color:var(--text-faint)}
+  .col-add{margin-left:auto;border:0;background:none;color:var(--text-faint);cursor:pointer;font-size:16px;width:24px;height:24px;border-radius:5px}
+  .col-add:hover{background:var(--surface-hover);color:var(--text)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;box-shadow:var(--shadow-sm);cursor:grab;display:flex;flex-direction:column;gap:8px}
+  .card:hover{border-color:var(--border-strong)}
+  .card .ct{font-size:14px;font-weight:500;line-height:1.4}
+  .card .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px}
+  .tag.blue{color:var(--c-blue);background:color-mix(in srgb,var(--c-blue) 14%,transparent)}
+  .tag.amber{color:var(--c-amber);background:color-mix(in srgb,var(--c-amber) 16%,transparent)}
+  .tag.green{color:var(--c-green);background:color-mix(in srgb,var(--c-green) 16%,transparent)}
+  .meta-s{font-size:12px;color:var(--text-faint);display:flex;align-items:center;gap:5px}
+  .avatar{width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-fg);font-size:10px;font-weight:700;display:grid;place-items:center}
+  .placeholder{border:1.5px dashed var(--accent);border-radius:var(--radius-sm);height:64px;background:var(--accent-soft)}
+  .add-card{border:0;background:none;color:var(--text-faint);font:inherit;font-size:13px;text-align:left;padding:6px;border-radius:6px;cursor:pointer}
+  .add-card:hover{background:var(--surface-hover);color:var(--text)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head>
+<body><div class="app">
+  <aside class="sidebar" aria-label="Workspace navigation">
+    <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="sec-label">Favorites</div>
+    <div class="tree-item">📌 Project Hub</div>
+    <div class="sec-label">Workspace</div>
+    <div class="tree-item">📁 Projects</div>
+    <div class="tree-item active">🗂️ Roadmap (DB)</div>
+    <div class="tree-item">🧠 Knowledge Base</div>
+    <div class="tree-item">🎙️ Meeting Notes</div>
+    <div class="spacer"></div>
+    <div style="padding:8px"><span class="toggle" role="group" aria-label="Theme">
+      <button onclick="setTheme('light')" id="tl" class="on">Light</button>
+      <button onclick="setTheme('dark')" id="td">Dark</button></span></div>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <span class="title">🗂️ Roadmap</span>
+      <div class="views" role="tablist" aria-label="Database views">
+        <button class="view-tab" role="tab">Grid</button>
+        <button class="view-tab on" role="tab" aria-selected="true">Board</button>
+        <button class="view-tab" role="tab">Calendar</button>
+      </div>
+      <div class="tb-right">
+        <button class="pill">⚌ Group: Status</button>
+        <button class="pill">⛃ Filter</button>
+        <button class="pill">↕ Sort</button>
+        <button class="pill primary">＋ New</button>
+      </div>
+    </div>
+    <div class="board">
+      <section class="col" aria-label="Backlog">
+        <div class="col-head"><span class="dot" style="background:var(--c-grey)"></span><span class="col-title">Backlog</span><span class="col-count">3</span><button class="col-add" aria-label="Add card to Backlog">＋</button></div>
+        <div class="card"><div class="ct">Speaker diarization research</div><div class="row"><span class="tag amber">Research</span><span class="meta-s">📅 Aug 4</span></div></div>
+        <div class="card"><div class="ct">Markdown export polish</div><div class="row"><span class="tag blue">Editor</span></div></div>
+        <div class="card"><div class="ct">Universal binary build (Intel)</div><div class="row"><span class="tag green">Build</span><span class="meta-s"><span class="avatar">RE</span></span></div></div>
+        <button class="add-card">＋ New card</button>
+      </section>
+      <section class="col" aria-label="In progress">
+        <div class="col-head"><span class="dot" style="background:var(--c-blue)"></span><span class="col-title">In progress</span><span class="col-count">2</span><button class="col-add" aria-label="Add card to In progress">＋</button></div>
+        <div class="card" style="box-shadow:var(--shadow-md)"><div class="ct">Whisper model manager UI</div><div class="row"><span class="tag amber">Settings</span><span class="meta-s">📅 Jun 20</span><span class="avatar" style="margin-left:auto">RE</span></div></div>
+        <div class="placeholder" aria-hidden="true"></div>
+        <div class="card"><div class="ct">Kanban drag persistence</div><div class="row"><span class="tag blue">DB views</span></div></div>
+        <button class="add-card">＋ New card</button>
+      </section>
+      <section class="col" aria-label="In review">
+        <div class="col-head"><span class="dot" style="background:var(--c-amber)"></span><span class="col-title">In review</span><span class="col-count">1</span><button class="col-add" aria-label="Add card to In review">＋</button></div>
+        <div class="card"><div class="ct">Slash menu grouping</div><div class="row"><span class="tag blue">Editor</span><span class="meta-s"><span class="avatar">RE</span></span></div></div>
+        <button class="add-card">＋ New card</button>
+      </section>
+      <section class="col" aria-label="Done">
+        <div class="col-head"><span class="dot" style="background:var(--c-green)"></span><span class="col-title">Done</span><span class="col-count">2</span><button class="col-add" aria-label="Add card to Done">＋</button></div>
+        <div class="card"><div class="ct">Pin dependency versions</div><div class="row"><span class="tag green">Build</span></div></div>
+        <div class="card"><div class="ct">Design tokens + dark mode</div><div class="row"><span class="tag amber">Design</span></div></div>
+        <button class="add-card">＋ New card</button>
+      </section>
+    </div>
+  </main>
+</div>
+<script>function setTheme(t){document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'');document.getElementById('tl').classList.toggle('on',t==='light');document.getElementById('td').classList.toggle('on',t==='dark');}</script>
+</body></html>

@@ -1,0 +1,771 @@
+<title>AppFlower — Embedded MCP Server Architecture</title>
+<style>
+  :root {
+    /* Neutrals biased warm toward the amber accent (chosen, not defaulted) */
+    --paper:      #faf7f2;
+    --paper-2:    #f3eee5;
+    --ink:        #22201c;
+    --ink-soft:   #55504733;
+    --muted:      #6f695d;
+    --rule:       #e4ddd0;
+    --rule-2:     #d8cfbe;
+    /* Accent: amber — the "flower"/local-first warmth */
+    --amber:      #b5651d;
+    --amber-2:    #8f4e14;
+    --amber-wash: #f6ecdd;
+    /* Semantic (distinct from accent) */
+    --good:       #3f7d52;
+    --good-wash:  #e8f0e8;
+    --warn:       #9a6b12;
+    --warn-wash:  #f4ecd9;
+    --crit:       #a23a34;
+    --crit-wash:  #f4e4e2;
+    --code-bg:    #2b2822;
+    --code-fg:    #eee7d9;
+    --code-dim:   #a49a86;
+    --code-amber: #e0a35c;
+    --code-green: #9cc79a;
+    --code-blue:  #8fb4cf;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap {
+    max-width: 940px;
+    margin: 0 auto;
+    padding: 0 28px 120px;
+  }
+
+  /* ---- Masthead ---- */
+  header.masthead {
+    padding: 72px 0 40px;
+    border-bottom: 2px solid var(--ink);
+    margin-bottom: 8px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--amber-2);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 26px; height: 2px; background: var(--amber);
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(34px, 5.5vw, 52px);
+    line-height: 1.04;
+    letter-spacing: -0.01em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-family: var(--serif);
+    font-size: clamp(17px, 2.4vw, 21px);
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 26px;
+    margin-top: 30px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .meta-row b { color: var(--ink); font-weight: 600; }
+
+  /* ---- The verdict banner ---- */
+  .verdict {
+    margin: 40px 0 8px;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 4px;
+    padding: 30px 34px;
+    box-shadow: 0 1px 0 var(--rule-2), 0 18px 40px -28px #2b282288;
+  }
+  .verdict .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--code-amber);
+    margin-bottom: 14px;
+  }
+  .verdict p {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: clamp(19px, 2.7vw, 25px);
+    line-height: 1.42;
+    text-wrap: pretty;
+  }
+  .verdict .stack {
+    margin-top: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .verdict .chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 5px 11px;
+    border: 1px solid #ffffff22;
+    border-radius: 3px;
+    color: var(--code-dim);
+  }
+  .verdict .chip b { color: var(--code-amber); font-weight: 600; }
+
+  /* ---- Section scaffolding ---- */
+  section { margin-top: 56px; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    border-bottom: 1px solid var(--rule-2);
+    padding-bottom: 12px;
+    margin-bottom: 28px;
+  }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--amber-2);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    flex: none;
+    padding-top: 4px;
+  }
+  h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(23px, 3.4vw, 30px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-weight: 680;
+    font-size: 17px;
+    letter-spacing: -0.005em;
+    margin: 34px 0 12px;
+  }
+  h3 .k { font-family: var(--mono); font-size: 14.5px; color: var(--amber-2); font-weight: 600; }
+
+  p { margin: 0 0 16px; max-width: 68ch; }
+  p.lead { font-size: 17px; }
+  a { color: var(--amber-2); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  strong { font-weight: 650; }
+  em { font-style: italic; color: var(--muted); }
+
+  code.inline {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--amber-2);
+    white-space: nowrap;
+  }
+
+  ul.clean { margin: 0 0 16px; padding-left: 0; list-style: none; max-width: 68ch; }
+  ul.clean li { position: relative; padding-left: 22px; margin-bottom: 9px; }
+  ul.clean li::before {
+    content: "";
+    position: absolute; left: 3px; top: 0.62em;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--amber);
+  }
+  ul.clean li b { font-weight: 650; }
+
+  /* ---- Callouts ---- */
+  .note {
+    border-left: 3px solid var(--amber);
+    background: var(--amber-wash);
+    padding: 16px 20px;
+    border-radius: 0 4px 4px 0;
+    margin: 22px 0;
+    font-size: 15px;
+  }
+  .note .lbl {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--amber-2); display:block; margin-bottom: 6px;
+  }
+  .note p { margin: 0; max-width: none; }
+
+  /* ---- Code blocks ---- */
+  .code {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 5px;
+    margin: 18px 0 22px;
+    overflow: hidden;
+    box-shadow: 0 12px 30px -26px #2b2822;
+  }
+  .code .cap {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    color: var(--code-dim);
+    padding: 10px 16px;
+    border-bottom: 1px solid #ffffff14;
+    display: flex; justify-content: space-between; align-items:center;
+  }
+  .code .cap .fname { color: var(--code-amber); }
+  .code pre {
+    margin: 0;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.62;
+    tab-size: 2;
+  }
+  .code pre code { font-family: inherit; white-space: pre; }
+  .c-com { color: var(--code-dim); font-style: italic; }
+  .c-key { color: var(--code-amber); }
+  .c-str { color: var(--code-green); }
+  .c-fn  { color: var(--code-blue); }
+  .c-dim { color: var(--code-dim); }
+
+  /* ---- Tables ---- */
+  .tbl-scroll { overflow-x: auto; margin: 20px 0 26px; border: 1px solid var(--rule-2); border-radius: 5px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 640px;
+    font-size: 14px;
+    background: #fff;
+  }
+  thead th {
+    background: var(--paper-2);
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 11px 14px;
+    border-bottom: 2px solid var(--rule-2);
+    white-space: nowrap;
+  }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) td { background: #fcfaf6; }
+  td .m { font-family: var(--mono); font-size: 12.5px; color: var(--amber-2); }
+  td .params { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .grp-row td {
+    background: var(--code-bg) !important;
+    color: var(--code-amber);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+  }
+
+  /* ---- Pills ---- */
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .pill.write { background: var(--crit-wash); color: var(--crit); border: 1px solid #a23a3433; }
+  .pill.read  { background: var(--good-wash); color: var(--good); border: 1px solid #3f7d5233; }
+  .pill.admin { background: var(--warn-wash); color: var(--warn); border: 1px solid #9a6b1233; }
+
+  /* ---- Decision cards ---- */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0; }
+  @media (max-width: 720px){ .cards { grid-template-columns: 1fr; } }
+  .card {
+    border: 1px solid var(--rule-2);
+    border-radius: 6px;
+    padding: 18px 20px;
+    background: #fff;
+  }
+  .card.pick { border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber-wash); background: #fffdf9; }
+  .card .head { display:flex; align-items:center; gap:10px; margin-bottom: 10px; }
+  .card h4 { font-family: var(--mono); font-size: 14px; margin: 0; letter-spacing: -0.01em; }
+  .card .verdict-tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px;
+  }
+  .card.pick .verdict-tag { background: var(--amber); color: #fff; }
+  .card.no .verdict-tag { background: var(--paper-2); color: var(--muted); }
+  .card p { font-size: 13.5px; margin: 0; color: var(--muted); max-width: none; }
+  .card p + p { margin-top: 8px; }
+
+  /* ---- Flow diagram ---- */
+  .flow {
+    background: #fff; border: 1px solid var(--rule-2); border-radius: 6px;
+    padding: 6px; margin: 22px 0; overflow-x: auto;
+  }
+  .flow svg { display:block; min-width: 720px; }
+
+  /* ---- Footer ---- */
+  footer {
+    margin-top: 72px; padding-top: 26px; border-top: 2px solid var(--ink);
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 6px 22px; justify-content: space-between;
+  }
+  footer a { color: var(--amber-2); }
+
+  .src-list { font-size: 13px; }
+  .src-list li { margin-bottom: 7px; }
+  .src-list a { word-break: break-word; }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Architecture Recommendation · Research</div>
+    <h1>Hosting an MCP server inside AppFlower</h1>
+    <p class="standfirst">A firm plan for letting <strong>Claude Code</strong> and <strong>Codex</strong> push meeting notes into the vault, read and search the knowledge base, and manage tasks &amp; tables — grounded in the app's existing Tauri&#8202;/&#8202;Rust core and <code class="inline">rusqlite</code> store.</p>
+    <div class="meta-row">
+      <span><b>Base</b> Tauri 2 · React 19 · Rust core</span>
+      <span><b>Store</b> rusqlite (WAL, FTS5)</span>
+      <span><b>Spec basis</b> MCP 2025-11-25</span>
+      <span><b>Dated</b> July 2026</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div class="tag">The recommendation, in one breath</div>
+    <p>Ship a <strong>standalone Rust MCP binary built on <code style="font-family:var(--mono);font-size:0.8em;color:var(--code-amber)">rmcp 2.1</code></strong>, bundled as a <strong>Tauri sidecar</strong>, speaking <strong>stdio</strong> to same-machine AI clients. It opens the same <code style="font-family:var(--mono);font-size:0.8em;color:var(--code-amber)">appflower.db</code> in WAL mode and reuses your existing <code style="font-family:var(--mono);font-size:0.8em;color:var(--code-amber)">core::</code> functions — no HTTP port, no network surface, no second language runtime.</p>
+    <div class="stack">
+      <span class="chip">transport · <b>stdio</b></span>
+      <span class="chip">sdk · <b>rmcp 2.1.0</b></span>
+      <span class="chip">host · <b>sidecar binary</b></span>
+      <span class="chip">store · <b>shared WAL SQLite</b></span>
+      <span class="chip">auth · <b>OS process trust</b></span>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <section id="transport">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Transport: stdio, not HTTP</h2></div>
+
+    <p class="lead">The current spec (protocol revision <strong>2025-11-25</strong>) defines exactly two standard transports: <strong>stdio</strong> and <strong>Streamable HTTP</strong>. The old HTTP+SSE transport is <strong>deprecated</strong> — retained only for backwards compatibility and losing client support over time. Do not build a new SSE server.</p>
+
+    <div class="cards">
+      <div class="card pick">
+        <div class="head"><span class="verdict-tag">Use this</span><h4>stdio</h4></div>
+        <p>The client launches the server as a subprocess and exchanges newline-delimited JSON-RPC over stdin/stdout. No port, no listening socket, no HTTP surface an attacker can reach.</p>
+        <p>The spec: <em>"Clients SHOULD support stdio whenever possible."</em> Both Claude Code and Codex do, and both make it the default for local servers.</p>
+      </div>
+      <div class="card no">
+        <div class="head"><span class="verdict-tag">Not needed</span><h4>Streamable HTTP</h4></div>
+        <p>Right for remote, multi-client, cloud-hosted servers. For a desktop app whose only clients are CLIs on the <em>same machine</em>, it adds a bound socket, an <code class="inline">Origin</code>-validation obligation, and a token handshake — cost with no benefit.</p>
+      </div>
+    </div>
+
+    <p><strong>Why stdio wins here specifically.</strong> Your clients are Claude Code and Codex running on the user's own Mac. A subprocess pipe is the tightest possible trust boundary: only a local process that can already spawn the binary can talk to it. Streamable HTTP's own security section exists precisely to <em>recover</em> that property for network servers — it <strong>MUST</strong> validate the <code class="inline">Origin</code> header against DNS-rebinding, <strong>SHOULD</strong> bind only to <code class="inline">127.0.0.1</code>, and <strong>SHOULD</strong> authenticate every connection. With stdio you get all of that for free by construction.</p>
+
+    <div class="note">
+      <span class="lbl">Keep the door open</span>
+      <p><code class="inline">rmcp</code> makes the transport a one-line swap. If you later want a remote client (a phone, a hosted agent), add the <code class="inline">transport-streamable-http-server</code> feature and bind to <code class="inline">127.0.0.1</code> behind a bearer token — the tool code doesn't change. Ship stdio now; don't foreclose HTTP.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="sdk">
+    <div class="sec-head"><span class="sec-num">02</span><h2>SDK &amp; runtime: <code class="k">rmcp</code>, as a sidecar binary</h2></div>
+
+    <p class="lead">Two decisions here: which SDK, and where the server process lives relative to the Tauri app. Both point the same way — stay in Rust, stay close to the store.</p>
+
+    <h3>Why <code class="k">rmcp</code> over shipping a Node server</h3>
+    <ul class="clean">
+      <li><b>It's the official Rust SDK</b> (the <code class="inline">rmcp</code> crate, <code class="inline">modelcontextprotocol/rust-sdk</code>). Current version <b>2.1.0</b> (2026-07-02); the wider ecosystem tracks the latest protocol revision.</li>
+      <li><b>One language, one store.</b> Your core is already Rust with <code class="inline">rusqlite</code>. The MCP server can call the exact same <code class="inline">commands::pages::core</code>, <code class="inline">databases::core</code>, and <code class="inline">search::core</code> functions the Tauri commands call. A Node server would re-implement every KB operation in JS/TS against the same SQLite file — duplicated logic, drift risk, and a second runtime to bundle and code-sign.</li>
+      <li><b>Ergonomic tool definitions.</b> The <code class="inline">#[tool_router]</code> / <code class="inline">#[tool]</code> / <code class="inline">#[tool_handler]</code> macros generate the JSON-Schema and dispatch from your function signatures. Tool inputs arrive as typed <code class="inline">Parameters&lt;T&gt;</code> structs.</li>
+      <li><b>You already depend on <code class="inline">tokio</code>, <code class="inline">serde</code>, <code class="inline">reqwest</code>.</b> <code class="inline">rmcp</code> is a natural fit — no new heavy toolchain.</li>
+    </ul>
+
+    <h3>In-process vs. sidecar vs. standalone</h3>
+    <div class="cards">
+      <div class="card no">
+        <div class="head"><span class="verdict-tag">No</span><h4>In-process (inside Tauri)</h4></div>
+        <p>The AI client needs to <em>spawn</em> its MCP server and own its stdin/stdout. It can't attach to your already-running GUI process's pipes. stdio fundamentally requires a spawnable executable, so an in-process server can't serve external CLIs.</p>
+      </div>
+      <div class="card pick">
+        <div class="head"><span class="verdict-tag">Ship this</span><h4>Sidecar binary</h4></div>
+        <p>A second Rust binary in the same Cargo workspace, bundled via Tauri's <code class="inline">externalBin</code>. Ships and code-signs inside the <code class="inline">.app</code>, versioned in lockstep with the core, sharing the <code class="inline">appflower_lib</code> crate. The user points their AI tool at its absolute path.</p>
+      </div>
+    </div>
+    <p>A pure <em>standalone</em> binary (published separately, installed by the user) is the same code but a worse distribution story — version skew against the app, a separate install step, no shared code-signing. The sidecar <em>is</em> a bundled standalone binary; let Tauri ship it.</p>
+
+    <div class="note">
+      <span class="lbl">The one hard constraint — WAL, one writer</span>
+      <p>Your core comment says the Rust core is "the sole writer." The sidecar is now a <em>second</em> process opening the same DB file. SQLite <strong>WAL mode supports exactly one writer at a time across processes</strong>, coordinated by the OS. Open the sidecar's connection with <code class="inline">PRAGMA journal_mode=WAL</code> and, critically, <code class="inline">PRAGMA busy_timeout=5000</code> so a concurrent write from the GUI doesn't return <code class="inline">SQLITE_BUSY</code> — it waits. Every FTS5 trigger and migration still runs; the sidecar must run migrations to the same version on open (or refuse to start if the app's schema is newer).</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="skeleton">
+    <div class="sec-head"><span class="sec-num">03</span><h2>The sidecar, concretely</h2></div>
+
+    <p>A minimal but real skeleton. The server struct holds a DB handle; each <code class="inline">#[tool]</code> is a thin wrapper over an existing <code class="inline">core::</code> function.</p>
+
+    <div class="code">
+      <div class="cap"><span>Cargo.toml <span class="fname">— new bin crate: appflower-mcp</span></span><span>rmcp 2.1</span></div>
+<pre><code><span class="c-key">[dependencies]</span>
+rmcp <span class="c-dim">=</span> <span class="c-str">{ version = "2.1", features = [</span>
+  <span class="c-str">"server",</span> <span class="c-com"># default: tool system + ServerHandler</span>
+  <span class="c-str">"macros",</span> <span class="c-com"># default: #[tool] / #[tool_router]</span>
+  <span class="c-str">"transport-io"</span> <span class="c-com"># server-side stdio transport</span>
+<span class="c-str">] }</span>
+appflower_lib <span class="c-dim">= { path = "../src-tauri" }</span>  <span class="c-com"># reuse core::, db::</span>
+tokio <span class="c-dim">= { version = "1", features = ["full"] }</span>
+rusqlite <span class="c-dim">= { version = "0.32", features = ["bundled"] }</span>
+serde <span class="c-dim">= { version = "1", features = ["derive"] }</span></code></pre>
+    </div>
+
+    <div class="code">
+      <div class="cap"><span><span class="fname">main.rs</span> — tools wrap existing core functions</span><span>Rust</span></div>
+<pre><code><span class="c-key">use</span> rmcp::{
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::*, tool, tool_handler, tool_router,
+    ServiceExt, ServerHandler, ErrorData <span class="c-key">as</span> McpError,
+    transport::stdio,
+};
+<span class="c-key">use</span> appflower_lib::{db::Db, commands::{pages, search, databases}};
+
+<span class="c-key">#[derive(Clone)]</span>
+<span class="c-key">struct</span> <span class="c-fn">Kb</span> { db: std::sync::Arc&lt;Db&gt; }
+
+<span class="c-key">#[derive(serde::Deserialize, schemars::JsonSchema)]</span>
+<span class="c-key">struct</span> <span class="c-fn">SearchArgs</span> { <span class="c-com">/// full-text query</span>
+    query: String }
+
+<span class="c-key">#[tool_router]</span>
+<span class="c-key">impl</span> <span class="c-fn">Kb</span> {
+    <span class="c-key">#[tool(description = </span><span class="c-str">"Full-text search the knowledge base (pages + table rows)"</span><span class="c-key">)]</span>
+    <span class="c-key">async fn</span> <span class="c-fn">kb_search</span>(&amp;<span class="c-key">self</span>, Parameters(a): Parameters&lt;SearchArgs&gt;)
+        -&gt; Result&lt;CallToolResult, McpError&gt;
+    {
+        <span class="c-key">let</span> conn <span class="c-dim">=</span> <span class="c-key">self</span>.db.conn.lock().unwrap();
+        <span class="c-key">let</span> hits <span class="c-dim">=</span> search::core::<span class="c-fn">search</span>(&amp;conn, &amp;a.query)   <span class="c-com">// ← existing code</span>
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(<span class="c-key">vec!</span>[Content::json(hits)?]))
+    }
+    <span class="c-com">// ... ingest_note, create_page, add_row, set_cell, etc.</span>
+}
+
+<span class="c-key">#[tool_handler]</span>
+<span class="c-key">impl</span> ServerHandler <span class="c-key">for</span> Kb {
+    <span class="c-key">fn</span> <span class="c-fn">get_info</span>(&amp;<span class="c-key">self</span>) -&gt; ServerInfo {
+        ServerInfo {
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            instructions: Some(<span class="c-str">"AppFlower knowledge base: notes, tasks, tables."</span>.into()),
+            ..Default::default()
+        }
+    }
+}
+
+<span class="c-key">#[tokio::main]</span>
+<span class="c-key">async fn</span> <span class="c-fn">main</span>() -&gt; anyhow::Result&lt;()&gt; {
+    <span class="c-com">// Open the SAME db the app uses; WAL + busy_timeout for cross-process writes.</span>
+    <span class="c-key">let</span> db <span class="c-dim">=</span> Db::<span class="c-fn">open</span>(&amp;appflower_db_path())?;   <span class="c-com">// runs migrations, sets pragmas</span>
+    <span class="c-key">let</span> service <span class="c-dim">=</span> Kb { db: db.into() }.<span class="c-fn">serve</span>(<span class="c-fn">stdio</span>()).<span class="c-key">await</span>?;
+    service.<span class="c-fn">waiting</span>().<span class="c-key">await</span>?;                    <span class="c-com">// stderr only for logs — never stdout</span>
+    Ok(())
+}</code></pre>
+    </div>
+    <p style="font-size:14px;color:var(--muted)"><em>Note the discipline stdio demands: <b>nothing</b> but valid JSON-RPC may touch stdout. Route all logging to stderr (as the app's <code class="inline">tauri-plugin-log</code> already models).</em></p>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="register">
+    <div class="sec-head"><span class="sec-num">04</span><h2>Registering with Claude Code &amp; Codex</h2></div>
+
+    <p class="lead">Both tools register a local stdio server as "run this command." The user (or a one-click helper you build into AppFlower's settings) points them at the bundled sidecar's absolute path.</p>
+
+    <h3>Claude Code</h3>
+    <p>Add via CLI — the <code class="inline">--</code> separates Claude's flags from the command it will run:</p>
+    <div class="code">
+      <div class="cap"><span>terminal</span><span>claude mcp add</span></div>
+<pre><code><span class="c-com"># user scope = available in every project on this machine</span>
+claude mcp add <span class="c-dim">--scope</span> user <span class="c-dim">--transport</span> stdio appflower <span class="c-dim">\</span>
+  <span class="c-dim">--</span> <span class="c-str">"/Applications/AppFlower.app/Contents/MacOS/appflower-mcp"</span></code></pre>
+    </div>
+    <p>Scopes: <code class="inline">local</code> (default, this project only, in <code class="inline">~/.claude.json</code>) · <code class="inline">user</code> (all your projects) · <code class="inline">project</code> (shared, committed to <code class="inline">.mcp.json</code>). For a personal desktop app the KB belongs to one user, so <strong><code class="inline">user</code> scope</strong> is the right default. The equivalent <code class="inline">.mcp.json</code> / <code class="inline">~/.claude.json</code> entry:</p>
+    <div class="code">
+      <div class="cap"><span><span class="fname">~/.claude.json</span> (or .mcp.json for a shared project)</span><span>JSON</span></div>
+<pre><code>{
+  <span class="c-str">"mcpServers"</span>: {
+    <span class="c-str">"appflower"</span>: {
+      <span class="c-str">"type"</span>: <span class="c-str">"stdio"</span>,
+      <span class="c-str">"command"</span>: <span class="c-str">"/Applications/AppFlower.app/Contents/MacOS/appflower-mcp"</span>,
+      <span class="c-str">"args"</span>: [],
+      <span class="c-str">"env"</span>: { <span class="c-str">"APPFLOWER_MCP_TOKEN"</span>: <span class="c-str">"${APPFLOWER_MCP_TOKEN}"</span> }
+    }
+  }
+}</code></pre>
+    </div>
+
+    <h3>Codex</h3>
+    <p>Codex reads <code class="inline">~/.codex/config.toml</code> (or a project-scoped <code class="inline">.codex/config.toml</code>). Each server is a <code class="inline">[mcp_servers.&lt;name&gt;]</code> table; a stdio server needs <code class="inline">command</code> + optional <code class="inline">args</code> / <code class="inline">env</code>:</p>
+    <div class="code">
+      <div class="cap"><span><span class="fname">~/.codex/config.toml</span></span><span>TOML</span></div>
+<pre><code><span class="c-key">[mcp_servers.appflower]</span>
+command <span class="c-dim">=</span> <span class="c-str">"/Applications/AppFlower.app/Contents/MacOS/appflower-mcp"</span>
+args <span class="c-dim">=</span> <span class="c-str">[]</span>
+
+<span class="c-key">[mcp_servers.appflower.env]</span>
+APPFLOWER_MCP_TOKEN <span class="c-dim">=</span> <span class="c-str">"…"</span>   <span class="c-com"># handshake secret, see §5</span></code></pre>
+    </div>
+    <p>Or via the CLI: <code class="inline">codex mcp add appflower -- /Applications/AppFlower.app/Contents/MacOS/appflower-mcp</code>.</p>
+
+    <div class="note">
+      <span class="lbl">One-click onboarding</span>
+      <p>Don't make the user hand-type an <code class="inline">.app</code> path. AppFlower's settings screen should offer <strong>"Connect Claude Code"</strong> / <strong>"Connect Codex"</strong> buttons that shell out to <code class="inline">claude mcp add …</code> / write the <code class="inline">config.toml</code> table with the correct resolved sidecar path and a freshly minted token — the same UX pattern first-party MCP integrations ship.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="security">
+    <div class="sec-head"><span class="sec-num">05</span><h2>Security posture for a KB the AI can <em>write</em> to</h2></div>
+
+    <p class="lead">A read-only server is low-stakes. This one creates notes, edits tables, and deletes rows — a prompt-injected agent could do real damage. The 2025-11-25 security guidance and defense-in-depth both apply, even on stdio.</p>
+
+    <ul class="clean">
+      <li><b>No network surface by default.</b> stdio means there is no socket to bind, no <code class="inline">Origin</code> to validate, no remote reachability. This is the single biggest security win over an HTTP server and the reason to prefer stdio. <em>If</em> you ever add HTTP: bind <code class="inline">127.0.0.1</code> only, validate <code class="inline">Origin</code> (spec: <strong>MUST</strong>, 403 on mismatch), require a bearer token.</li>
+      <li><b>Handshake token even on stdio.</b> Any local process that knows the path can spawn the sidecar. Have the app write a random per-install secret into a setting; the sidecar reads it from its own DB and requires the client to present it (via the <code class="inline">env</code> shown above, checked at <code class="inline">initialize</code>). This stops <em>other</em> local software from silently registering itself against your KB.</li>
+      <li><b>Scope tools to intent, gate destructive ones.</b> Split read tools (<code class="inline">kb_search</code>, <code class="inline">get_page</code>) from write tools (<code class="inline">ingest_note</code>, <code class="inline">delete_row</code>). Consider a config flag that ships <strong>read-only by default</strong>, with writes opt-in. Deletes should be soft (archive), not hard, so an agent mistake is recoverable.</li>
+      <li><b>Validate at the boundary.</b> Tool inputs are untrusted model output. Reuse the app's own guards — e.g. <code class="inline">search::core</code> already escapes FTS/LIKE wildcards and quotes tokens; keep every write path going through <code class="inline">core::</code> so field-type and page-type validation (<code class="inline">'doc'|'database'</code>) is never bypassed.</li>
+      <li><b>Explicit user consent to run a local binary.</b> The spec calls this out for local servers: the client shows the exact command and the user approves execution. Claude Code's project-scope approval prompt does exactly this — lean into it; don't try to auto-register silently.</li>
+      <li><b>No secrets in tool text.</b> Never surface the handshake token, file paths, or audio paths back through tool results beyond what the task needs.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="surface">
+    <div class="sec-head"><span class="sec-num">06</span><h2>Proposed tool surface</h2></div>
+
+    <p class="lead">Three capability groups, mapped onto your existing entities (<code class="inline">page</code>, <code class="inline">database</code>, <code class="inline">field</code>, <code class="inline">db_row</code>, <code class="inline">cell</code>, <code class="inline">meeting</code>) and reusing your <code class="inline">core::</code> functions. <span class="pill read">read</span> <span class="pill write">write</span> <span class="pill admin">flagship</span></p>
+
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr><th>Tool</th><th>Params</th><th>Does</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr class="grp-row"><td colspan="4">A · Read &amp; search the KB</td></tr>
+          <tr>
+            <td><span class="m">kb_search</span></td>
+            <td class="params">query</td>
+            <td>FTS5 over page title+content and text cells. Wraps <code class="inline">search::core::search</code>.</td>
+            <td><span class="pill read">read</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">list_pages</span></td>
+            <td class="params">parent_id?</td>
+            <td>Tree of pages (doc + database), for navigation.</td>
+            <td><span class="pill read">read</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">get_page</span></td>
+            <td class="params">page_id, format?</td>
+            <td>Page metadata + BlockNote content, optionally rendered to markdown.</td>
+            <td><span class="pill read">read</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">get_database</span></td>
+            <td class="params">page_id</td>
+            <td>Fields, rows, cells, and views for a database page.</td>
+            <td><span class="pill read">read</span></td>
+          </tr>
+
+          <tr class="grp-row"><td colspan="4">B · Manage tasks &amp; tables</td></tr>
+          <tr>
+            <td><span class="m">create_page</span></td>
+            <td class="params">title, kind, parent_id?</td>
+            <td>New doc or database page. Wraps <code class="inline">pages::core::create</code> (validates kind).</td>
+            <td><span class="pill write">write</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">update_document</span></td>
+            <td class="params">page_id, content|markdown</td>
+            <td>Replace/append BlockNote body; FTS index updates via trigger.</td>
+            <td><span class="pill write">write</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">create_field</span></td>
+            <td class="params">database_id, name, type, options?</td>
+            <td>Add a column (text|number|select|date|checkbox).</td>
+            <td><span class="pill write">write</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">add_row</span></td>
+            <td class="params">database_id, cells?</td>
+            <td>Insert a row, optionally with initial cell values.</td>
+            <td><span class="pill write">write</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">set_cell</span></td>
+            <td class="params">row_id, field_id, value</td>
+            <td>Set one typed cell. Wraps <code class="inline">databases::core::set_cell</code>.</td>
+            <td><span class="pill write">write</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">archive_row</span></td>
+            <td class="params">row_id</td>
+            <td>Soft-delete (recoverable) rather than hard <code class="inline">delete_row</code>.</td>
+            <td><span class="pill write">write</span></td>
+          </tr>
+
+          <tr class="grp-row"><td colspan="4">C · Ingest meeting notes — the flagship</td></tr>
+          <tr>
+            <td><span class="m">ingest_note</span></td>
+            <td class="params">raw_text, client_hint?, meeting_id?, task_db_id?</td>
+            <td>Parse raw meeting text → create/update a note page → link the client entity → extract action items into task rows. See §7.</td>
+            <td><span class="pill admin">flagship</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="lbl">Resources, not just tools</span>
+      <p>MCP also has <strong>resources</strong> (read-only, addressable context the client can pull in). Expose pages as resources under an <code class="inline">appflower://page/{id}</code> URI scheme so an agent can reference a note as context without a tool round-trip. Keep <em>writes</em> as tools (they need arguments and confirmation); keep <em>reads</em> available as both a tool (for search) and resources (for direct reference).</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="flagship">
+    <div class="sec-head"><span class="sec-num">07</span><h2>Flagship flow: <code class="k">ingest_note</code> end-to-end</h2></div>
+
+    <p class="lead">The AI hands over raw meeting text; the server does the filing. This is the highest-value path and the one to build first.</p>
+
+    <div class="flow">
+      <svg viewBox="0 0 760 200" role="img" aria-label="ingest_note flow diagram">
+        <defs>
+          <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L7,3 L0,6 Z" fill="#8f4e14"/>
+          </marker>
+          <style>
+            .box{fill:#fff;stroke:#d8cfbe;stroke-width:1.2;rx:6}
+            .lbl{font-family:ui-monospace,Menlo,monospace;font-size:11px;fill:#22201c}
+            .sub{font-family:ui-sans-serif,system-ui;font-size:10px;fill:#6f695d}
+            .amberbox{fill:#f6ecdd;stroke:#b5651d;stroke-width:1.4}
+            .ln{stroke:#8f4e14;stroke-width:1.4;fill:none}
+          </style>
+        </defs>
+
+        <rect class="box" x="8"  y="76" width="118" height="48" rx="6"/>
+        <text class="lbl" x="67" y="96" text-anchor="middle">AI client</text>
+        <text class="sub" x="67" y="112" text-anchor="middle">raw_text →</text>
+
+        <rect class="amberbox" x="164" y="30" width="150" height="140" rx="6"/>
+        <text class="lbl" x="239" y="26" text-anchor="middle" style="fill:#8f4e14">ingest_note (server)</text>
+        <text class="sub" x="239" y="52" text-anchor="middle">1 · parse text</text>
+        <text class="sub" x="239" y="72" text-anchor="middle">2 · match client</text>
+        <text class="sub" x="239" y="92" text-anchor="middle">3 · write note page</text>
+        <text class="sub" x="239" y="112" text-anchor="middle">4 · link meeting</text>
+        <text class="sub" x="239" y="132" text-anchor="middle">5 · extract actions</text>
+        <text class="sub" x="239" y="152" text-anchor="middle">6 · insert task rows</text>
+
+        <rect class="box" x="360" y="18"  width="150" height="40" rx="6"/>
+        <text class="lbl" x="435" y="42" text-anchor="middle">page (doc)</text>
+        <rect class="box" x="360" y="70"  width="150" height="40" rx="6"/>
+        <text class="lbl" x="435" y="94" text-anchor="middle">meeting → page_id</text>
+        <rect class="box" x="360" y="122" width="150" height="40" rx="6"/>
+        <text class="lbl" x="435" y="146" text-anchor="middle">clients DB row</text>
+
+        <rect class="box" x="560" y="70" width="150" height="60" rx="6"/>
+        <text class="lbl" x="635" y="94" text-anchor="middle">tasks DB</text>
+        <text class="sub" x="635" y="112" text-anchor="middle">db_row + cell ×N</text>
+
+        <path class="ln" d="M126,100 L164,100" marker-end="url(#ar)"/>
+        <path class="ln" d="M314,58  L360,40"  marker-end="url(#ar)"/>
+        <path class="ln" d="M314,100 L360,90"  marker-end="url(#ar)"/>
+        <path class="ln" d="M314,138 L360,142" marker-end="url(#ar)"/>
+        <path class="ln" d="M510,100 L560,100" marker-end="url(#ar)"/>
+      </svg>
+    </div>
+
+    <ul class="clean">
+      <li><b>1 · Parse.</b> Split the raw text into summary, decisions, and action items. You already have this shape: <code class="inline">llm::ollama::summarize_transcript</code> returns exactly <code class="inline">{summary, action_items[], decisions[]}</code>. Reuse it — the local Ollama does the extraction, the MCP tool orchestrates the filing.</li>
+      <li><b>2 · Match the client entity.</b> Use <code class="inline">client_hint</code> (or the parsed attendee list) to <code class="inline">kb_search</code> the "Clients" database for an existing row; create one if none matches. This is the "link the right client" step.</li>
+      <li><b>3 · Write the note page.</b> <code class="inline">create_page</code> (kind <code class="inline">doc</code>) under the client, body = the BlockNote-rendered summary + decisions. FTS5 indexes it automatically via the existing <code class="inline">page_fts_ai</code> trigger.</li>
+      <li><b>4 · Link the meeting.</b> If <code class="inline">meeting_id</code> is supplied, set its <code class="inline">page_id</code> so the recording, transcript, and note are joined — exactly what <code class="inline">record_meeting</code> already models.</li>
+      <li><b>5–6 · Extract → tasks.</b> Each action item becomes a <code class="inline">db_row</code> in the tasks database, with cells for title, status (<code class="inline">select</code>), and a link back to the client. One <code class="inline">add_row</code> per item, all in a single SQLite transaction so a failure leaves no half-filed note.</li>
+    </ul>
+
+    <div class="note">
+      <span class="lbl">Return value</span>
+      <p>Reply with the created <code class="inline">page_id</code>, the resolved/created <code class="inline">client_row_id</code>, and the list of task <code class="inline">row_id</code>s — so the agent can confirm ("Filed under Acme Corp, 3 tasks created") and deep-link the user into the app. Wrap the whole thing in one transaction; surface a structured error, never a partial write.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="build">
+    <div class="sec-head"><span class="sec-num">08</span><h2>Bundling it as a sidecar</h2></div>
+    <p>Tauri ships the binary inside the <code class="inline">.app</code> and code-signs it with everything else.</p>
+    <div class="code">
+      <div class="cap"><span><span class="fname">src-tauri/tauri.conf.json</span> — bundle block</span><span>JSON</span></div>
+<pre><code><span class="c-str">"bundle"</span>: {
+  <span class="c-str">"externalBin"</span>: [<span class="c-str">"binaries/appflower-mcp"</span>]
+  <span class="c-com">// requires binaries/appflower-mcp-aarch64-apple-darwin (+ x86_64 variant)</span>
+  <span class="c-com">// built from the appflower-mcp crate for each target triple</span>
+}</code></pre>
+    </div>
+    <ul class="clean">
+      <li>The suffixed target-triple name (<code class="inline">-aarch64-apple-darwin</code>) is how Tauri picks the right binary per arch — mirror your existing whisper Metal/CPU split.</li>
+      <li>The app <em>itself</em> need not spawn it (the AI client does), so you likely don't need the shell-plugin <code class="inline">sidecar()</code> permission — but keep the option for a future "test connection" button in settings.</li>
+      <li>Resolve the installed path once at first run and feed it to the one-click <code class="inline">claude mcp add</code> / <code class="inline">config.toml</code> writer.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="sources">
+    <div class="sec-head"><span class="sec-num">09</span><h2>Primary sources</h2></div>
+    <ul class="clean src-list">
+      <li>MCP spec — Transports (rev. <b>2025-11-25</b>): standard = stdio + Streamable HTTP; SSE deprecated; Origin/localhost/auth requirements. <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">modelcontextprotocol.io/specification/2025-11-25/basic/transports</a></li>
+      <li>MCP spec — Authorization &amp; security best practices (2025-11-25): OAuth 2.1 + PKCE for network servers, RFC 8707 audience binding, explicit consent for local servers. <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">…/basic/authorization</a></li>
+      <li>Claude Code — Connect to tools via MCP (2026): <code class="inline">claude mcp add</code> transports, scopes, <code class="inline">.mcp.json</code> shape, header/env auth. <a href="https://code.claude.com/docs/en/mcp">code.claude.com/docs/en/mcp</a></li>
+      <li>Codex — Model Context Protocol (2026): <code class="inline">~/.codex/config.toml</code> <code class="inline">[mcp_servers.*]</code> stdio &amp; streamable-HTTP tables, <code class="inline">codex mcp add</code>. <a href="https://developers.openai.com/codex/mcp">developers.openai.com/codex/mcp</a></li>
+      <li>rmcp crate — v<b>2.1.0</b> (2026-07-02), feature flags &amp; server API. <a href="https://docs.rs/crate/rmcp/latest">docs.rs/crate/rmcp/latest</a> · <a href="https://github.com/modelcontextprotocol/rust-sdk">github.com/modelcontextprotocol/rust-sdk</a></li>
+      <li>rmcp server walkthrough — <code class="inline">#[tool_router]</code>/<code class="inline">#[tool]</code>/<code class="inline">#[tool_handler]</code> + <code class="inline">serve(stdio())</code>. <a href="https://rup12.net/posts/write-your-mcps-in-rust/">rup12.net/posts/write-your-mcps-in-rust</a></li>
+      <li>Tauri v2 — Embedding External Binaries (sidecar, <code class="inline">externalBin</code>, target-triple naming). <a href="https://v2.tauri.app/develop/sidecar/">v2.tauri.app/develop/sidecar</a></li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>AppFlower · Embedded MCP Server — Architecture Recommendation</span>
+    <span>Research basis: July 2026 · MCP 2025-11-25</span>
+  </footer>
+
+</div>

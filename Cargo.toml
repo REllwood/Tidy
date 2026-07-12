@@ -1,0 +1,19 @@
+# Cargo workspace: shared core (appflower-core) + the Tauri app (src-tauri) +
+# the MCP sidecar (crates/mcp). Shared crates are pinned here so the app and the
+# sidecar link the *same* rusqlite/serde — their APIs exchange those types.
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/core", "crates/mcp"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite_migration = "1.3"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "1"
+log = "0.4"
+reqwest = { version = "0.12", features = ["stream", "json"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread", "macros", "sync"] }
+futures-util = "0.3"
+appflower-core = { path = "crates/core" }

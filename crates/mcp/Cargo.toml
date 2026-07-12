@@ -1,0 +1,23 @@
+[package]
+name = "appflower-mcp"
+version = "0.1.0"
+description = "AppFlower MCP sidecar — exposes the local knowledge base to agents over stdio"
+edition = "2021"
+rust-version = "1.77.2"
+
+[[bin]]
+name = "appflower-mcp"
+path = "src/main.rs"
+
+[dependencies]
+appflower-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }
+rmcp = { version = "2.1.0", default-features = false, features = [
+    "server",
+    "macros",
+    "transport-io",
+    "schemars",
+] }
+schemars = "1"
