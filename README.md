@@ -16,6 +16,12 @@ Tidy is a desktop app for people who are sick of keeping their work in six diffe
 
 It runs entirely on your Mac. There's no account, no cloud, no sync and no telemetry. It's free, and it's yours.
 
+## Download
+
+Grab the latest `.dmg` from the [Releases page](https://github.com/REllwood/Tidy/releases), open it, and drag Tidy into your Applications folder. You'll want an Apple Silicon Mac on macOS 14.4 or newer.
+
+It isn't signed with an Apple Developer certificate yet, so the first time you open it macOS will say it "cannot be checked for malicious software". That's expected. Right-click (or Control-click) the Tidy app, choose Open, then Open again. You only have to do that once.
+
 ## The planner
 
 <p align="center">
