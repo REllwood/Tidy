@@ -1,0 +1,38 @@
+/* Map BlockNote (mantine) theme variables onto Tidy tokens so the editor
+   sits seamlessly on our surfaces in both light and dark. */
+.appflower-editor {
+  --bn-colors-editor-background: transparent;
+  --bn-colors-editor-text: var(--text);
+  --bn-colors-menu-background: var(--surface);
+  --bn-colors-menu-text: var(--text);
+  --bn-colors-tooltip-background: var(--surface);
+  --bn-colors-tooltip-text: var(--text);
+  --bn-colors-hovered-background: var(--surface-hover);
+  --bn-colors-hovered-text: var(--text);
+  --bn-colors-selected-background: var(--brand-soft);
+  --bn-colors-selected-text: var(--text);
+  --bn-colors-disabled-background: var(--bg-subtle);
+  --bn-colors-disabled-text: var(--text-faint);
+  --bn-colors-border: var(--border-c);
+  --bn-colors-side-menu: var(--text-faint);
+  --bn-colors-highlights-gray-background: var(--surface-hover);
+  /* Match the app chrome font (BlockNote otherwise forces Inter). */
+  --bn-font-family: var(--font-sans);
+}
+.appflower-editor .bn-container,
+.appflower-editor .bn-editor,
+.appflower-editor .ProseMirror {
+  font-family: var(--font-sans);
+}
+
+/* The page wrapper already provides the reading-measure padding. */
+.appflower-editor .bn-editor {
+  padding-inline: 0;
+}
+
+/* Ensure the editor sits flush on the page surface (no inner card). */
+.appflower-editor,
+.appflower-editor .bn-container,
+.appflower-editor .bn-editor {
+  background-color: transparent !important;
+}
