@@ -19,11 +19,18 @@ permissions:
 
 jobs:
   build-macos:
-    # Apple Silicon runner on macOS 14, matches the 14.4 minimum and gives us
-    # ScreenCaptureKit + Metal for the meeting recorder.
-    runs-on: macos-14
+    # Apple Silicon runner. macOS 15 (not 14) because the screencapturekit crate
+    # pulls in apple-metal, which needs the macOS 15 SDK to compile. The app's
+    # own minimum stays 14.4 (deployment target), so it still runs on macOS 14.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      # Pick the newest Xcode on the image so we get a recent macOS SDK.
+      - name: Select the latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - uses: actions/setup-node@v4
         with:
