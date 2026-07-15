@@ -1,8 +1,8 @@
 [package]
 name = "appflower"
-version = "0.1.0"
-description = "AppFlower — local-first workspace with on-device meeting notes"
-authors = ["AppFlower"]
+version = "0.1.2"
+description = "Tidy, a local-first workspace with on-device meeting notes"
+authors = ["Tidy"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.77.2"

@@ -20,7 +20,13 @@ It runs entirely on your Mac. There's no account, no cloud, no sync and no telem
 
 Grab the latest `.dmg` from the [Releases page](https://github.com/REllwood/Tidy/releases), open it, and drag Tidy into your Applications folder. You'll want an Apple Silicon Mac on macOS 14.4 or newer.
 
-It isn't signed with an Apple Developer certificate yet, so the first time you open it macOS will say it "cannot be checked for malicious software". That's expected. Right-click (or Control-click) the Tidy app, choose Open, then Open again. You only have to do that once.
+Tidy isn't signed with an Apple Developer certificate yet, so macOS will refuse to open the downloaded app (it usually claims the app "is damaged", it isn't). To let it through, run this once in Terminal after copying it to Applications:
+
+```bash
+xattr -cr /Applications/Tidy.app
+```
+
+That clears the quarantine flag macOS puts on downloaded files, and Tidy opens normally from then on. If you'd rather not run that, you can build from source instead (below), which needs no workaround.
 
 ## The planner
 

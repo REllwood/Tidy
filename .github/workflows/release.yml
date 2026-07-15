@@ -54,6 +54,28 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- macOS signing + notarisation (dormant until you add the secrets) ---
+          # With none of these set, the build is unsigned: APPLE_SIGNING_IDENTITY
+          # falls back to "-" (ad-hoc), which matches tauri.conf.json, and users
+          # clear quarantine once with `xattr -cr`. The env var overrides the
+          # config, and the `|| '-'` guard stops an empty secret from blanking the
+          # identity and re-breaking the seal.
+          #
+          # To ship a signed + notarised build that "just opens", enrol in the
+          # Apple Developer Program and add these six repository secrets. No other
+          # change needed, and remember to drop the `xattr` note from releaseBody.
+          #   APPLE_CERTIFICATE           base64 of your Developer ID .p12
+          #   APPLE_CERTIFICATE_PASSWORD  password for that .p12
+          #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
+          #   APPLE_ID                    your Apple ID email (for notarytool)
+          #   APPLE_PASSWORD              an app-specific password for that Apple ID
+          #   APPLE_TEAM_ID               your 10-char Team ID
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "Tidy ${{ inputs.tag || github.ref_name }}"
@@ -64,6 +86,12 @@ jobs:
 
             Download `Tidy_*_aarch64.dmg` below, open it, and drag **Tidy** into your Applications folder.
 
-            **First launch:** this build isn't signed with an Apple Developer certificate, so macOS will say it "cannot be checked for malicious software". That's expected. Right-click (or Control-click) the Tidy app, choose **Open**, then **Open** again. You only have to do this once.
+            **First launch:** this build isn't signed with an Apple Developer certificate, so macOS will refuse to open it (it usually claims the app "is damaged", it isn't). Run this once in Terminal after copying it to Applications:
+
+            ```
+            xattr -cr /Applications/Tidy.app
+            ```
+
+            That clears the quarantine flag on the download and Tidy opens normally from then on.
 
             Runs on Apple Silicon Macs with macOS 14.4 or newer. [Ollama](https://ollama.com) is optional, for on-device meeting summaries.
