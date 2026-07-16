@@ -23,6 +23,10 @@ jobs:
     # pulls in apple-metal, which needs the macOS 15 SDK to compile. The app's
     # own minimum stays 14.4 (deployment target), so it still runs on macOS 14.
     runs-on: macos-15
+    env:
+      # True only when a signing certificate secret is actually set. Used to
+      # decide whether to sign + notarise or fall back to a free ad-hoc build.
+      HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,32 +54,49 @@ jobs:
       - name: Build the MCP sidecar
         run: ./scripts/build-sidecar.sh
 
+      # --- macOS signing + notarisation (dormant until you add the secrets) ---
+      # This step only runs when APPLE_CERTIFICATE is set, and it exports the
+      # signing/notarisation vars into the environment for the build step below.
+      # Crucially, when the secrets are absent these vars are never set at all
+      # (not even to ""), because an empty APPLE_CERTIFICATE makes Tauri try to
+      # import an empty certificate and fail. With them unset, the build signs
+      # ad-hoc using tauri.conf.json's "-" identity, and users clear quarantine
+      # once with `xattr -cr`.
+      #
+      # To ship a signed + notarised build that "just opens", enrol in the Apple
+      # Developer Program and add these six repository secrets. Nothing else to
+      # change here, and remember to drop the `xattr` note from releaseBody.
+      #   APPLE_CERTIFICATE           single-line base64 of your Developer ID .p12
+      #   APPLE_CERTIFICATE_PASSWORD  password for that .p12
+      #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
+      #   APPLE_ID                    your Apple ID email (for notarytool)
+      #   APPLE_PASSWORD              an app-specific password for that Apple ID
+      #   APPLE_TEAM_ID               your 10-char Team ID
+      - name: Enable code signing (only when the secrets exist)
+        if: env.HAS_SIGNING == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          {
+            echo "APPLE_CERTIFICATE<<__TIDY_EOF__"
+            echo "$APPLE_CERTIFICATE"
+            echo "__TIDY_EOF__"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
       - name: Build the app and open a draft release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # --- macOS signing + notarisation (dormant until you add the secrets) ---
-          # With none of these set, the build is unsigned: APPLE_SIGNING_IDENTITY
-          # falls back to "-" (ad-hoc), which matches tauri.conf.json, and users
-          # clear quarantine once with `xattr -cr`. The env var overrides the
-          # config, and the `|| '-'` guard stops an empty secret from blanking the
-          # identity and re-breaking the seal.
-          #
-          # To ship a signed + notarised build that "just opens", enrol in the
-          # Apple Developer Program and add these six repository secrets. No other
-          # change needed, and remember to drop the `xattr` note from releaseBody.
-          #   APPLE_CERTIFICATE           base64 of your Developer ID .p12
-          #   APPLE_CERTIFICATE_PASSWORD  password for that .p12
-          #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
-          #   APPLE_ID                    your Apple ID email (for notarytool)
-          #   APPLE_PASSWORD              an app-specific password for that Apple ID
-          #   APPLE_TEAM_ID               your 10-char Team ID
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "Tidy ${{ inputs.tag || github.ref_name }}"
