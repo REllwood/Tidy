@@ -6,9 +6,10 @@ export type DbViewKind = "grid" | "board" | "calendar";
 
 /** What's open in the main content pane. */
 export type ActivePane =
-  | { kind: "page"; pageId: string }
+  | { kind: "page"; pageId: string; blockId?: string }
   | { kind: "settings" }
   | { kind: "meeting" }
+  | { kind: "ask" }
   | { kind: "graph" }
   | { kind: "planner" }
   | { kind: "home" };

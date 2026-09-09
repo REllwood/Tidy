@@ -3,7 +3,7 @@
 //! client, plus optional Tasks rows for each action item. Used by BOTH the MCP
 //! sidecar (`ingest_note` tool) and the meeting recorder on save.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -42,21 +42,21 @@ pub struct IngestResult {
     pub summary: String,
 }
 
-/// Find a live client page by exact title (deterministic: oldest match).
+/// Find a live client page by trimmed, case-insensitive title (deterministic: oldest match).
 fn find_page_by_title(conn: &rusqlite::Connection, title: &str) -> AppResult<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT id FROM page
-             WHERE title = ?1 AND type = 'doc' AND deleted_at IS NULL
+             WHERE trim(title) = ?1 COLLATE NOCASE AND type = 'doc' AND deleted_at IS NULL
              ORDER BY created_at LIMIT 1",
             params![title],
             |r| r.get::<_, String>(0),
         )
-        .ok())
+        .optional()?)
 }
 
 /// Build a BlockNote document body from a summary (string content is accepted).
-fn build_body(summary: &crate::llm::MeetingSummary) -> String {
+pub fn build_body(summary: &crate::llm::MeetingSummary) -> String {
     let mut blocks: Vec<Value> = vec![
         json!({"type":"heading","props":{"level":2},"content":"Summary"}),
         json!({"type":"paragraph","content": summary.summary}),
@@ -202,6 +202,23 @@ pub async fn ingest_note(db: &Db, args: IngestArgs) -> AppResult<IngestResult> {
 mod tests {
     use super::*;
     use crate::db::Db;
+
+    #[tokio::test]
+    async fn repeated_meetings_reuse_client_ignoring_case_and_spaces() {
+        let db = Db::open_in_memory().unwrap();
+        let mut results = Vec::new();
+        for hint in ["Acme Corp", "  acme corp  "] {
+            results.push(ingest_note(&db, IngestArgs {
+                raw_text: String::new(), client_hint: Some(hint.into()), meeting_id: None,
+                task_db_id: None, title: Some("Review".into()), body_json: Some("[]".into()), action_items: None,
+            }).await.unwrap());
+        }
+        assert_eq!(results[0].client_page_id, results[1].client_page_id);
+        assert_ne!(results[0].page_id, results[1].page_id);
+        let c = db.conn.lock().unwrap();
+        let count:i64 = c.query_row("SELECT count(*) FROM link WHERE target_page_id=?1 AND kind='task_of'", [&results[0].client_page_id], |r| r.get(0)).unwrap();
+        assert_eq!(count,2);
+    }
 
     /// The recorder path: pre-rendered body + explicit action items, no LLM.
     #[tokio::test]

@@ -25,6 +25,11 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+# Signing material must be stored outside the repository.
+*.p12
+*.p8
+*certificate-base64*.txt
+
 # Editor / OS
 .DS_Store
 Thumbs.db
@@ -35,3 +40,9 @@ Thumbs.db
 
 # Claude Code tool config / session data
 .claude/
+
+# Local signed release artefacts and isolated build snapshots
+release-builds/
+
+# Local upstream API reference
+docs/ai/llama-server-reference.txt

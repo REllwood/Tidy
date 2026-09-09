@@ -1,6 +1,6 @@
 [package]
 name = "appflower"
-version = "0.1.2"
+version = "0.2.0"
 description = "Tidy, a local-first workspace with on-device meeting notes"
 authors = ["Tidy"]
 license = "AGPL-3.0-or-later"
@@ -28,6 +28,7 @@ rusqlite = { workspace = true }
 notify = "6.1"
 notify-debouncer-full = "0.3"
 blake3 = "1.5"
+sha2 = "0.10"
 cpal = "0.17.1"
 hound = "3.5"
 screencapturekit = "7.0.1"

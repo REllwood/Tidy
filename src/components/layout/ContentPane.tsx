@@ -31,6 +31,8 @@ const PlannerView = lazy(() =>
   })),
 );
 
+const AskMeetings = lazy(() => import("@/features/meeting/AskMeetings").then(m => ({ default: m.AskMeetings })));
+
 /** Content router, dispatches the active pane to its surface. */
 export function ContentPane() {
   const pane = useUi((s) => s.activePane);
@@ -39,6 +41,9 @@ export function ContentPane() {
   switch (pane.kind) {
     case "page":
       body = <PageRouter pageId={pane.pageId} />;
+      break;
+    case "ask":
+      body = <AskMeetings />;
       break;
     case "settings":
       body = <SettingsView />;

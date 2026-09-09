@@ -39,7 +39,9 @@ export function TopBar() {
     crumbs = [
       {
         label:
-          pane.kind === "settings"
+          pane.kind === "ask"
+            ? "Ask meetings"
+            : pane.kind === "settings"
             ? "Settings"
             : pane.kind === "meeting"
               ? "Meeting recorder"

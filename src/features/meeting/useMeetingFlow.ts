@@ -6,17 +6,19 @@ import {
   recordingApi,
   transcribeApi,
   diarizeApi,
-  ollamaApi,
   pagesApi,
+  documentsApi,
   ingestApi,
   modelsApi,
   type MeetingSummary,
 } from "@/lib/api";
+import { localAi } from "@/lib/localAi";
 import { useUi } from "@/store/ui";
 import { buildMeetingBlocks, assignSpeakers, type LabeledSegment } from "./meetingDoc";
 
 export type MeetingPhase =
   | "idle"
+  | "starting"
   | "recording"
   | "transcribing"
   | "summarizing"
@@ -80,7 +82,7 @@ export function useMeetingFlow() {
     if (busy.current) return; // guard against double-start (duplicate listeners)
     busy.current = true;
     // Reset everything except the client the user typed before hitting record.
-    setState((s) => ({ ...initial, client: s.client, phase: "recording" }));
+    setState((s) => ({ ...initial, client: s.client, phase: "starting" }));
     try {
       if (isTauri()) {
         unlisten.current.push(
@@ -98,9 +100,11 @@ export function useMeetingFlow() {
           ),
         );
         await recordingApi.start();
+        patch({ phase: "recording" });
       } else {
         // Browser/mock: self-drive timer + fake levels so the UI is demoable.
         await recordingApi.start();
+        patch({ phase: "recording" });
         const t0 = Date.now();
         mockTimer.current = setInterval(() => {
           patch({
@@ -110,15 +114,20 @@ export function useMeetingFlow() {
         }, 150);
       }
     } catch (e) {
+      cleanup();
+      busy.current = false;
       patch({ phase: "error", error: String(e) });
     }
-  }, []);
+  }, [cleanup]);
 
+  const stopping = useRef(false);
   const stop = useCallback(async () => {
+    if (stopping.current) return;
+    stopping.current = true;
     cleanup();
+    let progressUnlisten: UnlistenFn | null = null;
     try {
       patch({ phase: "transcribing", transcribeProgress: 0 });
-      let progressUnlisten: UnlistenFn | null = null;
       if (isTauri()) {
         progressUnlisten = await listen<number>("transcribe-progress", (e) =>
           patch({ transcribeProgress: e.payload }),
@@ -127,24 +136,13 @@ export function useMeetingFlow() {
       const rec = await recordingApi.stop();
       const modelUsed = (await modelsApi.list()).find((m) => m.selected)?.name ?? null;
       const segments = await transcribeApi.run(rec.audio_path);
-      progressUnlisten?.();
       patch({ transcribeProgress: 100 });
 
-      // Summarize if Ollama is available; otherwise save transcript-only.
-      patch({ phase: "summarizing" });
-      let summary: MeetingSummary | null = null;
-      let ollamaUsed = false;
-      try {
-        const status = await ollamaApi.status();
-        if (status.available) {
-          const text = segments.map((s) => s.text).join(" ");
-          summary = await ollamaApi.summarize(text);
-          ollamaUsed = true;
-        }
-      } catch {
-        summary = null;
-      }
-      patch({ ollamaUsed });
+      // Persist the original transcript before any optional AI or speaker labelling.
+      patch({ phase: "saving" });
+      const { pageId, bodyJson } = await fileMeeting(segments, null, false, clientRef.current);
+      patch({ savedPageId: pageId });
+      await recordingApi.record(pageId, rec.duration_ms, rec.audio_path, modelUsed);
 
       // Speaker diarization (optional; native-only, models must be installed).
       let labeled: LabeledSegment[] = segments;
@@ -159,17 +157,20 @@ export function useMeetingFlow() {
         }
       }
 
-      patch({ phase: "saving" });
-      const pageId = await fileMeeting(labeled, summary, ollamaUsed, clientRef.current);
-      await recordingApi
-        .record(pageId, rec.duration_ms, rec.audio_path, modelUsed)
-        .catch((e) => console.error("record meeting failed", e));
+      if (labeled !== segments) {
+        await documentsApi.updateIfUnchanged(pageId, bodyJson, JSON.stringify(buildMeetingBlocks(labeled, null, false)));
+      }
       qc.invalidateQueries();
       patch({ phase: "done", savedPageId: pageId });
     } catch (e) {
       patch({ phase: "error", error: String(e) });
+    } finally {
+      progressUnlisten?.();
+      stopping.current = false;
+      busy.current = false;
+      await localAi.endRecording().catch(e => patch({ error: String(e) }));
     }
-  }, [cleanup, qc]);
+  }, [cleanup, qc, diarizeEnabled]);
 
   const reset = useCallback(() => {
     cleanup();
@@ -192,14 +193,15 @@ async function fileMeeting(
   summary: MeetingSummary | null,
   ollamaUsed: boolean,
   client: string,
-): Promise<string> {
+): Promise<{ pageId: string; bodyJson: string }> {
   const now = new Date();
   const title = `Meeting ${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   const blocks = buildMeetingBlocks(segments, summary, ollamaUsed);
 
+  const bodyJson = JSON.stringify(blocks);
   const res = await ingestApi.ingestNote({
     rawText: segments.map((s) => s.text).join(" "),
-    bodyJson: JSON.stringify(blocks),
+    bodyJson,
     title,
     clientHint: client.trim() || undefined,
     actionItems: summary?.action_items ?? [],
@@ -212,5 +214,5 @@ async function fileMeeting(
     const parent = pages.find((p) => p.title.toLowerCase() === "meeting notes")?.id;
     if (parent) await pagesApi.move(res.page_id, parent, 999).catch(() => {});
   }
-  return res.page_id;
+  return { pageId: res.page_id, bodyJson };
 }

@@ -18,6 +18,16 @@ pub mod core {
         }
     }
 
+    pub fn update_if_unchanged(
+        conn: &Connection,
+        id: &str,
+        expected: &str,
+        content: &str,
+    ) -> AppResult<bool> {
+        serde_json::from_str::<serde_json::Value>(content)?;
+        Ok(conn.execute("UPDATE page SET content=?3,updated_at=?4,dirty=1 WHERE id=?1 AND content=?2 AND deleted_at IS NULL", params![id,expected,content,now_ms()])? == 1)
+    }
+
     pub fn update(conn: &Connection, id: &str, content: &str) -> AppResult<()> {
         // validate it's JSON before persisting
         serde_json::from_str::<serde_json::Value>(content)?;
@@ -49,6 +59,19 @@ mod tests {
         let blocks = r#"[{"type":"paragraph","content":"hi"}]"#;
         update(&conn, &p.id, blocks).unwrap();
         assert_eq!(get(&conn, &p.id).unwrap(), blocks);
+    }
+
+    #[test]
+    fn conditional_update_preserves_newer_edits() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let p = pages::core::create(&c, None, "Meeting".into(), "doc".into()).unwrap();
+        update(&c, &p.id, "[]").unwrap();
+        assert!(update_if_unchanged(&c, &p.id, "[]", r#"[{"content":"edited"}]"#).unwrap());
+        assert!(
+            !update_if_unchanged(&c, &p.id, "[]", r#"[{"content":"speaker labels"}]"#).unwrap()
+        );
+        assert_eq!(get(&c, &p.id).unwrap(), r#"[{"content":"edited"}]"#);
     }
 
     #[test]

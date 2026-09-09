@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Tidy",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "identifier": "com.appflower.app",
   "build": {
     "frontendDist": "../dist",
@@ -29,7 +29,8 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/appflower-mcp"
+      "binaries/appflower-mcp",
+      "binaries/tidy-ai"
     ],
     "macOS": {
       "minimumSystemVersion": "14.4",
@@ -45,6 +46,9 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
-    }
+    },
+    "resources": [
+      "resources/llama-cpp-LICENSE.txt"
+    ]
   }
 }

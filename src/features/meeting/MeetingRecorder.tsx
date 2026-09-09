@@ -9,10 +9,15 @@ import {
   AlertCircle,
   CircleDot,
 } from "lucide-react";
-import { modelsApi, ollamaApi } from "@/lib/api";
+import { modelsApi } from "@/lib/api";
 import { useUi } from "@/store/ui";
-import { useMeetingFlow, type MeetingPhase } from "./useMeetingFlow";
+import { type MeetingPhase } from "./useMeetingFlow";
 import { Button } from "@/components/ui/button";
+
+import { useSharedMeetingFlow } from "./MeetingFlowProvider";
+import { localAi, aiStatusKey, meetingJobsKey } from "@/lib/localAi";
+
+import { clientOptions } from "./meetingLibrary";
 
 function mmss(ms: number) {
   const s = Math.floor(ms / 1000);
@@ -22,14 +27,20 @@ function mmss(ms: number) {
 function LevelMeter({ label, value }: { label: string; value: number }) {
   const bars = 5;
   return (
-    <span className="ml-auto flex h-6 items-end gap-[3px]" aria-label={`${label} level`}>
+    <span
+      className="ml-auto flex h-6 items-end gap-[3px]"
+      aria-label={`${label} level`}
+    >
       {Array.from({ length: bars }).map((_, i) => {
         const active = value * bars > i;
         return (
           <i
             key={i}
             className="w-1 rounded-sm bg-brand transition-[height]"
-            style={{ height: active ? `${8 + i * 4}px` : "4px", opacity: active ? 1 : 0.3 }}
+            style={{
+              height: active ? `${8 + i * 4}px` : "4px",
+              opacity: active ? 1 : 0.3,
+            }}
           />
         );
       })}
@@ -38,10 +49,17 @@ function LevelMeter({ label, value }: { label: string; value: number }) {
 }
 
 export function MeetingRecorder() {
-  const { state, start, stop, reset, setClient } = useMeetingFlow();
+  const { state, start, stop, reset, setClient } = useSharedMeetingFlow();
   const openPage = useUi((s) => s.openPage);
-  const { data: models } = useQuery({ queryKey: ["models"], queryFn: modelsApi.list });
-  const { data: ollama } = useQuery({ queryKey: ["ollama-status"], queryFn: ollamaApi.status });
+  const { data: models } = useQuery({
+    queryKey: ["models"],
+    queryFn: modelsApi.list,
+  });
+  const { data: ai } = useQuery({
+    queryKey: aiStatusKey,
+    queryFn: localAi.status,
+  });
+  const clients = useQuery({ queryKey: meetingJobsKey, queryFn: localAi.jobs });
   const selected = models?.find((m) => m.selected && m.downloaded);
 
   return (
@@ -54,9 +72,13 @@ export function MeetingRecorder() {
           Meeting recorder
         </h1>
 
-        {state.phase === "idle" && (
+        {(state.phase === "idle" || state.phase === "starting") && (
           <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 shadow-sm">
-            <SourceRow icon={<Mic className="size-4" />} name="Microphone" sub="Your voice" />
+            <SourceRow
+              icon={<Mic className="size-4" />}
+              name="Microphone"
+              sub="Your voice"
+            />
             <SourceRow
               icon={<Volume2 className="size-4" />}
               name="System audio"
@@ -73,30 +95,60 @@ export function MeetingRecorder() {
               )}
               <br />
               Summaries:{" "}
-              {ollama?.available ? (
-                <b className="text-text">{ollama.models[0] ?? "Ollama"} (local)</b>
+              {ai?.ready ? (
+                <b className="text-text">
+                  {ai.config.provider === "builtin"
+                    ? "Tidy local AI"
+                    : ai.config.ollama_model}{" "}
+                  (local)
+                </b>
               ) : (
-                <span className="text-text-faint">Ollama not detected (transcript still saves)</span>
+                <span className="text-text-faint">
+                  Set up local AI in Settings (transcript still saves)
+                </span>
               )}
             </div>
             <label className="mt-4 block space-y-1">
               <span className="text-xs font-medium text-text-faint">
-                Client (optional). Files the note under them.
+                Client (optional)
               </span>
               <input
+                list="meeting-clients"
+                disabled={state.phase === "starting"}
                 value={state.client}
                 onChange={(e) => setClient(e.target.value)}
                 placeholder="e.g. Acme Corp"
                 className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
               />
+              <datalist id="meeting-clients">
+                {clientOptions(clients.data ?? []).map(([id, name]) => (
+                  <option key={id} value={name} />
+                ))}
+              </datalist>
+              <span className="block text-xs leading-relaxed text-text-faint">
+                Choose an existing client or enter a new name. Meetings for the
+                same client can be searched together.
+              </span>
             </label>
-            <Button className="mt-4 w-full" size="lg" onClick={start} disabled={!selected}>
-              <CircleDot className="size-4" /> Start recording
+            <Button
+              className="mt-4 w-full"
+              size="lg"
+              onClick={start}
+              disabled={!selected || state.phase === "starting"}
+            >
+              {state.phase === "starting" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <CircleDot className="size-4" />
+              )}{" "}
+              {state.phase === "starting"
+                ? "Preparing recording…"
+                : "Start recording"}
             </Button>
             <p className="mt-3 flex items-start gap-2 text-xs text-text-faint">
               <Lock className="mt-0.5 size-3.5 shrink-0" />
-              Everything runs on your Mac. macOS will ask for microphone and screen-recording
-              permission the first time.
+              Everything runs on your Mac. macOS will ask for microphone and
+              screen-recording permission the first time.
             </p>
           </div>
         )}
@@ -104,10 +156,16 @@ export function MeetingRecorder() {
         {state.phase === "recording" && (
           <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 shadow-sm">
             <div className="mb-5 flex items-center gap-3">
-              <span className="size-3.5 animate-pulse rounded-full bg-rec" aria-hidden />
+              <span
+                className="size-3.5 animate-pulse rounded-full bg-rec"
+                aria-hidden
+              />
               <span className="font-semibold text-rec-text">Recording</span>
             </div>
-            <div className="mb-1 font-mono text-5xl font-bold tabular-nums" role="timer">
+            <div
+              className="mb-1 font-mono text-5xl font-bold tabular-nums"
+              role="timer"
+            >
               {mmss(state.elapsedMs)}
             </div>
             <div className="mb-6 inline-flex items-center gap-1.5 rounded-full bg-[color-mix(in_srgb,var(--success)_14%,transparent)] px-2.5 py-1 text-xs font-semibold text-success">
@@ -125,7 +183,12 @@ export function MeetingRecorder() {
               sub={state.sources.system ? "Capturing" : "Unavailable"}
               meter={<LevelMeter label="System" value={state.levels.system} />}
             />
-            <Button variant="destructive" className="mt-6 w-full" size="lg" onClick={stop}>
+            <Button
+              variant="destructive"
+              className="mt-6 w-full"
+              size="lg"
+              onClick={stop}
+            >
               <Square className="size-4" /> Stop &amp; transcribe
             </Button>
             {state.liveTranscript && (
@@ -141,7 +204,7 @@ export function MeetingRecorder() {
           </div>
         )}
 
-        {["transcribing", "summarizing", "saving"].includes(state.phase) && (
+        {["transcribing", "saving"].includes(state.phase) && (
           <ProcessingCard state={state} />
         )}
 
@@ -151,13 +214,18 @@ export function MeetingRecorder() {
               <Check className="size-6" />
             </div>
             <div className="text-lg font-semibold">
-              {state.client.trim() ? `Filed under ${state.client.trim()}` : "Saved to Meeting Notes"}
+              {state.client.trim()
+                ? `Filed under ${state.client.trim()}`
+                : "Saved to Meeting Notes"}
             </div>
             <p className="mt-1 text-sm text-text-muted">
-              Your transcript{state.ollamaUsed ? " and summary are" : " is"} ready.
+              Your transcript is saved. Summaries and search will process in the
+              meeting library when local AI is enabled.
             </p>
             <div className="mt-5 flex justify-center gap-2">
-              <Button onClick={() => state.savedPageId && openPage(state.savedPageId)}>
+              <Button
+                onClick={() => state.savedPageId && openPage(state.savedPageId)}
+              >
                 Open note
               </Button>
               <Button variant="secondary" onClick={reset}>
@@ -237,18 +305,26 @@ function Step({
         )}
       </span>
       <span className="flex-1">
-        <span className={`block text-sm font-medium ${status === "pending" ? "text-text-faint" : ""}`}>
+        <span
+          className={`block text-sm font-medium ${status === "pending" ? "text-text-faint" : ""}`}
+        >
           {label}
         </span>
-        {detail && <span className="block text-xs text-text-faint">{detail}</span>}
+        {detail && (
+          <span className="block text-xs text-text-faint">{detail}</span>
+        )}
         {children}
       </span>
     </div>
   );
 }
 
-function ProcessingCard({ state }: { state: ReturnType<typeof useMeetingFlow>["state"] }) {
-  const order: MeetingPhase[] = ["transcribing", "summarizing", "saving"];
+function ProcessingCard({
+  state,
+}: {
+  state: ReturnType<typeof useSharedMeetingFlow>["state"];
+}) {
+  const order: MeetingPhase[] = ["transcribing", "saving"];
   const idx = order.indexOf(state.phase);
   const st = (p: MeetingPhase): "done" | "active" | "pending" => {
     const i = order.indexOf(p);
@@ -260,7 +336,11 @@ function ProcessingCard({ state }: { state: ReturnType<typeof useMeetingFlow>["s
         Processing
       </div>
       <Step status="done" label="Captured audio" detail="mic + system" />
-      <Step status={st("transcribing")} label="Transcribing on-device" detail="Whisper">
+      <Step
+        status={st("transcribing")}
+        label="Transcribing on-device"
+        detail="Whisper"
+      >
         {state.phase === "transcribing" && (
           <div className="mt-1.5">
             <div className="h-2 overflow-hidden rounded-full bg-bg-subtle">
@@ -273,16 +353,17 @@ function ProcessingCard({ state }: { state: ReturnType<typeof useMeetingFlow>["s
                 aria-valuemax={100}
               />
             </div>
-            <div className="mt-1 text-xs text-text-muted">{state.transcribeProgress}%</div>
+            <div className="mt-1 text-xs text-text-muted">
+              {state.transcribeProgress}%
+            </div>
           </div>
         )}
       </Step>
       <Step
-        status={st("summarizing")}
-        label="Summarising"
-        detail={state.ollamaUsed ? "local LLM" : "Ollama (skipped if absent)"}
+        status={st("saving")}
+        label="Saving transcript and speaker labels"
+        detail="AI runs after saving"
       />
-      <Step status={st("saving")} label="Saving note" detail="→ Meeting Notes" />
       <div className="mt-4 flex items-start gap-2 rounded-lg bg-brand-soft px-3 py-2.5 text-note text-text-muted">
         <Lock className="mt-0.5 size-3.5 shrink-0" />
         Fully local. Your audio and transcript never leave this Mac.

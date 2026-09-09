@@ -15,6 +15,15 @@ import type {
 
 // ---- mock meeting state (browser preview only) ----
 let mockRecording = false;
+let previewAiEnabled = false;
+let previewSelected = 'qwen3-4b';
+const previewDownloads = new Set<string>();
+const previewMeetings = new Set<string>();
+const previewModels = [
+  { id: 'qwen3-4b', name: 'Qwen 3 · Balanced', description: 'Recommended for 16 GB Macs. Summaries and meeting answers.', size: 2497280256, purpose: 'chat' },
+  { id: 'qwen3-small', name: 'Qwen 3 · Lightweight', description: 'Uses less memory. Review answers carefully.', size: 639446688, purpose: 'chat' },
+  { id: 'nomic-embed', name: 'Meeting search', description: 'Finds related transcript passages.', size: 146146432, purpose: 'embedding' },
+];
 
 const MODEL_DEFS: { id: string; name: string; size: number }[] = [
   { id: "tiny", name: "Whisper Tiny", size: 77_700_000 },
@@ -573,7 +582,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       let clientId: string | null = null;
       const hint = String(args.clientHint ?? "").trim();
       if (hint) {
-        const existing = d.pages.find((p) => p.title === hint && p.type === "doc");
+        const existing = d.pages.find((p) => p.title.trim().toLowerCase() === hint.toLowerCase() && p.type === "doc");
         if (existing) {
           clientId = existing.id;
         } else {
@@ -721,6 +730,14 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       for (const l of d.links) if (l.target_page_id && kill.has(l.target_page_id)) l.target_page_id = null;
       commit();
       return undefined as T;
+    }
+    case "update_document_if_unchanged": {
+      if (d.documents[args.id] !== args.expected) return false as T;
+      d.documents[args.id] = args.content;
+      const page = find(args.id);
+      if (page) page.updated_at = now();
+      commit();
+      return true as T;
     }
     case "get_document":
       return (d.documents[args.id] ?? "[]") as T;
@@ -896,6 +913,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       mockRecording = false;
       return { audio_path: "mock://recording.wav", duration_ms: 142_000 } as T;
     case "record_meeting":
+      previewMeetings.add(args.pageId);
       return undefined as T; // mock: no-op (meeting metadata persistence)
     case "list_models":
       return mockModels() as T;
@@ -937,6 +955,33 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         { start_ms: 0, end_ms: 9000, speaker: 0 },
         { start_ms: 9000, end_ms: 20000, speaker: 1 },
       ] as T;
+    case "local_ai_status":
+      return { memory_bytes: 16 * 1024 ** 3, recommended_model_id: 'qwen3-4b', config: { provider: previewAiEnabled ? 'builtin' : 'disabled', model_id: previewSelected, ollama_model: '' }, models: previewModels.map(m => ({ ...m, downloaded: previewDownloads.has(m.id) })), progress: null, runtime_available: true, ready: previewAiEnabled, search_ready: previewAiEnabled && previewDownloads.has('nomic-embed'), disk_bytes: previewModels.filter(m => previewDownloads.has(m.id)).reduce((n,m) => n+m.size,0) } as T;
+    case "local_ai_setup":
+      await new Promise(r => setTimeout(r, 1600));
+      previewDownloads.add('qwen3-4b'); previewDownloads.add('nomic-embed'); previewAiEnabled = true;
+      return undefined as T;
+    case "local_ai_download":
+      await new Promise(r => setTimeout(r, 1000)); previewDownloads.add(args.id); return undefined as T;
+    case "local_ai_remove":
+      if (!args.confirmed) throw new Error('Removal must be confirmed');
+      previewDownloads.delete(args.id); if (args.id === previewSelected) previewAiEnabled = false; return undefined as T;
+    case "local_ai_configure":
+      previewSelected = args.config.model_id; previewAiEnabled = args.config.provider !== 'disabled'; return undefined as T;
+    case "local_ai_cancel":
+    case "ai_end_recording": return undefined as T;
+    case "meeting_ai_jobs":
+      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
+    case "meeting_ai_retry": return undefined as T;
+    case "ask_meetings": {
+      await new Promise(r => setTimeout(r, 1200));
+      const ids = [...previewMeetings].filter(id => {
+        const date = d.pages.find(p => p.id === id)?.created_at ?? 0;
+        return (!args.clientId || d.links.some(l => l.source_page_id === id && l.kind === 'task_of' && l.target_page_id === args.clientId)) && (args.from == null || date >= args.from) && (args.until == null || date < args.until);
+      });
+      const id = ids[0];
+      return { answer: id ? 'Preview answer: the team agreed to ship the recorder beta by Friday.' : 'No meetings have been recorded in this preview.', sources: ids.map(id => ({ id: `preview-${id}`, page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', block_id: null, timestamp: '00:14', text: 'We agreed to ship the recorder beta by Friday.', started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now() })) } as T;
+    }
     case "ollama_status":
       return { available: true, models: ["llama3.2:3b"] } as T;
     case "ai_generate": {

@@ -21,3 +21,22 @@ pub fn update_document(db: State<Db>, id: String, content: String) -> AppResult<
     crate::vault::flush_if_configured(&conn, &id);
     Ok(())
 }
+
+/// Speaker labelling must never overwrite edits made after the transcript was saved.
+#[tauri::command]
+pub fn update_document_if_unchanged(
+    db: State<Db>,
+    id: String,
+    expected: String,
+    content: String,
+) -> AppResult<bool> {
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|_| crate::error::AppError::Other("Database unavailable".into()))?;
+    let changed = core::update_if_unchanged(&conn, &id, &expected, &content)?;
+    if changed {
+        crate::vault::flush_if_configured(&conn, &id);
+    }
+    Ok(changed)
+}

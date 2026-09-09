@@ -12,10 +12,10 @@ TRIPLE="$(rustc -vV | awk '/host:/{print $2}')"
 OUT_DIR="src-tauri/binaries"
 DEST="$OUT_DIR/appflower-mcp-$TRIPLE"
 
-echo "→ Building appflower-mcp (release) for $TRIPLE"
-cargo build -p appflower-mcp --release
+echo "Building appflower-mcp (release) for $TRIPLE"
+cargo build -p appflower-mcp --release --locked
 
 mkdir -p "$OUT_DIR"
-cp "target/release/appflower-mcp" "$DEST"
+cp "${CARGO_TARGET_DIR:-target}/release/appflower-mcp" "$DEST"
 chmod +x "$DEST"
-echo "✓ Staged sidecar → $DEST"
+echo "Staged sidecar: $DEST"

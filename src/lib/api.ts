@@ -40,6 +40,7 @@ export const pagesApi = {
 // ---- Documents ------------------------------------------------------------
 
 export const documentsApi = {
+  updateIfUnchanged: (id: string, expected: string, content: string) => invoke<boolean>("update_document_if_unchanged", { id, expected, content }),
   get: (id: string) => invoke<string>("get_document", { id }),
   update: (id: string, content: string) =>
     invoke<void>("update_document", { id, content }),

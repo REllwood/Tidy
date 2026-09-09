@@ -11,7 +11,12 @@ import { CommandPalette } from "@/components/search/CommandPalette";
 import { IngestDialog } from "@/components/ingest/IngestDialog";
 import { ShortcutsSheet } from "@/components/help/ShortcutsSheet";
 
+import { useSharedMeetingFlow } from "@/features/meeting/MeetingFlowProvider";
+import { Loader2 } from "lucide-react";
+
 export function AppShell() {
+  const { state: meeting } = useSharedMeetingFlow();
+  const pane = useUi(s => s.activePane);
   useThemeEffect();
   usePagesEvents();
   useLinksEvents();
@@ -33,7 +38,7 @@ export function AppShell() {
     const p = new URLSearchParams(window.location.search);
     if (p.get("onboarded") === "1") setOnboarded(true);
     const view = p.get("view");
-    const panes = ["home", "planner", "graph", "meeting", "settings"];
+    const panes = ["home", "planner", "graph", "meeting", "settings", "ask"];
     if (view && panes.includes(view)) {
       setActivePane({ kind: view } as ActivePane);
       deepLinked.current = true;
@@ -87,6 +92,12 @@ export function AppShell() {
       )}
       <main className="flex h-full min-w-0 flex-1 flex-col">
         <TopBar />
+        {pane.kind !== "meeting" && !["idle", "done", "error"].includes(meeting.phase) && (
+          <button onClick={() => setActivePane({ kind: "meeting" })} className="flex shrink-0 items-center gap-2 border-b border-border bg-brand-soft px-4 py-2 text-left text-sm text-brand">
+            {meeting.phase !== "recording" && <Loader2 className="size-3.5 animate-spin" />}
+            {meeting.phase === "recording" ? `Recording meeting · ${Math.floor(meeting.elapsedMs / 1000)} seconds` : 'Processing meeting…'} · Return to recorder
+          </button>
+        )}
         <ContentPane />
       </main>
       <CommandPalette />

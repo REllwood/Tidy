@@ -12,22 +12,32 @@ use crate::error::{AppError, AppResult};
 pub struct RecorderState(pub Mutex<Option<RecordingSession>>);
 
 #[tauri::command]
-pub fn start_recording(
+pub async fn start_recording(
     app: AppHandle,
-    state: State<RecorderState>,
-    db: State<Db>,
+    state: State<'_, RecorderState>,
+    db: State<'_, Db>,
 ) -> AppResult<()> {
-    let mut guard = state.0.lock().unwrap();
-    if guard.is_some() {
-        return Err(AppError::Other("a recording is already in progress".into()));
+    use std::sync::atomic::Ordering;
+    use tauri::Manager;
+    let ai = app.state::<crate::local_ai::AiState>();
+    ai.pause_for_recording().await?;
+    let result = (|| {
+        let mut guard = state.0.lock().unwrap();
+        if guard.is_some() {
+            return Err(AppError::Other("a recording is already in progress".into()));
+        }
+        // Resolve the selected Whisper model for live-preview transcription (optional).
+        let model_path = {
+            let conn = db.conn.lock().unwrap();
+            crate::whisper::models::core::selected_path(&conn, &app).ok()
+        };
+        *guard = Some(recorder::start(app.clone(), model_path)?);
+        Ok(())
+    })();
+    if result.is_err() {
+        ai.recording.store(false, Ordering::SeqCst);
     }
-    // Resolve the selected Whisper model for live-preview transcription (optional).
-    let model_path = {
-        let conn = db.conn.lock().unwrap();
-        crate::whisper::models::core::selected_path(&conn, &app).ok()
-    };
-    *guard = Some(recorder::start(app, model_path)?);
-    Ok(())
+    result
 }
 
 #[tauri::command]
@@ -49,7 +59,7 @@ pub fn is_recording(state: State<RecorderState>) -> bool {
 /// Persist a meeting record linking the saved page to its recording metadata.
 #[tauri::command]
 pub fn record_meeting(
-    db: State<Db>,
+    db: State<'_, Db>,
     page_id: String,
     duration_ms: i64,
     audio_path: Option<String>,
@@ -60,7 +70,14 @@ pub fn record_meeting(
     conn.execute(
         "INSERT INTO meeting (id, page_id, started_at, duration, audio_path, model_used)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![new_id(), page_id, started_at, duration_ms, audio_path, model_used],
+        params![
+            new_id(),
+            page_id,
+            started_at,
+            duration_ms,
+            audio_path,
+            model_used
+        ],
     )?;
     Ok(())
 }

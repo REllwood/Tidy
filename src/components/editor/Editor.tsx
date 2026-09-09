@@ -18,6 +18,8 @@ import { AiAssist } from "@/features/ai/AiAssist";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FeatureTip } from "@/components/help/FeatureTip";
 
+import { MeetingSummaryPanel } from "@/features/meeting/MeetingSummaryPanel";
+
 const Kbd = ({ children }: { children: React.ReactNode }) => (
   <kbd className="rounded border border-border bg-surface px-1 py-0.5 text-2xs font-medium text-text">
     {children}
@@ -38,6 +40,16 @@ function EditorInner({
   const qc = useQueryClient();
   const editor = useCreateBlockNote({ initialContent });
   const [saving, setSaving] = useState(false);
+  const pane = useUi(s => s.activePane);
+  const sourceBlock = pane.kind === "page" && pane.pageId === pageId ? pane.blockId : undefined;
+  useEffect(() => {
+    if (!sourceBlock) return;
+    const frame = requestAnimationFrame(() => {
+      const element = document.querySelector(`[data-id="${CSS.escape(sourceBlock)}"]`);
+      element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sourceBlock, editor]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<string | null>(null);
 
@@ -94,6 +106,7 @@ function EditorInner({
           <AiAssist editor={editor} />
         </div>
         <PageHeader pageId={pageId} saving={saving} />
+        <MeetingSummaryPanel pageId={pageId} />
         <FeatureTip id="wikilinks">
           Type <Kbd>/</Kbd> for blocks, <Kbd>[[</Kbd> to link another page, or{" "}
           <Kbd>#</Kbd> to tag it.

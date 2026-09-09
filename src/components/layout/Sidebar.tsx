@@ -1,5 +1,6 @@
 import {
   Search,
+  MessageSquare,
   Mic,
   LayoutGrid,
   Plus,
@@ -126,6 +127,8 @@ export function Sidebar() {
           active={pane.kind === "graph"}
           onClick={() => setActivePane({ kind: "graph" })}
         />
+
+        <NavButton icon={<MessageSquare className="size-4" />} label="Ask meetings" active={pane.kind === "ask"} onClick={() => setActivePane({ kind: "ask" })} />
 
         {favorites.length > 0 && (
           <>

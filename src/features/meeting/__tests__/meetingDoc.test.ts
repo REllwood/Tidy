@@ -13,7 +13,7 @@ const summary: MeetingSummary = {
 };
 
 describe("buildMeetingBlocks", () => {
-  it("composes summary, action items (checkboxes), decisions, transcript when Ollama used", () => {
+  it("composes summary, action items (checkboxes), decisions, transcript when AI used", () => {
     const blocks = buildMeetingBlocks(segs, summary, true);
     const types = blocks.map((b) => b.type);
     expect(types).toContain("heading");
@@ -25,9 +25,9 @@ describe("buildMeetingBlocks", () => {
     expect(transcript[1].content).toBe("[01:05] Wrap up.");
   });
 
-  it("falls back to transcript-only with an install note when Ollama absent", () => {
+  it("falls back to transcript-only with a processing note when no summary exists", () => {
     const blocks = buildMeetingBlocks(segs, null, false);
-    expect(blocks.some((b) => String(b.content).includes("Ollama wasn't running"))).toBe(true);
+    expect(blocks.some((b) => String(b.content).includes("Transcript saved"))).toBe(true);
     expect(blocks.filter((b) => b.type === "checkListItem")).toHaveLength(0);
     expect(blocks.some((b) => b.content === "Transcript")).toBe(true);
   });

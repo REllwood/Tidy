@@ -1,118 +1,20 @@
-name: Release
+name: Local release instructions
 
-# Push a version tag (e.g. v0.1.0) to build the macOS app and open a draft
-# release with the .dmg attached. You review the draft, then hit Publish.
-# You can also run it by hand from the Actions tab to test the build.
+# Releases are built and notarised on the maintainer's Mac, then uploaded.
+# Tag pushes deliberately do not start a second build on GitHub.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag/name to use for a manual test build"
-        default: "v0.0.0-test"
-        required: false
 
 permissions:
-  contents: write # needed for the action to create the release
+  contents: read
 
 jobs:
-  build-macos:
-    # Apple Silicon runner. macOS 15 (not 14) because the screencapturekit crate
-    # pulls in apple-metal, which needs the macOS 15 SDK to compile. The app's
-    # own minimum stays 14.4 (deployment target), so it still runs on macOS 14.
-    runs-on: macos-15
-    env:
-      # True only when a signing certificate secret is actually set. Used to
-      # decide whether to sign + notarise or fall back to a free ad-hoc build.
-      HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
+  instructions:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      # Pick the newest Xcode on the image so we get a recent macOS SDK.
-      - name: Select the latest Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Ensure CMake (whisper.cpp needs it)
-        run: cmake --version || brew install cmake
-
-      - name: Install front-end dependencies
-        run: npm ci
-
-      - name: Build the MCP sidecar
-        run: ./scripts/build-sidecar.sh
-
-      # --- macOS signing + notarisation (dormant until you add the secrets) ---
-      # This step only runs when APPLE_CERTIFICATE is set, and it exports the
-      # signing/notarisation vars into the environment for the build step below.
-      # Crucially, when the secrets are absent these vars are never set at all
-      # (not even to ""), because an empty APPLE_CERTIFICATE makes Tauri try to
-      # import an empty certificate and fail. With them unset, the build signs
-      # ad-hoc using tauri.conf.json's "-" identity, and users clear quarantine
-      # once with `xattr -cr`.
-      #
-      # To ship a signed + notarised build that "just opens", enrol in the Apple
-      # Developer Program and add these six repository secrets. Nothing else to
-      # change here, and remember to drop the `xattr` note from releaseBody.
-      #   APPLE_CERTIFICATE           single-line base64 of your Developer ID .p12
-      #   APPLE_CERTIFICATE_PASSWORD  password for that .p12
-      #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
-      #   APPLE_ID                    your Apple ID email (for notarytool)
-      #   APPLE_PASSWORD              an app-specific password for that Apple ID
-      #   APPLE_TEAM_ID               your 10-char Team ID
-      - name: Enable code signing (only when the secrets exist)
-        if: env.HAS_SIGNING == 'true'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Show the local release process
         run: |
-          {
-            echo "APPLE_CERTIFICATE<<__TIDY_EOF__"
-            echo "$APPLE_CERTIFICATE"
-            echo "__TIDY_EOF__"
-            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
-            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
-            echo "APPLE_ID=$APPLE_ID"
-            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
-            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
-          } >> "$GITHUB_ENV"
-
-      - name: Build the app and open a draft release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: "Tidy ${{ inputs.tag || github.ref_name }}"
-          releaseDraft: true
-          prerelease: false
-          releaseBody: |
-            ### Tidy for macOS (Apple Silicon)
-
-            Download `Tidy_*_aarch64.dmg` below, open it, and drag **Tidy** into your Applications folder.
-
-            **First launch:** this build isn't signed with an Apple Developer certificate, so macOS will refuse to open it (it usually claims the app "is damaged", it isn't). Run this once in Terminal after copying it to Applications:
-
-            ```
-            xattr -cr /Applications/Tidy.app
-            ```
-
-            That clears the quarantine flag on the download and Tidy opens normally from then on.
-
-            Runs on Apple Silicon Macs with macOS 14.4 or newer. [Ollama](https://ollama.com) is optional, for on-device meeting summaries.
+          echo 'Build on your Mac: npm run release:build'
+          echo 'Notarise: npm run release:notarise -- /path/to/build tidy-notary'
+          echo 'Upload the verified DMG to a GitHub draft release, then publish it.'
+          echo 'See docs/RELEASING.md for the one-time Keychain setup and checks.'

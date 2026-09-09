@@ -66,7 +66,7 @@ export function buildMeetingBlocks(
     blocks.push({
       type: "paragraph",
       content:
-        "Summary skipped because Ollama wasn't running. Start Ollama to get AI summaries on your next recording.",
+        "Transcript saved. Local AI summaries and search are managed in the meeting library.",
     });
   }
 
@@ -90,5 +90,5 @@ export function buildMeetingBlocks(
       });
     }
   }
-  return blocks;
+  return blocks.map(block => ({ id: crypto.randomUUID(), ...block }));
 }

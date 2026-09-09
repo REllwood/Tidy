@@ -1,14 +1,16 @@
 {
   "name": "appflower",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release:build": "bash scripts/build-local-release.sh",
+    "release:notarise": "bash scripts/notarise-local-release.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

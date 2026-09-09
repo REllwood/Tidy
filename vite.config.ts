@@ -22,6 +22,6 @@ export default defineConfig({
     hmr: host
       ? { protocol: "ws", host, port: 1421 }
       : undefined,
-    watch: { ignored: ["**/src-tauri/**", "**/.forge/**"] },
+    watch: { ignored: ["**/src-tauri/**", "**/.forge/**", "**/target/**", "**/release-builds/**"] },
   },
 });

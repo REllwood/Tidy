@@ -20,6 +20,19 @@ pub async fn ingest_note(
     body_json: Option<String>,
     action_items: Option<Vec<String>>,
 ) -> AppResult<IngestResult> {
+    // Route desktop note assistance through the same managed AI provider.
+    let generated = if body_json.is_none() {
+        Some(crate::local_ai::summarise(&app, &raw_text).await?)
+    } else {
+        None
+    };
+    let body_json = body_json.or_else(|| generated.as_ref().map(ingest::build_body));
+    let action_items = action_items.or_else(|| generated.as_ref().map(|s| s.action_items.clone()));
+    let title = title.or_else(|| {
+        generated
+            .as_ref()
+            .map(|s| s.summary.chars().take(80).collect())
+    });
     let args = IngestArgs {
         raw_text,
         client_hint,
@@ -29,7 +42,10 @@ pub async fn ingest_note(
         body_json,
         action_items,
     };
-    let result = ingest::ingest_note(&db, args).await?;
+    let mut result = ingest::ingest_note(&db, args).await?;
+    if let Some(summary) = generated {
+        result.summary = summary.summary;
+    }
     // Mirror the new note (and any created client page) to the vault immediately,
     // clearing their dirty flags — otherwise recorder/MCP notes would never reach
     // a linked vault and would stay dirty (and later false-conflict).

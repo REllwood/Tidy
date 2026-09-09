@@ -1,4 +1,5 @@
 mod audio;
+mod local_ai;
 mod commands;
 mod vault;
 mod whisper;
@@ -39,6 +40,8 @@ pub fn run() {
             app.manage(database);
             app.manage(RecorderState::default());
             app.manage(VaultState::default());
+            app.manage(local_ai::AiState::default());
+            local_ai::start_worker(app.handle().clone());
 
             // One-time: backfill links/tags from existing page bodies so an
             // upgraded DB's graph/backlinks aren't empty on first v3 launch.
@@ -66,6 +69,7 @@ pub fn run() {
             commands::pages::delete_page,
             commands::documents::get_document,
             commands::documents::update_document,
+            commands::documents::update_document_if_unchanged,
             commands::knowledge::set_page_links,
             commands::knowledge::get_backlinks,
             commands::knowledge::get_page_tags,
@@ -95,6 +99,16 @@ pub fn run() {
             whisper::diarize::diarize,
             whisper::diarize::diarization_available,
             whisper::diarize::download_diarization_models,
+            local_ai::ai_end_recording,
+            local_ai::local_ai_status,
+            local_ai::local_ai_configure,
+            local_ai::local_ai_setup,
+            local_ai::local_ai_download,
+            local_ai::local_ai_remove,
+            local_ai::local_ai_cancel,
+            local_ai::meeting_ai_jobs,
+            local_ai::meeting_ai_retry,
+            local_ai::ask_meetings,
             commands::ai::ollama_status,
             commands::ai::summarize_transcript,
             commands::ai::ai_generate,
@@ -107,6 +121,9 @@ pub fn run() {
             vault::export_vault,
             vault::flush_page,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app,event| {
+            if matches!(event,tauri::RunEvent::Exit) { app.state::<local_ai::AiState>().shutdown(); }
+        });
 }

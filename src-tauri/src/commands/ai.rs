@@ -9,11 +9,18 @@ pub async fn ollama_status() -> LlmStatus {
 }
 
 #[tauri::command]
-pub async fn summarize_transcript(transcript: String) -> AppResult<MeetingSummary> {
-    ollama::summarize(&transcript).await
+pub async fn summarize_transcript(
+    app: tauri::AppHandle,
+    transcript: String,
+) -> AppResult<MeetingSummary> {
+    crate::local_ai::summarise(&app, &transcript).await
 }
 
 #[tauri::command]
-pub async fn ai_generate(instruction: String, context: Option<String>) -> AppResult<String> {
-    ollama::ai_assist(instruction, context).await
+pub async fn ai_generate(
+    app: tauri::AppHandle,
+    instruction: String,
+    context: Option<String>,
+) -> AppResult<String> {
+    crate::local_ai::generate(&app, &instruction, context.as_deref()).await
 }

@@ -3,9 +3,9 @@
 
 pub mod ollama;
 
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Serialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MeetingSummary {
     pub summary: String,
     pub action_items: Vec<String>,

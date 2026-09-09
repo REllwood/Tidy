@@ -156,7 +156,44 @@ pub fn migrations() -> Migrations<'static> {
         );
         ALTER TABLE database ADD COLUMN vault_dir TEXT;
         "#,
-    )])
+    ),
+    M::up(r#"
+        CREATE TABLE meeting_ai (
+            page_id TEXT PRIMARY KEY REFERENCES page(id) ON DELETE CASCADE,
+            state TEXT NOT NULL DEFAULT 'queued',
+            summary TEXT,
+            error TEXT,
+            source_hash TEXT,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT OR IGNORE INTO meeting_ai(page_id)
+            SELECT page_id FROM meeting WHERE page_id IS NOT NULL;
+        CREATE TABLE meeting_chunk (
+            id TEXT PRIMARY KEY,
+            page_id TEXT NOT NULL REFERENCES page(id) ON DELETE CASCADE,
+            block_id TEXT,
+            position INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            timestamp TEXT,
+            embedding TEXT,
+            embedding_model TEXT
+        );
+        CREATE INDEX meeting_chunk_page ON meeting_chunk(page_id);
+        CREATE VIRTUAL TABLE meeting_chunk_fts USING fts5(id UNINDEXED, text);
+        CREATE TRIGGER meeting_chunk_ai AFTER INSERT ON meeting_chunk BEGIN
+            INSERT INTO meeting_chunk_fts(id,text) VALUES(new.id,new.text);
+        END;
+        CREATE TRIGGER meeting_chunk_ad AFTER DELETE ON meeting_chunk BEGIN
+            DELETE FROM meeting_chunk_fts WHERE id=old.id;
+        END;
+        CREATE TRIGGER meeting_ai_insert AFTER INSERT ON meeting WHEN new.page_id IS NOT NULL BEGIN
+            INSERT OR IGNORE INTO meeting_ai(page_id) VALUES(new.page_id);
+        END;
+        CREATE TRIGGER meeting_ai_edit AFTER UPDATE OF content ON page WHEN old.content IS NOT new.content BEGIN
+            UPDATE meeting_ai SET state='queued',summary=NULL,error=NULL,source_hash=NULL WHERE page_id=new.id;
+            DELETE FROM meeting_chunk WHERE page_id=new.id;
+        END;
+    "#)])
 }
 
 #[cfg(test)]
