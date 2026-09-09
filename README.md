@@ -3,118 +3,138 @@
 </p>
 
 <p align="center">
-  Your notes, tasks, tables and meetings. All in one place, all on your own machine.
+  A calmer place for your notes, tasks and meetings.<br />
+  Record a conversation, keep the useful details, and ask across your client's meeting history.
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/tour.gif" alt="A quick tour of Tidy: the day's agenda, the planner, a table and the graph" width="880" />
+  <a href="https://github.com/REllwood/Tidy/releases/latest">Download for Apple Silicon</a> ·
+  <a href="docs/LOCAL-AI.md">Local AI guide</a> ·
+  <a href="docs/AI-QUALITY.md">AI quality checks</a>
 </p>
-
-## What it is
-
-Tidy is a desktop app for people who are sick of keeping their work in six different apps and forty browser tabs. It's a knowledge base, a daily planner, a set of Airtable-style tables, and a meeting recorder, and they all live in the same place and talk to each other.
-
-It runs entirely on your Mac. There's no account, no cloud, no sync and no telemetry. It's free, and it's yours.
-
-## Download
-
-Download `Tidy_0.2.1_aarch64.dmg` from the [Releases page](https://github.com/REllwood/Tidy/releases/latest), open it, and drag Tidy into your Applications folder. This download is for Apple Silicon Macs. The configured minimum is macOS 14.4; the release has been checked on macOS 26.5.2, with older versions still to be tested.
-
-Version 0.2.1 is signed with Developer ID and notarised by Apple. Its signatures, notarisation tickets and Gatekeeper acceptance have been verified, including the app inside the DMG. No Terminal quarantine workaround is required. macOS may ask you to confirm the first launch.
-
-## Ask across client meetings
-
-Select a client in **Ask meetings** to ask about their recorded meeting history.
-Tidy retrieves relevant transcript passages across meetings, compares changes over
-time and links the answer back to its sources. Choose the same client when recording
-follow-up meetings; existing clients are suggested automatically.
-
-The meeting library shows how many meetings are ready for search, searchable passage
-counts, queued work and errors. While processing, it shows the current summary or
-indexing stage and passage progress. Client and date filters keep questions focused.
-Enable **Local AI** in Settings to download the answer and search models. After setup,
-processing stays on your Mac. See [Local AI](docs/LOCAL-AI.md) for model sizes and limits.
-
-## The planner
 
 <p align="center">
-  <img src="docs/screenshots/planner.png" alt="The planner with tasks grouped by day and a month calendar" width="880" />
+  <img src="docs/screenshots/tour.gif" alt="Tidy v0.2.1: home, planner, tables, meeting notes and client meeting search" width="1000" />
 </p>
 
-Open Tidy and the first thing it does is show you your day. It pulls every task that has a date, from every table you've got, and sorts them into overdue, today and this week. Tick one off or shove it to next week without leaving the page.
+*Captured from the v0.2.1 browser preview with synthetic sample data. Recording, model setup and AI answers in these demonstrations are simulated; timings do not represent desktop performance. [Still images and capture details](docs/screenshots/README.md).*
 
-There's a proper planner view as well, with a month calendar, a quick way to add a task, and a completed list for when you want to feel good about yourself.
+## Meet Tidy
 
-## Tables that do the sums for you
+Tidy brings a block editor, daily planner, relational tables and meeting recorder into one Mac app. Notes link to pages, dated tasks appear in your agenda, and recordings become a searchable meeting library.
+
+No Tidy account, subscription or telemetry. Your workspace lives on your Mac. Optional model downloads need an internet connection; transcription and built-in AI processing run locally after setup.
+
+## Install
+
+Download [Tidy v0.2.1 for Apple Silicon](https://github.com/REllwood/Tidy/releases/download/v0.2.1/Tidy_0.2.1_aarch64.dmg), open the DMG and drag **Tidy** into **Applications**.
+
+| | Current release |
+| --- | --- |
+| Mac | Apple Silicon, M1 and newer |
+| macOS | Configured minimum 14.4; release checked on 26.5.2 |
+| Distribution | Developer ID signed and notarised by Apple |
+| Verification | Signatures, notarisation tickets and Gatekeeper acceptance checked, including the app inside the DMG |
+
+The [release page](https://github.com/REllwood/Tidy/releases/tag/v0.2.1) includes a SHA-256 checksum and upgrade notes. Intel, Windows and Linux installers are not included.
+
+On upgrade, existing transcripts remain in place while older meeting indexes queue for rebuilding. Keep Tidy open with local AI enabled until preparation completes. Use **Regenerate notes** to refresh an existing summary. macOS may ask for microphone and screen-recording permissions again after the application identifier change.
+
+## From a conversation to useful notes
 
 <p align="center">
-  <img src="docs/screenshots/tables.png" alt="A database in grid view with status chips and linked records" width="880" />
+  <img src="docs/screenshots/meeting.gif" alt="Sample meeting flow: choose Acme, record with audio meters, transcribe locally, and open structured meeting notes" width="1000" />
 </p>
 
-A table in Tidy is one dataset you can look at four ways: a grid, a kanban board, a calendar, or a Gantt chart. No copying, no duplicate lists.
+1. Open **New meeting** and choose an existing client or enter a new one.
+2. Record your microphone and system audio, with separate level meters for each source.
+3. Stop to transcribe on-device with Whisper and optional speaker labels.
+4. With local AI enabled, Tidy prepares topic sections, decisions, next steps and open questions above the original transcript.
 
-The fields go well past text and numbers. You can link rows in one table to rows in another, pull a value across with a lookup, roll a column up into a sum or an average, or write a little formula like `{Budget} * 1.2`. It recalculates as you type.
+Your transcript is saved before AI processing. If AI is disabled, it remains available and the meeting waits in the preparation queue. Generated action items are suggestions; meeting summaries do not automatically add them to your planner.
 
-## Everything's connected
+## Ask across the same client's meetings
 
 <p align="center">
-  <img src="docs/screenshots/graph.png" alt="The graph view showing pages connected by links" width="880" />
+  <img src="docs/screenshots/ask-meetings.gif" alt="Ask meetings with Acme selected, two ready meetings, a sample answer and transcript sources" width="1000" />
 </p>
 
-Link any page to any other by typing `[[` and the page name, the way you would in Obsidian. Backlinks show up on their own, so you can always see what points at a page. The graph view lays the whole lot out so you can see how your notes hang together.
+Choose a client in **Ask meetings**, optionally narrow the dates, and ask about their recordings together. Reuse the same client when recording follow-ups so they belong to the same history.
 
-Promote a table row into a full page when a line item grows into something bigger, and it keeps the link back to where it came from.
+Questions to try when the information is in your transcripts:
 
-## It sits in on your meetings
+- “What was discussed across these meetings?”
+- “Who is responsible for the client handover?”
+- “What changed between the kickoff and the follow-up?”
+- “Which decisions are still unresolved?”
+
+Specific questions search relevant transcript passages. Broad overviews draw material from across the conversation. Answers link individual claims to their sources and show the passages and meetings used. The library displays ready, queued and failed meetings, with stage and passage progress while work runs.
+
+AI can still miss context or get an inference wrong. Review the original sources for names, dates and commitments. Large-library answers may use a sample of the available material; the displayed coverage makes that visible. Each question is independent. [How retrieval and verification work](docs/LOCAL-AI.md#retrieval-and-answer-limits).
+
+## Local AI, without a separate app
+
+In **Settings → Local AI**, choose **Enable local AI** to download the recommended answer model and meeting search model. Downloads have progress and cancellation controls; you can choose another model or remove downloaded files in Settings.
+
+| Model | Purpose | Approximate download |
+| --- | --- | --- |
+| Qwen 3 · Balanced | Meeting notes and answers | 2.5 GB |
+| Qwen 3 · Lightweight | Lower-memory alternative | 639 MB |
+| Nomic meeting search | Find related transcript passages | 146 MB |
+
+The app bundles the inference runtime. **Ollama is optional**, available as an advanced provider. Models load one at a time, and recording pauses background AI work. A 16 GB Mac is offered the balanced model, but speed and memory pressure depend on the meeting and other open apps; we have not benchmarked the full workflow on an M1 with 16 GB. [Setup, model licences and limits](docs/LOCAL-AI.md).
+
+## Keep the rest of your work close
 
 <p align="center">
-  <img src="docs/screenshots/meeting.gif" alt="Recording a meeting, then transcribing and filing it under a client" width="880" />
+  <img src="docs/screenshots/planner.png" alt="Tidy's planner with overdue, today and this-week tasks beside a month calendar" width="1000" />
 </p>
 
-Hit record and Tidy captures your microphone and the system audio, so you get both sides of a call. When you stop, it transcribes the whole thing on-device with Whisper, works out who said what, and writes up a summary with the action items and decisions using a local model through Ollama. Give it a client name and it files the note under them.
+**A daily agenda and planner.** Home brings dated tasks together from your tables. Review overdue work, complete a task, reschedule it or add something to your week.
 
-None of the audio leaves your Mac. If you haven't got Ollama running it just saves the transcript and moves on.
+<p align="center">
+  <img src="docs/screenshots/tables.png" alt="A roadmap table with editable status, dates and linked client records" width="1000" />
+</p>
 
-## Let your agents file notes for you
+**One dataset, four views.** Use a grid, board, calendar or Gantt chart. Relations, lookups, rollups and formulas keep related information together. Promote a row to a page when it needs more room.
 
-Tidy runs a small MCP server, so tools like Claude Code or Codex can drop a note straight into your knowledge base. Hand it a meeting transcript or a brain-dump and it reads the text, works out which client it belongs to, writes a summary, and turns the action items into tasks.
+<p align="center">
+  <img src="docs/screenshots/graph.png" alt="Tidy's graph of connected sample pages" width="1000" />
+</p>
 
-Writes are gated behind a token you generate in Settings, so nothing touches your data unless you say so. Reads and searches are always available.
+**Notes that connect.** Use headings, lists and to-dos in the block editor. Type `[[` to link a page, follow backlinks, or explore the graph.
 
-## Private by default
+## Your files and your tools
 
-Your data lives in a local SQLite database on your machine. If you want it as plain text too, point Tidy at a folder and it mirrors every page to Markdown, so you can open it in Obsidian or keep it under version control. Edit a file in that folder and Tidy picks the change up. Edit the same note in both at once and it writes a conflict copy rather than quietly losing one.
+Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors page content to a folder you choose, reads external edits back in and preserves conflicting edits in a separate copy. Generated meeting summaries are currently separate from vault exports; the original page content is exported.
 
-## Running it
+The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its separate transcript-ingestion tool still uses local Ollama for summarisation. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
 
-You need [Node.js](https://nodejs.org) 18+, [Rust](https://rustup.rs), and CMake (`brew install cmake`, for building Whisper). [Ollama](https://ollama.com) is optional and only used for AI summaries.
+## Run from source
+
+Use Node.js 22.12+ with npm, Rust, Xcode command-line tools and CMake. The browser preview uses a mock backend and does not access your desktop workspace.
 
 ```bash
-npm install
-
-npm run dev          # the web build, with an in-memory mock backend (quickest way to poke around)
-npm run tauri dev    # the real desktop app
-
-npm test                    # front-end tests (Vitest)
-cargo test --workspace      # Rust tests
+npm ci
+npm run dev
 ```
 
-To build a desktop app:
+For the native Mac app, build its bundled helpers first:
 
 ```bash
-./scripts/build-sidecar.sh   # build and stage the MCP server
-./scripts/build-ai-runtime.sh # build and stage local AI
-npm run tauri build          # produces a .app / .dmg
+bash scripts/build-sidecar.sh
+bash scripts/build-ai-runtime.sh
+npm run tauri dev
 ```
 
-## Built with
+Checks:
 
-Tauri 2, React, TypeScript and Tailwind on the front. A shared Rust core handles the storage (SQLite), the transcription (whisper.cpp with Metal), speaker labelling (sherpa-onnx), and the MCP server. Summaries and meeting questions run through a bundled llama.cpp runtime, with Ollama available as an advanced option.
+```bash
+npm test
+npm run build
+DYLD_FALLBACK_LIBRARY_PATH=/usr/lib/swift cargo test --workspace --locked
+```
 
-## Status
+v0.2.1 passed 80 front-end tests, 42 shared-core tests and 14 native unit tests, plus a synthetic client-handover regression using the real local models. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
 
-Version 0.2.1 is available as a signed, notarised Apple Silicon download. It includes refreshed branding and navigation, contextual meeting search, structured notes and recording-meter fixes. The release passed 80 front-end tests, 42 shared-core tests and 14 native unit tests, plus a synthetic regression using the real local AI models. These checks do not establish that every application workflow is free of bugs. Maintainers can follow the [local release guide](docs/RELEASING.md) to build future releases.
-
-<br>
-
-<p align="center"><sub>Local-first. Private. Free. Yours.</sub></p>
+Built with Tauri, React, TypeScript, SQLite, whisper.cpp, sherpa-onnx and llama.cpp. Distributed under AGPL-3.0-or-later. Maintainers can follow the [local signing and release guide](docs/RELEASING.md).
