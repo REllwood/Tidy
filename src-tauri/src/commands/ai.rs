@@ -1,7 +1,7 @@
-//! Tauri command wrappers over the shared LLM client in `appflower_core::llm`.
+//! Tauri command wrappers over the shared LLM client in `tidy_core::llm`.
 
 use crate::error::AppResult;
-use appflower_core::llm::{ollama, LlmStatus, MeetingSummary};
+use tidy_core::llm::{ollama, LlmStatus, MeetingSummary};
 
 #[tauri::command]
 pub async fn ollama_status() -> LlmStatus {
@@ -21,6 +21,7 @@ pub async fn ai_generate(
     app: tauri::AppHandle,
     instruction: String,
     context: Option<String>,
+    request_id: Option<String>,
 ) -> AppResult<String> {
-    crate::local_ai::generate(&app, &instruction, context.as_deref()).await
+    crate::local_ai::generate(&app, &instruction, context.as_deref(), request_id).await
 }

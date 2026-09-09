@@ -18,13 +18,13 @@ pub struct McpInfo {
 }
 
 /// Best-effort path to the sidecar next to the running executable (in a bundled
-/// .app it sits in `Contents/MacOS/appflower-mcp`).
+/// .app it sits in `Contents/MacOS/tidy-mcp`).
 fn sidecar_path() -> String {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("appflower-mcp")))
+        .and_then(|exe| exe.parent().map(|p| p.join("tidy-mcp")))
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "appflower-mcp".to_string())
+        .unwrap_or_else(|| "tidy-mcp".to_string())
 }
 
 /// The existing token, or `None` if the user hasn't enabled writes yet.
@@ -48,7 +48,7 @@ pub fn mcp_enable(db: State<Db>) -> AppResult<McpInfo> {
     };
     let sidecar = sidecar_path();
     let claude_command = format!(
-        "claude mcp add --scope user --transport stdio --env APPFLOWER_MCP_TOKEN={token} appflower -- \"{sidecar}\""
+        "claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN={token} tidy -- \"{sidecar}\""
     );
     Ok(McpInfo {
         token,

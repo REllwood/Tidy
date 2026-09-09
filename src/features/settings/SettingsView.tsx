@@ -7,7 +7,13 @@ import {
   useModelMutations,
   useDownloadProgress,
 } from "@/hooks/useModels";
-import { type ModelInfo, diarizeApi, vaultApi, mcpApi, type McpInfo } from "@/lib/api";
+import {
+  type ModelInfo,
+  diarizeApi,
+  vaultApi,
+  mcpApi,
+  type McpInfo,
+} from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +35,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-b border-border py-7">
+    <section className="border-b border-border py-8">
       <h2 className="text-base font-semibold">{title}</h2>
       {desc && <p className="mt-0.5 text-note text-text-muted">{desc}</p>}
       <div className="mt-4">{children}</div>
@@ -43,8 +49,13 @@ export function SettingsView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-10 py-10">
-        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+      <div className="mx-auto max-w-3xl px-6 py-10 sm:px-10">
+        <p className="page-eyebrow">Make it yours</p>
+        <h1 className="page-title">Settings</h1>
+        <p className="page-description">
+          A workspace that works the way you do. Manage appearance, local models
+          and your data.
+        </p>
 
         <Section title="Appearance">
           <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
@@ -79,7 +90,7 @@ export function SettingsView() {
         </Section>
 
         <Section
-          title="Speaker labels (diarization)"
+          title="Speaker labels"
           desc="Label who-said-what in meeting transcripts. Runs on-device via downloadable models (~35 MB)."
         >
           <DiarizationSettings />
@@ -104,9 +115,10 @@ export function SettingsView() {
             <Lock className="mt-0.5 size-4 shrink-0" />
             <span>
               All your pages, databases, recordings, and transcripts are stored
-              locally on this Mac. Nothing is uploaded and there is no telemetry.
-              Optional model downloads connect to Hugging Face. AI processing runs
-              locally using Tidy’s bundled runtime or your selected local Ollama model.
+              locally on this Mac. Nothing is uploaded and there is no
+              telemetry. Optional model downloads connect to Hugging Face. AI
+              processing runs locally using Tidy’s bundled runtime or your
+              selected local Ollama model.
             </span>
           </div>
         </Section>
@@ -136,7 +148,9 @@ function ModelManager() {
         <ModelRow
           key={model.id}
           model={model}
-          downloading={m.download.isPending && m.download.variables === model.id}
+          downloading={
+            m.download.isPending && m.download.variables === model.id
+          }
           progress={progress[model.id]}
           onDownload={() => m.download.mutate(model.id)}
           onSelect={() => m.select.mutate(model.id)}
@@ -182,8 +196,14 @@ function ModelRow({
         )}
       </div>
       {!model.downloaded ? (
-        <Button size="sm" variant="secondary" onClick={onDownload} disabled={downloading}>
-          <Download className="size-3.5" /> {downloading ? `${pct ?? 0}%` : "Download"}
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onDownload}
+          disabled={downloading}
+        >
+          <Download className="size-3.5" />{" "}
+          {downloading ? `${pct ?? 0}%` : "Download"}
         </Button>
       ) : (
         <div className="flex items-center gap-1.5">
@@ -240,12 +260,20 @@ function DiarizationSettings() {
               : "bg-surface-hover text-text-muted"
           }`}
         >
-          <Circle className={`size-2.5 ${available ? "fill-success" : "fill-text-faint"}`} />
+          <Circle
+            className={`size-2.5 ${available ? "fill-success" : "fill-text-faint"}`}
+          />
           {available ? "Models installed" : "Models not installed"}
         </span>
         {!available && (
-          <Button size="sm" variant="secondary" onClick={download} disabled={downloading}>
-            <Download className="size-3.5" /> {downloading ? "Downloading…" : "Download models"}
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={download}
+            disabled={downloading}
+          >
+            <Download className="size-3.5" />{" "}
+            {downloading ? "Downloading…" : "Download models"}
           </Button>
         )}
       </div>
@@ -255,7 +283,10 @@ function DiarizationSettings() {
 
 function VaultSettings() {
   const qc = useQueryClient();
-  const { data: dir } = useQuery({ queryKey: ["vault-dir"], queryFn: () => vaultApi.getDir() });
+  const { data: dir } = useQuery({
+    queryKey: ["vault-dir"],
+    queryFn: () => vaultApi.getDir(),
+  });
   const [path, setPath] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -265,11 +296,13 @@ function VaultSettings() {
       setMsg(`Vault linked · exported ${count} page${count === 1 ? "" : "s"}`);
       qc.invalidateQueries({ queryKey: ["vault-dir"] });
     },
-    onError: (e: unknown) => setMsg(String((e as { message?: string })?.message ?? e)),
+    onError: (e: unknown) =>
+      setMsg(String((e as { message?: string })?.message ?? e)),
   });
   const exportAll = useMutation({
     mutationFn: () => vaultApi.exportAll(),
-    onSuccess: (count) => setMsg(`Re-exported ${count} page${count === 1 ? "" : "s"}`),
+    onSuccess: (count) =>
+      setMsg(`Re-exported ${count} page${count === 1 ? "" : "s"}`),
   });
 
   return (
@@ -279,8 +312,16 @@ function VaultSettings() {
           <code className="min-w-0 flex-1 truncate rounded bg-surface px-2.5 py-1.5 text-xs text-text-muted">
             {dir}
           </code>
-          <Button size="sm" variant="secondary" onClick={() => exportAll.mutate()} disabled={exportAll.isPending}>
-            <RefreshCw className={`size-3.5 ${exportAll.isPending ? "animate-spin" : ""}`} /> Re-export
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => exportAll.mutate()}
+            disabled={exportAll.isPending}
+          >
+            <RefreshCw
+              className={`size-3.5 ${exportAll.isPending ? "animate-spin" : ""}`}
+            />{" "}
+            Re-export
           </Button>
         </div>
       ) : (
@@ -308,7 +349,10 @@ function VaultSettings() {
 
 function McpSettings() {
   const qc = useQueryClient();
-  const { data: token } = useQuery({ queryKey: ["mcp-token"], queryFn: () => mcpApi.getToken() });
+  const { data: token } = useQuery({
+    queryKey: ["mcp-token"],
+    queryFn: () => mcpApi.getToken(),
+  });
   const [info, setInfo] = useState<McpInfo | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -340,15 +384,26 @@ function McpSettings() {
               : "bg-surface-hover text-text-muted"
           }`}
         >
-          <Circle className={`size-2.5 ${enabled ? "fill-success" : "fill-text-faint"}`} />
+          <Circle
+            className={`size-2.5 ${enabled ? "fill-success" : "fill-text-faint"}`}
+          />
           {enabled ? "Write access enabled" : "Read-only"}
         </span>
         {enabled ? (
-          <Button size="sm" variant="secondary" onClick={() => disable.mutate()} disabled={disable.isPending}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => disable.mutate()}
+            disabled={disable.isPending}
+          >
             Revoke writes
           </Button>
         ) : (
-          <Button size="sm" onClick={() => enable.mutate()} disabled={enable.isPending}>
+          <Button
+            size="sm"
+            onClick={() => enable.mutate()}
+            disabled={enable.isPending}
+          >
             Enable writes
           </Button>
         )}

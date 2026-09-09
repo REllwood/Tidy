@@ -1,4 +1,4 @@
-# Cargo workspace: shared core (appflower-core) + the Tauri app (src-tauri) +
+# Cargo workspace: shared core (tidy-core) + the Tauri app (src-tauri) +
 # the MCP sidecar (crates/mcp). Shared crates are pinned here so the app and the
 # sidecar link the *same* rusqlite/serde — their APIs exchange those types.
 [workspace]
@@ -16,4 +16,4 @@ log = "0.4"
 reqwest = { version = "0.12", features = ["stream", "json"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread", "macros", "sync", "process", "time"] }
 futures-util = "0.3"
-appflower-core = { path = "crates/core" }
+tidy-core = { path = "crates/core" }

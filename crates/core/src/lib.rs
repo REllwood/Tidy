@@ -1,4 +1,4 @@
-//! appflower-core — the shared, UI-agnostic heart of AppFlower.
+//! tidy-core — the shared, UI-agnostic heart of Tidy.
 //!
 //! It owns the SQLite schema/migrations, the error type, the local-LLM client,
 //! and the whole `store` domain layer (pages, documents, databases, knowledge,
@@ -8,6 +8,7 @@
 
 pub mod db;
 pub mod error;
+pub mod installation;
 pub mod llm;
 pub mod store;
 pub mod vault;

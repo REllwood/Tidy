@@ -30,6 +30,7 @@ export interface AiStatus {
   ready: boolean;
   search_ready: boolean;
   disk_bytes: number;
+  recording_paused: boolean;
 }
 export interface MeetingJob {
   page_id: string;
@@ -55,6 +56,7 @@ export interface MeetingSource {
 export interface MeetingAnswer {
   answer: string;
   sources: MeetingSource[];
+  coverage?: { passages_used: number; total_passages: number; meetings_used: number; total_meetings: number } | null;
 }
 export const localAi = {
   status: () => invoke<AiStatus>("local_ai_status"),
@@ -65,6 +67,7 @@ export const localAi = {
   remove: (id: string) =>
     invoke<void>("local_ai_remove", { id, confirmed: true }),
   cancel: () => invoke<void>("local_ai_cancel"),
+  cancelRequest: (requestId: string) => invoke<void>("local_ai_cancel", { requestId }),
   jobs: () => invoke<MeetingJob[]>("meeting_ai_jobs"),
   retry: (pageId: string) => invoke<void>("meeting_ai_retry", { pageId }),
   ask: (

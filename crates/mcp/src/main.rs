@@ -1,12 +1,12 @@
-//! AppFlower MCP sidecar.
+//! Tidy MCP sidecar.
 //!
-//! A stdio MCP server that exposes the local AppFlower knowledge base to agents
+//! A stdio MCP server that exposes the local Tidy knowledge base to agents
 //! (Claude Code, Codex). It opens the SAME SQLite index as the desktop app (a
-//! second WAL writer with a busy_timeout) and calls the exact `appflower_core`
+//! second WAL writer with a busy_timeout) and calls the exact `tidy_core`
 //! store functions the GUI uses — one source of truth, zero duplication.
 //!
 //! Read tools are always available. Write tools (create/update/ingest) are gated
-//! behind a per-install token: they only work when `APPFLOWER_MCP_TOKEN` matches
+//! behind a per-install token: they only work when `TIDY_MCP_TOKEN` matches
 //! `setting('mcp_token')` minted by the app (or when no token has been minted yet
 //! and the env var is set). Everything is soft, additive, and local.
 
@@ -21,8 +21,8 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use appflower_core::db::{self, Db};
-use appflower_core::store::{databases, documents, ingest, knowledge, pages, search};
+use tidy_core::db::{self, Db};
+use tidy_core::store::{databases, documents, ingest, knowledge, pages, search};
 
 // ---- tool argument schemas -------------------------------------------------
 
@@ -107,7 +107,7 @@ struct IngestArgs {
 // ---- server ----------------------------------------------------------------
 
 #[derive(Clone)]
-struct AppFlowerServer {
+struct TidyServer {
     db: Arc<Db>,
     writes_enabled: bool,
     tool_router: ToolRouter<Self>,
@@ -124,7 +124,7 @@ struct PageWithBody {
 }
 
 #[tool_router(router = tool_router)]
-impl AppFlowerServer {
+impl TidyServer {
     fn new(db: Arc<Db>, writes_enabled: bool) -> Self {
         Self {
             db,
@@ -137,15 +137,19 @@ impl AppFlowerServer {
         if self.writes_enabled {
             Ok(())
         } else {
-            Err("write tools are disabled — set APPFLOWER_MCP_TOKEN to the token \
-                 minted in AppFlower → Settings → Connections to enable them"
-                .into())
+            Err(
+                "write tools are disabled — set TIDY_MCP_TOKEN to the token \
+                 minted in Tidy → Settings → Connections to enable them"
+                    .into(),
+            )
         }
     }
 
     // ---- read tools (always available) ----
 
-    #[tool(description = "Full-text search the knowledge base (page titles, bodies, and text cells).")]
+    #[tool(
+        description = "Full-text search the knowledge base (page titles, bodies, and text cells)."
+    )]
     async fn kb_search(&self, Parameters(a): Parameters<SearchArgs>) -> Result<String, String> {
         let conn = self.db.conn.lock().unwrap();
         let r = search::core::search(&conn, &a.query).map_err(|e| e.to_string())?;
@@ -181,7 +185,9 @@ impl AppFlowerServer {
         json(&r)
     }
 
-    #[tool(description = "Get a database's full bundle (fields, rows, views) for a database page id.")]
+    #[tool(
+        description = "Get a database's full bundle (fields, rows, views) for a database page id."
+    )]
     async fn get_database(&self, Parameters(a): Parameters<PageIdArgs>) -> Result<String, String> {
         let conn = self.db.conn.lock().unwrap();
         let r = databases::core::bundle(&conn, &a.page_id).map_err(|e| e.to_string())?;
@@ -191,16 +197,25 @@ impl AppFlowerServer {
     // ---- write tools (gated) ----
 
     #[tool(description = "Create a new page ('doc' or 'database'). Requires write access.")]
-    async fn create_page(&self, Parameters(a): Parameters<CreatePageArgs>) -> Result<String, String> {
+    async fn create_page(
+        &self,
+        Parameters(a): Parameters<CreatePageArgs>,
+    ) -> Result<String, String> {
         self.require_write()?;
         let conn = self.db.conn.lock().unwrap();
         let kind = a.kind.unwrap_or_else(|| "doc".to_string());
-        let p = pages::core::create(&conn, a.parent_id, a.title, kind).map_err(|e| e.to_string())?;
+        let p =
+            pages::core::create(&conn, a.parent_id, a.title, kind).map_err(|e| e.to_string())?;
         json(&p)
     }
 
-    #[tool(description = "Replace a page's document body with BlockNote JSON. Requires write access.")]
-    async fn update_document(&self, Parameters(a): Parameters<UpdateDocArgs>) -> Result<String, String> {
+    #[tool(
+        description = "Replace a page's document body with BlockNote JSON. Requires write access."
+    )]
+    async fn update_document(
+        &self,
+        Parameters(a): Parameters<UpdateDocArgs>,
+    ) -> Result<String, String> {
         self.require_write()?;
         let conn = self.db.conn.lock().unwrap();
         documents::core::update(&conn, &a.id, &a.content).map_err(|e| e.to_string())?;
@@ -208,7 +223,10 @@ impl AppFlowerServer {
     }
 
     #[tool(description = "Add a field to a database. Requires write access.")]
-    async fn create_field(&self, Parameters(a): Parameters<CreateFieldArgs>) -> Result<String, String> {
+    async fn create_field(
+        &self,
+        Parameters(a): Parameters<CreateFieldArgs>,
+    ) -> Result<String, String> {
         self.require_write()?;
         let conn = self.db.conn.lock().unwrap();
         let f = databases::core::create_field(&conn, &a.database_id, &a.name, &a.kind, a.options)
@@ -228,7 +246,8 @@ impl AppFlowerServer {
     async fn set_cell(&self, Parameters(a): Parameters<SetCellArgs>) -> Result<String, String> {
         self.require_write()?;
         let conn = self.db.conn.lock().unwrap();
-        databases::core::set_cell(&conn, &a.row_id, &a.field_id, &a.value).map_err(|e| e.to_string())?;
+        databases::core::set_cell(&conn, &a.row_id, &a.field_id, &a.value)
+            .map_err(|e| e.to_string())?;
         Ok("ok".to_string())
     }
 
@@ -257,38 +276,49 @@ impl AppFlowerServer {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for AppFlowerServer {
+impl ServerHandler for TidyServer {
     fn get_info(&self) -> ServerInfo {
-        let mode = if self.writes_enabled { "read-write" } else { "read-only" };
+        let mode = if self.writes_enabled {
+            "read-write"
+        } else {
+            "read-only"
+        };
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(format!(
-                "AppFlower local knowledge base ({mode}). Read with kb_search / list_pages / get_page / \
+                "Tidy local knowledge base ({mode}). Read with kb_search / list_pages / get_page / \
                  get_backlinks / list_databases / get_database. File a note with ingest_note. Write tools \
-                 require APPFLOWER_MCP_TOKEN to match the token minted in AppFlower Settings."
+                 require TIDY_MCP_TOKEN to match the token minted in Tidy Settings."
             ));
-        info.server_info.name = "appflower-mcp".to_string();
+        info.server_info.name = "tidy-mcp".to_string();
         info.server_info.version = env!("CARGO_PKG_VERSION").to_string();
-        info.server_info.title = Some("AppFlower".to_string());
+        info.server_info.title = Some("Tidy".to_string());
         info
     }
 }
 
 // ---- entrypoint ------------------------------------------------------------
 
-/// Resolve the AppFlower SQLite index path (env override, else the macOS app dir).
-fn db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("APPFLOWER_DB") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+/// Resolve the Tidy SQLite index path (env override, else the macOS app dir).
+fn db_path() -> tidy_core::error::AppResult<PathBuf> {
+    let previous = tidy_core::installation::previous()?;
+    if let Some(path) = std::env::var("TIDY_DB")
+        .ok()
+        .or_else(|| std::env::var(previous.database_environment).ok())
+        .filter(|p| !p.is_empty())
+    {
+        return Ok(PathBuf::from(path));
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join("Library/Application Support/com.appflower.app/appflower.db")
+    let home = std::env::var("HOME")
+        .map_err(|_| tidy_core::error::AppError::Other("HOME is unavailable".into()))?;
+    let preferred = PathBuf::from(home)
+        .join("Library/Application Support")
+        .join(tidy_core::installation::DATA_DIRECTORY);
+    tidy_core::installation::database_path(&tidy_core::installation::data_directory(&preferred)?)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = db_path();
+    let path = db_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -300,8 +330,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let writes_enabled = {
         let conn = db.conn.lock().unwrap();
         let stored = db::get_setting(&conn, "mcp_token").ok().flatten();
-        let env = std::env::var("APPFLOWER_MCP_TOKEN")
+        let env = std::env::var("TIDY_MCP_TOKEN")
             .ok()
+            .or_else(|| {
+                tidy_core::installation::previous()
+                    .ok()
+                    .and_then(|p| std::env::var(p.token_environment).ok())
+            })
             .filter(|s| !s.is_empty());
         match (env, stored) {
             (Some(e), Some(s)) => e == s,
@@ -309,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let server = AppFlowerServer::new(Arc::new(db), writes_enabled);
+    let server = TidyServer::new(Arc::new(db), writes_enabled);
     let service = server.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())

@@ -18,9 +18,9 @@ It runs entirely on your Mac. There's no account, no cloud, no sync and no telem
 
 ## Download
 
-Download `Tidy_0.2.0_aarch64.dmg` from the [Releases page](https://github.com/REllwood/Tidy/releases/latest), open it, and drag Tidy into your Applications folder. This download is for Apple Silicon Macs. The configured minimum is macOS 14.4; the release has been checked on macOS 26.5.2, with older versions still to be tested.
+Download `Tidy_0.2.1_aarch64.dmg` from the [Releases page](https://github.com/REllwood/Tidy/releases/latest), open it, and drag Tidy into your Applications folder. This download is for Apple Silicon Macs. The configured minimum is macOS 14.4; the release has been checked on macOS 26.5.2, with older versions still to be tested.
 
-Version 0.2.0 is signed with Developer ID and notarised by Apple. Its signatures, notarisation tickets and Gatekeeper acceptance have been verified, including the app inside the DMG. No Terminal quarantine workaround is required. macOS may ask you to confirm the first launch.
+Version 0.2.1 is signed with Developer ID and notarised by Apple. Its signatures, notarisation tickets and Gatekeeper acceptance have been verified, including the app inside the DMG. No Terminal quarantine workaround is required. macOS may ask you to confirm the first launch.
 
 ## Ask across client meetings
 
@@ -113,7 +113,7 @@ Tauri 2, React, TypeScript and Tailwind on the front. A shared Rust core handles
 
 ## Status
 
-Version 0.2.0 is available as a signed, notarised Apple Silicon download. The release passed 70 front-end tests and 36 shared-core tests. These checks do not establish that every application workflow is free of bugs. Maintainers can follow the [local release guide](docs/RELEASING.md) to build future releases.
+Version 0.2.1 is available as a signed, notarised Apple Silicon download. It includes refreshed branding and navigation, contextual meeting search, structured notes and recording-meter fixes. The release passed 80 front-end tests, 42 shared-core tests and 14 native unit tests, plus a synthetic regression using the real local AI models. These checks do not establish that every application workflow is free of bugs. Maintainers can follow the [local release guide](docs/RELEASING.md) to build future releases.
 
 <br>
 

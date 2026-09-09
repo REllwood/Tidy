@@ -34,7 +34,7 @@ export interface AgendaResult {
  * it works in the browser mock too.
  */
 export function useAgenda(): AgendaResult {
-  const { data: dbs = [] } = useQuery({
+  const { data: dbs = [], isPending: databasesPending } = useQuery({
     queryKey: ["databases"],
     queryFn: () => databasesApi.list(),
     staleTime: 10_000,
@@ -52,7 +52,9 @@ export function useAgenda(): AgendaResult {
   const today = todayISO();
   const tasks = dated.flatMap((d, i) => {
     const bundle = results[i]?.data;
-    return bundle ? extractTasks(bundle, { pageId: d.page_id, title: d.title }) : [];
+    return bundle
+      ? extractTasks(bundle, { pageId: d.page_id, title: d.title })
+      : [];
   });
 
   const databases: PlannerDb[] = dated.map((d, i) => {
@@ -76,6 +78,6 @@ export function useAgenda(): AgendaResult {
     tasks,
     databases,
     today,
-    loading: results.some((r) => r.isLoading),
+    loading: databasesPending || results.some((r) => r.isLoading),
   };
 }

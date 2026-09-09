@@ -25,6 +25,14 @@ describe("buildMeetingBlocks", () => {
     expect(transcript[1].content).toBe("[01:05] Wrap up.");
   });
 
+  it("preserves topic notes and open questions when creating a meeting document", () => {
+    const structured = { ...summary, sections: [{heading: "Client handovers", points: ["Priya takes over delivery after the introduction."]}], open_questions: ["Finance needs to confirm the billing contact."] };
+    const blocks = buildMeetingBlocks(segs, structured, true);
+    expect(blocks.some(block => block.content === "Client handovers")).toBe(true);
+    expect(blocks.some(block => block.content === "Finance needs to confirm the billing contact.")).toBe(true);
+    expect(blocks.some(block => block.content === "A short standup.")).toBe(false);
+  });
+
   it("falls back to transcript-only with a processing note when no summary exists", () => {
     const blocks = buildMeetingBlocks(segs, null, false);
     expect(blocks.some((b) => String(b.content).includes("Transcript saved"))).toBe(true);

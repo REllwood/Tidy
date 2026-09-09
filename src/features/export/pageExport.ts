@@ -65,17 +65,22 @@ export async function importMarkdownText(
 
 /** Open a file picker and import the chosen .md file; resolves to the new page id. */
 export function pickAndImportMarkdown(): Promise<string | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".md,.markdown,text/markdown,text/plain";
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return resolve(null);
-      const text = await file.text();
-      const fallback = file.name.replace(/\.(md|markdown|txt)$/i, "");
-      resolve(await importMarkdownText(text, fallback));
+      try {
+        const text = await file.text();
+        const fallback = file.name.replace(/\.(md|markdown|txt)$/i, "");
+        resolve(await importMarkdownText(text, fallback));
+      } catch (error) {
+        reject(error);
+      }
     };
+    input.oncancel = () => resolve(null);
     input.click();
   });
 }

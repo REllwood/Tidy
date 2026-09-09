@@ -1,0 +1,11 @@
+{
+  "data_directory": "com.appflower.app",
+  "database_file": "appflower.db",
+  "database_environment": "APPFLOWER_DB",
+  "token_environment": "APPFLOWER_MCP_TOKEN",
+  "storage_keys": {
+    "tidy-ui": "appflower-ui",
+    "tidy-mock-models": "appflower-mock-models",
+    "tidy-mock-db": "appflower-mock-db"
+  }
+}

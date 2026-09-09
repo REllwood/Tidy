@@ -61,6 +61,14 @@ pub fn build_body(summary: &crate::llm::MeetingSummary) -> String {
         json!({"type":"heading","props":{"level":2},"content":"Summary"}),
         json!({"type":"paragraph","content": summary.summary}),
     ];
+    for section in &summary.sections {
+        blocks.push(json!({"type":"heading","props":{"level":3},"content":section.heading}));
+        for point in &section.points { blocks.push(json!({"type":"bulletListItem","content":point})); }
+    }
+    if !summary.open_questions.is_empty() {
+        blocks.push(json!({"type":"heading","props":{"level":2},"content":"Open questions"}));
+        for point in &summary.open_questions { blocks.push(json!({"type":"bulletListItem","content":point})); }
+    }
     if !summary.action_items.is_empty() {
         blocks.push(json!({"type":"heading","props":{"level":2},"content":"Action items"}));
         for a in &summary.action_items {

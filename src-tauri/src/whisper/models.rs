@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 
 use crate::db::{now_ms, Db};
@@ -20,10 +20,30 @@ struct ModelDef {
 }
 
 const MODELS: &[ModelDef] = &[
-    ModelDef { id: "tiny", name: "Whisper Tiny", file: "ggml-tiny.bin", size: 77_700_000 },
-    ModelDef { id: "base", name: "Whisper Base", file: "ggml-base.bin", size: 147_900_000 },
-    ModelDef { id: "small", name: "Whisper Small", file: "ggml-small.bin", size: 487_600_000 },
-    ModelDef { id: "medium", name: "Whisper Medium", file: "ggml-medium.bin", size: 1_530_000_000 },
+    ModelDef {
+        id: "tiny",
+        name: "Whisper Tiny",
+        file: "ggml-tiny.bin",
+        size: 77_700_000,
+    },
+    ModelDef {
+        id: "base",
+        name: "Whisper Base",
+        file: "ggml-base.bin",
+        size: 147_900_000,
+    },
+    ModelDef {
+        id: "small",
+        name: "Whisper Small",
+        file: "ggml-small.bin",
+        size: 487_600_000,
+    },
+    ModelDef {
+        id: "medium",
+        name: "Whisper Medium",
+        file: "ggml-medium.bin",
+        size: 1_530_000_000,
+    },
 ];
 
 const HF_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
@@ -45,11 +65,7 @@ fn def(id: &str) -> AppResult<&'static ModelDef> {
 }
 
 fn models_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::Other(format!("app_data_dir: {e}")))?
-        .join("models");
+    let dir = crate::workspace::directory(app).join("models");
     Ok(dir)
 }
 
@@ -139,11 +155,7 @@ pub fn delete_model(app: AppHandle, db: State<'_, Db>, id: String) -> AppResult<
 }
 
 #[tauri::command]
-pub async fn download_model(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-) -> AppResult<()> {
+pub async fn download_model(app: AppHandle, db: State<'_, Db>, id: String) -> AppResult<()> {
     let d = def(&id)?;
     let dir = models_dir(&app)?;
     tokio::fs::create_dir_all(&dir).await?;
@@ -151,7 +163,7 @@ pub async fn download_model(
     let url = format!("{HF_BASE}{}", d.file);
 
     let client = reqwest::Client::builder()
-        .user_agent("AppFlower/0.1")
+        .user_agent("Tidy/0.1")
         .build()
         .map_err(|e| AppError::Other(format!("http client: {e}")))?;
     let resp = client

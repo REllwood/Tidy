@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
-use appflower_core::vault::export;
+use tidy_core::vault::export;
 
 /// Holds the live filesystem watcher (dropped/replaced when the vault changes).
 #[derive(Default)]
@@ -118,7 +118,7 @@ fn handle_events(app: &AppHandle, vault: &Path, events: Vec<DebouncedEvent>) {
             }
             // ignore the internal index dir + temp files
             let s = path.to_string_lossy();
-            if s.contains("/.appflower/") || s.ends_with(".md.tmp") || s.contains(".conflict-") {
+            if s.contains("/.tidy/") || s.ends_with(".md.tmp") || s.contains(".conflict-") {
                 continue;
             }
             let rel = match path.strip_prefix(vault) {
@@ -243,8 +243,8 @@ pub fn get_vault_dir(db: State<Db>) -> AppResult<Option<String>> {
 #[tauri::command]
 pub fn export_vault(db: State<Db>) -> AppResult<usize> {
     let conn = db.conn.lock().unwrap();
-    let vault = vault_root(&conn)?
-        .ok_or_else(|| AppError::Invalid("no vault configured".into()))?;
+    let vault =
+        vault_root(&conn)?.ok_or_else(|| AppError::Invalid("no vault configured".into()))?;
     export_all(&conn, &vault)
 }
 

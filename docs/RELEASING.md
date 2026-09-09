@@ -49,7 +49,7 @@ public distribution. Build caches are reused, and earlier build directories are 
 Use the exact directory printed at the end of the build:
 
 ```bash
-npm run release:notarise -- /absolute/path/to/release-builds/Tidy-0.2.0.XXXXXX tidy-notary
+npm run release:notarise -- /absolute/path/to/release-builds/Tidy-0.2.1.XXXXXX tidy-notary
 ```
 
 The script notarises and staples the app first, creates a DMG with an Applications
@@ -67,13 +67,13 @@ submitting again. No failed or incomplete attempt is automatically uploaded.
 
 Once the source/version tag and finished download have been reviewed, upload the exact
 verified DMG and its SHA256SUMS.txt through the repository's New Release page. Use a new
-`v0.2.0` tag tied to the matching source, not an unrelated commit. Save it as a draft for a
+`v0.2.1` tag tied to the matching source, not an unrelated commit. Save it as a draft for a
 final download/launch check on a separate Mac, then publish it to make it public.
 
 The equivalent upload command, once a matching tag already exists on GitHub, is:
 
 ```bash
-gh release create v0.2.0 /absolute/path/Tidy_0.2.0_aarch64.dmg /absolute/path/SHA256SUMS.txt --repo REllwood/Tidy --verify-tag --draft --title "Tidy v0.2.0" --notes-file /absolute/path/release-notes.md
+gh release create v0.2.1 /absolute/path/Tidy_0.2.1_aarch64.dmg /absolute/path/SHA256SUMS.txt --repo REllwood/Tidy --verify-tag --draft --title "Tidy v0.2.1" --notes-file /absolute/path/release-notes.md
 ```
 
 This command creates a draft, refuses a missing tag and does not overwrite an existing

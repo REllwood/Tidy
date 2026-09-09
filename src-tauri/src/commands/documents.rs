@@ -1,10 +1,10 @@
-//! Tauri command wrappers over `appflower_core::store::documents`.
+//! Tauri command wrappers over `tidy_core::store::documents`.
 
 use tauri::State;
 
 use crate::db::Db;
 use crate::error::AppResult;
-use appflower_core::store::documents::core;
+use tidy_core::store::documents::core;
 
 #[tauri::command]
 pub fn get_document(db: State<Db>, id: String) -> AppResult<String> {

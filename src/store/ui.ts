@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { readStoredValue } from "@/lib/storage";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 export type Theme = "light" | "dark" | "system";
 export type DbViewKind = "grid" | "board" | "calendar";
@@ -119,7 +120,8 @@ export const useUi = create<UiState>()(
       setDiarizeEnabled: (diarizeEnabled) => set({ diarizeEnabled }),
     }),
     {
-      name: "appflower-ui",
+      name: "tidy-ui",
+      storage: createJSONStorage(() => ({ getItem: name => readStoredValue(localStorage, name), setItem: (name,value) => localStorage.setItem(name,value), removeItem: name => localStorage.removeItem(name) })),
       // (persist options continue below)
       // Don't persist transient/navigation state.
       partialize: (s) => ({

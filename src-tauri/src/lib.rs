@@ -1,13 +1,14 @@
 mod audio;
-mod local_ai;
 mod commands;
+mod local_ai;
 mod vault;
 mod whisper;
+mod workspace;
 
 // The DB layer, error type, LLM client, and store now live in the shared core
 // crate. Re-export db/error at the app crate root so the app's audio/whisper
 // modules keep referring to `crate::db` / `crate::error` unchanged.
-pub use appflower_core::{db, error};
+pub use tidy_core::{db, error};
 
 use tauri::Manager;
 
@@ -29,10 +30,11 @@ pub fn run() {
             }
 
             // Open the local database in the app data dir.
-            let dir = app.path().app_data_dir()?;
+            let dir = tidy_core::installation::data_directory(&app.path().app_data_dir()?)?;
+            app.manage(workspace::WorkspaceDirectory(dir.clone()));
             std::fs::create_dir_all(&dir)?;
-            let db_path = dir.join("appflower.db");
-            log::info!("AppFlower database: {}", db_path.display());
+            let db_path = tidy_core::installation::database_path(&dir)?;
+            log::info!("Tidy database: {}", db_path.display());
             let database = Db::open(&db_path).map_err(|e| {
                 log::error!("failed to open database: {e}");
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
@@ -48,7 +50,7 @@ pub fn run() {
             {
                 let db = app.state::<Db>();
                 let conn = db.conn.lock().unwrap();
-                if let Err(e) = appflower_core::store::knowledge::core::maybe_backfill(&conn) {
+                if let Err(e) = tidy_core::store::knowledge::core::maybe_backfill(&conn) {
                     log::warn!("links/tags backfill failed: {e}");
                 }
             }
@@ -123,7 +125,9 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app,event| {
-            if matches!(event,tauri::RunEvent::Exit) { app.state::<local_ai::AiState>().shutdown(); }
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<local_ai::AiState>().shutdown();
+            }
         });
 }

@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Tidy",
-  "version": "0.2.0",
-  "identifier": "com.appflower.app",
+  "version": "0.2.1",
+  "identifier": "com.tidy.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -29,7 +29,7 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/appflower-mcp",
+      "binaries/tidy-mcp",
       "binaries/tidy-ai"
     ],
     "macOS": {

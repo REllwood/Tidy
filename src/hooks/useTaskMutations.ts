@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { databasesApi, type CellValue } from "@/lib/api";
 import type { AgendaTask } from "@/lib/agenda";
@@ -12,12 +13,17 @@ export function useTaskMutations() {
   const invalidate = () => {
     // Prefix keys so every dated-DB query the agenda observes refetches, plus the
     // per-page DB view. (The planner reads ["database-by-id", <id>] via useQueries.)
-    qc.invalidateQueries({ queryKey: ["database-by-id"] });
-    qc.invalidateQueries({ queryKey: ["database"] });
+    return Promise.all([
+      qc.invalidateQueries({ queryKey: ["database-by-id"] }),
+      qc.invalidateQueries({ queryKey: ["database"] }),
+    ]);
   };
   const setCell = useMutation({
     mutationFn: (v: { rowId: string; fieldId: string; value: CellValue }) =>
       databasesApi.setCell(v.rowId, v.fieldId, v.value),
+    onSuccess: invalidate,
+    onError: (error) =>
+      toast.error(`Could not update the task: ${String(error)}`),
   });
 
   const canComplete = (t: AgendaTask) => !!t.statusFieldId && !!t.doneChoiceId;
@@ -25,17 +31,11 @@ export function useTaskMutations() {
   const complete = (t: AgendaTask) => {
     if (!t.statusFieldId || !t.doneChoiceId) return;
     const value = t.done ? t.todoChoiceId : t.doneChoiceId;
-    setCell.mutate(
-      { rowId: t.rowId, fieldId: t.statusFieldId, value },
-      { onSuccess: () => invalidate() },
-    );
+    setCell.mutate({ rowId: t.rowId, fieldId: t.statusFieldId, value });
   };
 
   const reschedule = (t: AgendaTask, iso: string) => {
-    setCell.mutate(
-      { rowId: t.rowId, fieldId: t.dueFieldId, value: iso },
-      { onSuccess: () => invalidate() },
-    );
+    setCell.mutate({ rowId: t.rowId, fieldId: t.dueFieldId, value: iso });
   };
 
   return { complete, reschedule, canComplete, pending: setCell.isPending };

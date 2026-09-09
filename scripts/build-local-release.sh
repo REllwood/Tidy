@@ -33,7 +33,7 @@ export CARGO_TARGET_DIR="$root/target"
   echo 'Installing locked dependencies and running tests...'
   npm ci --no-audit --no-fund
   npm test
-  cargo test -p appflower-core --locked
+  cargo test -p tidy-core --locked
   bash scripts/build-sidecar.sh
   TIDY_AI_BUILD_CACHE="$root/target/tidy-ai-runtime" bash scripts/build-ai-runtime.sh
   echo 'Building and signing Tidy with the certificate in Keychain...'

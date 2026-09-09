@@ -1,5 +1,10 @@
-import { Check, CalendarClock } from "lucide-react";
-import { dueLabel, snoozeDate, type AgendaTask, type Snooze } from "@/lib/agenda";
+import { Check, CalendarClock, Loader2 } from "lucide-react";
+import {
+  dueLabel,
+  snoozeDate,
+  type AgendaTask,
+  type Snooze,
+} from "@/lib/agenda";
 import { useTaskMutations } from "@/hooks/useTaskMutations";
 import { useUi } from "@/store/ui";
 import {
@@ -36,7 +41,7 @@ export function TaskRow({
   showDbChip?: boolean;
 }) {
   const openPage = useUi((s) => s.openPage);
-  const { complete, reschedule, canComplete } = useTaskMutations();
+  const { complete, reschedule, canComplete, pending } = useTaskMutations();
   const dot = STATUS_DOT[task.statusColor ?? "grey"] ?? STATUS_DOT.grey;
   const completable = canComplete(task);
 
@@ -45,15 +50,21 @@ export function TaskRow({
       {/* complete toggle (falls back to a status dot when there's no Status field) */}
       {completable ? (
         <button
+          disabled={pending}
+          aria-busy={pending}
           aria-label={task.done ? "Mark not done" : "Mark done"}
           onClick={() => complete(task)}
           className={`grid size-[18px] shrink-0 place-items-center rounded-full border transition-colors ${
             task.done
-              ? "border-brand bg-brand text-white"
+              ? "border-brand bg-brand text-brand-fg"
               : "border-border-strong text-transparent hover:border-brand hover:text-brand/40"
           }`}
         >
-          <Check className="size-3" />
+          {pending ? (
+            <Loader2 className="size-3 animate-spin text-brand" />
+          ) : (
+            <Check className="size-3" />
+          )}
         </button>
       ) : (
         <span
@@ -81,6 +92,7 @@ export function TaskRow({
       {/* due chip → snooze/reschedule menu */}
       <Popover>
         <PopoverTrigger
+          disabled={pending}
           className={`shrink-0 rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-surface-hover ${
             overdue ? "text-danger-c" : "text-text-muted"
           }`}
@@ -106,7 +118,9 @@ export function TaskRow({
             <input
               type="date"
               defaultValue={task.due}
-              onChange={(e) => e.target.value && reschedule(task, e.target.value)}
+              onChange={(e) =>
+                e.target.value && reschedule(task, e.target.value)
+              }
               className="min-w-0 flex-1 bg-transparent text-sm outline-none"
             />
           </label>

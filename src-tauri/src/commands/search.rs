@@ -1,10 +1,10 @@
-//! Tauri command wrapper over `appflower_core::store::search`.
+//! Tauri command wrapper over `tidy_core::store::search`.
 
 use tauri::State;
 
 use crate::db::Db;
 use crate::error::AppResult;
-use appflower_core::store::search::{core, SearchResults};
+use tidy_core::store::search::{core, SearchResults};
 
 #[tauri::command]
 pub fn search(db: State<Db>, query: String) -> AppResult<SearchResults> {

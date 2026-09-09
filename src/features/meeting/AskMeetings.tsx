@@ -12,6 +12,8 @@ import {
 } from "./meetingLibrary";
 import { isTauri } from "@/lib/tauri";
 
+import { MeetingAnswerText } from "./MeetingAnswerText";
+
 export function AskMeetings() {
   const { question, from, through, clientId, result, update } =
     useMeetingQuestion();
@@ -64,18 +66,15 @@ export function AskMeetings() {
     onSuccess: () => qc.invalidateQueries({ queryKey: meetingJobsKey }),
   });
   const cancel = useMutation({ mutationFn: localAi.cancel });
-  const busy = ask.isPending || !!status.data?.progress;
+  const busy =
+    ask.isPending || !!status.data?.progress || !!status.data?.recording_paused;
   const indexed = scoped.filter((j) => j.indexed).length;
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-5 sm:px-8 py-10">
-        <p className="text-xs font-medium uppercase tracking-widest text-text-faint">
-          Meeting library
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Ask your meetings
-        </h1>
-        <p className="mt-2 max-w-xl text-sm leading-relaxed text-text-muted">
+        <p className="page-eyebrow">Meeting library</p>
+        <h1 className="page-title">Ask your meetings</h1>
+        <p className="page-description">
           Find decisions, commitments and context across your transcripts. Each
           answer includes the passages you can check.
         </p>
@@ -142,7 +141,7 @@ export function AskMeetings() {
           enabled={!!status.data?.ready}
         />
         <form
-          className="mt-6 space-y-3"
+          className="workspace-panel mt-6 space-y-4 p-5 sm:p-6"
           onSubmit={(e) => {
             e.preventDefault();
             if (
@@ -165,7 +164,7 @@ export function AskMeetings() {
             maxLength={1500}
             rows={3}
             placeholder="What did we agree about the launch date?"
-            className="block w-full resize-y rounded-xl border border-border bg-surface p-4 text-sm outline-none focus:border-brand"
+            className="block w-full resize-y rounded-xl border border-border bg-bg p-4 text-sm leading-relaxed outline-none focus:border-brand"
             disabled={ask.isPending}
           />
           <div className="flex flex-wrap items-end gap-3">
@@ -247,22 +246,39 @@ export function AskMeetings() {
         )}
         {result && !ask.isPending && (
           <section
-            className="mt-7 rounded-xl border border-border bg-surface p-5"
+            className="workspace-panel mt-7 p-6"
             aria-label="Meeting answer"
           >
             <p className="mb-3 text-xs text-text-faint">
               {result.question} · {result.scope}
             </p>
-            <p className="whitespace-pre-wrap text-sm leading-7">
-              {result.answer.answer}
-            </p>
+            <MeetingAnswerText
+              text={result.answer.answer}
+              sourceCount={result.answer.sources.length}
+            />
+            {result.answer.coverage && (
+              <p className="mt-4 text-xs leading-relaxed text-text-faint">
+                Read {result.answer.coverage.passages_used} of{" "}
+                {result.answer.coverage.total_passages} indexed passages across{" "}
+                {result.answer.coverage.meetings_used} of{" "}
+                {result.answer.coverage.total_meetings} meetings in this scope.
+                {result.answer.coverage.passages_used <
+                result.answer.coverage.total_passages
+                  ? " This answer covers selected passages, not the entire conversation history."
+                  : ""}
+              </p>
+            )}
             {result.answer.sources.length > 0 && (
               <div className="mt-5 space-y-3 border-t border-border pt-4">
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                   Supporting transcript passages
                 </h2>
-                {result.answer.sources.map((source) => (
-                  <div key={source.id} className="rounded-lg bg-bg-subtle p-3">
+                {result.answer.sources.map((source, index) => (
+                  <div
+                    key={source.id}
+                    id={`meeting-source-${index + 1}`}
+                    className="scroll-mt-6 rounded-lg bg-bg-subtle p-3"
+                  >
                     <button
                       className="flex items-center gap-1 text-left text-sm font-medium text-brand"
                       onClick={() =>
@@ -273,7 +289,7 @@ export function AskMeetings() {
                         })
                       }
                     >
-                      {source.title}
+                      {index + 1}. {source.title}
                       <ArrowUpRight className="size-3.5" />
                     </button>
                     <p className="mt-1 text-xs text-text-faint">

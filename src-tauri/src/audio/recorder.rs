@@ -100,10 +100,18 @@ pub fn start(app: AppHandle, model_path: Option<PathBuf>) -> AppResult<Recording
             std::thread::sleep(Duration::from_millis(120));
             let mic_level = tail_rms(&t_mic, &mut last_mic);
             let sys_level = tail_rms(&t_sys, &mut last_sys);
-            let _ = app.emit("audio-level", LevelEvent { mic: mic_level, system: sys_level });
+            let _ = app.emit(
+                "audio-level",
+                LevelEvent {
+                    mic: mic_level,
+                    system: sys_level,
+                },
+            );
             let _ = app.emit(
                 "recording-tick",
-                TickEvent { elapsed_ms: start.elapsed().as_millis() as i64 },
+                TickEvent {
+                    elapsed_ms: start.elapsed().as_millis() as i64,
+                },
             );
         }
         // Dropping the streams stops capture.
@@ -168,16 +176,15 @@ fn spawn_live_transcription(
     const SILENCE_RMS: f32 = 0.005;
 
     std::thread::spawn(move || {
-        let ctx = match WhisperContext::new_with_params(
-            &model_path,
-            WhisperContextParameters::default(),
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("live transcription disabled (model load failed): {e}");
-                return;
-            }
-        };
+        let ctx =
+            match WhisperContext::new_with_params(&model_path, WhisperContextParameters::default())
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("live transcription disabled (model load failed): {e}");
+                    return;
+                }
+            };
         let mut state = match ctx.create_state() {
             Ok(s) => s,
             Err(e) => {
@@ -242,7 +249,8 @@ fn tail_rms(buf: &Arc<Mutex<Vec<f32>>>, last: &mut usize) -> f32 {
         let b = buf.lock().unwrap();
         let from = (*last).min(b.len());
         *last = b.len();
-        b[from..].to_vec()
+        // Bound each meter window even if the capture thread was delayed.
+        b[from.max(b.len().saturating_sub(4800))..].to_vec()
     };
     if tail.is_empty() {
         0.0
@@ -252,11 +260,7 @@ fn tail_rms(buf: &Arc<Mutex<Vec<f32>>>, last: &mut usize) -> f32 {
 }
 
 pub fn app_recordings_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    use tauri::Manager;
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::Other(format!("app_data_dir: {e}")))?;
+    let dir = crate::workspace::directory(app);
     Ok(dir.join("recordings"))
 }
 
@@ -277,4 +281,20 @@ fn write_wav(path: &PathBuf, samples: &[f32]) -> AppResult<()> {
     w.finalize()
         .map_err(|e| AppError::Other(format!("wav finalize: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::*;
+    #[test]
+    fn meter_tracks_new_audio_and_returns_to_silence() {
+        let samples = Arc::new(Mutex::new(vec![0.01; 100]));
+        let mut last = 0;
+        assert!((tail_rms(&samples, &mut last) - 0.01).abs() < 0.0001);
+        assert_eq!(tail_rms(&samples, &mut last), 0.0);
+        samples.lock().unwrap().extend(vec![0.1; 100]);
+        assert!((tail_rms(&samples, &mut last) - 0.1).abs() < 0.0001);
+        samples.lock().unwrap().extend(vec![0.0; 100]);
+        assert_eq!(tail_rms(&samples, &mut last), 0.0);
+    }
 }

@@ -17,35 +17,12 @@ import { Button } from "@/components/ui/button";
 import { useSharedMeetingFlow } from "./MeetingFlowProvider";
 import { localAi, aiStatusKey, meetingJobsKey } from "@/lib/localAi";
 
+import { AudioLevelMeter } from "./AudioLevelMeter";
 import { clientOptions } from "./meetingLibrary";
 
 function mmss(ms: number) {
   const s = Math.floor(ms / 1000);
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
-function LevelMeter({ label, value }: { label: string; value: number }) {
-  const bars = 5;
-  return (
-    <span
-      className="ml-auto flex h-6 items-end gap-[3px]"
-      aria-label={`${label} level`}
-    >
-      {Array.from({ length: bars }).map((_, i) => {
-        const active = value * bars > i;
-        return (
-          <i
-            key={i}
-            className="w-1 rounded-sm bg-brand transition-[height]"
-            style={{
-              height: active ? `${8 + i * 4}px` : "4px",
-              opacity: active ? 1 : 0.3,
-            }}
-          />
-        );
-      })}
-    </span>
-  );
 }
 
 export function MeetingRecorder() {
@@ -64,16 +41,15 @@ export function MeetingRecorder() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-xl px-8 py-12">
-        <h1 className="mb-6 flex items-center gap-2.5 text-xl font-semibold">
-          <span className="grid size-8 place-items-center rounded-lg bg-brand-soft text-brand">
-            <Mic className="size-[18px]" />
-          </span>
-          Meeting recorder
-        </h1>
+      <div className="mx-auto max-w-2xl px-6 py-10 sm:px-10">
+        <p className="page-eyebrow">Capture a conversation</p>
+        <h1 className="page-title">Meeting recorder</h1>
+        <p className="page-description mb-7">
+          Be present. Tidy will keep the details.
+        </p>
 
         {(state.phase === "idle" || state.phase === "starting") && (
-          <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 shadow-sm">
+          <div className="workspace-panel p-6 sm:p-7">
             <SourceRow
               icon={<Mic className="size-4" />}
               name="Microphone"
@@ -82,7 +58,7 @@ export function MeetingRecorder() {
             <SourceRow
               icon={<Volume2 className="size-4" />}
               name="System audio"
-              sub="Other participants (ScreenCaptureKit)"
+              sub="Meeting participants and shared audio"
             />
             <div className="mt-4 rounded-lg bg-bg-subtle px-3 py-2 text-note text-text-muted">
               Transcription:{" "}
@@ -154,7 +130,7 @@ export function MeetingRecorder() {
         )}
 
         {state.phase === "recording" && (
-          <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 shadow-sm">
+          <div className="workspace-panel p-6 sm:p-7">
             <div className="mb-5 flex items-center gap-3">
               <span
                 className="size-3.5 animate-pulse rounded-full bg-rec"
@@ -175,13 +151,25 @@ export function MeetingRecorder() {
               icon={<Mic className="size-4" />}
               name="Microphone"
               sub={state.sources.mic ? "Capturing" : "Unavailable"}
-              meter={<LevelMeter label="Mic" value={state.levels.mic} />}
+              meter={
+                <AudioLevelMeter
+                  label="Microphone"
+                  value={state.levels.mic}
+                  available={state.sources.mic}
+                />
+              }
             />
             <SourceRow
               icon={<Volume2 className="size-4" />}
               name="System audio"
               sub={state.sources.system ? "Capturing" : "Unavailable"}
-              meter={<LevelMeter label="System" value={state.levels.system} />}
+              meter={
+                <AudioLevelMeter
+                  label="System audio"
+                  value={state.levels.system}
+                  available={state.sources.system}
+                />
+              }
             />
             <Button
               variant="destructive"
@@ -236,7 +224,7 @@ export function MeetingRecorder() {
         )}
 
         {state.phase === "error" && (
-          <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 shadow-sm">
+          <div className="workspace-panel p-6 sm:p-7">
             <div className="flex items-center gap-2 font-semibold text-danger-c">
               <AlertCircle className="size-5" /> Something went wrong
             </div>
@@ -331,7 +319,7 @@ function ProcessingCard({
     return i < idx ? "done" : i === idx ? "active" : "pending";
   };
   return (
-    <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 shadow-sm">
+    <div className="workspace-panel p-6 sm:p-7">
       <div className="mb-2 text-2xs font-semibold uppercase tracking-wide text-text-faint">
         Processing
       </div>

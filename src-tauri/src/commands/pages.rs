@@ -1,12 +1,12 @@
-//! Tauri command wrappers over `appflower_core::store::pages`. All domain logic
+//! Tauri command wrappers over `tidy_core::store::pages`. All domain logic
 //! lives in the shared core crate; these just marshal state and emit events.
 
 use tauri::{AppHandle, Emitter, State};
 
 use crate::db::Db;
 use crate::error::AppResult;
-use appflower_core::store::knowledge;
-use appflower_core::store::pages::{core, Page};
+use tidy_core::store::knowledge;
+use tidy_core::store::pages::{core, Page};
 
 fn emit_changed(app: &AppHandle) {
     let _ = app.emit("pages-changed", ());

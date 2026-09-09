@@ -50,7 +50,15 @@ export function buildMeetingBlocks(
 
   if (summary && ollamaUsed) {
     blocks.push({ type: "heading", props: { level: 2 }, content: "Summary" });
-    blocks.push({ type: "paragraph", content: summary.summary || "–" });
+    if (!summary.sections?.length && summary.summary) blocks.push({ type: "paragraph", content: summary.summary });
+    for (const section of summary.sections ?? []) {
+      blocks.push({ type: "heading", props: { level: 3 }, content: section.heading });
+      for (const point of section.points) blocks.push({ type: "bulletListItem", content: point });
+    }
+    if (summary.open_questions?.length) {
+      blocks.push({ type: "heading", props: { level: 2 }, content: "Open questions" });
+      for (const point of summary.open_questions) blocks.push({ type: "bulletListItem", content: point });
+    }
 
     if (summary.action_items.length) {
       blocks.push({ type: "heading", props: { level: 2 }, content: "Action items" });

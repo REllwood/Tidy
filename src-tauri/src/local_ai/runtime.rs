@@ -1,10 +1,10 @@
 //! A private, short-lived inference process. Dropping it kills the process and frees RAM.
 use super::{models, AiState, Config, Progress};
 use crate::error::{AppError, AppResult};
-use appflower_core::store::meeting_ai::validate_vector;
 use serde_json::{json, Value};
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tauri::AppHandle;
+use tidy_core::store::meeting_ai::validate_vector;
 use tokio::process::{Child, Command};
 
 pub fn client() -> AppResult<reqwest::Client> {
@@ -25,7 +25,7 @@ pub fn executable() -> AppResult<PathBuf> {
     if packaged.exists() {
         return Ok(packaged);
     }
-    if cfg!(debug_assertions) {
+    if cfg!(any(debug_assertions, test)) {
         let dev =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/tidy-ai-aarch64-apple-darwin");
         if dev.exists() {
@@ -100,7 +100,7 @@ impl Engine {
         Self::start_builtin(models::path(app, id)?, id, state).await
     }
 
-    async fn start_builtin(path: PathBuf, id: &str, state: &AiState) -> AppResult<Self> {
+    pub(super) async fn start_builtin(path: PathBuf, id: &str, state: &AiState) -> AppResult<Self> {
         let client = client()?;
         let def = models::model(id)?;
         let embedding = def.purpose == "embedding";
@@ -126,9 +126,9 @@ impl Engine {
                 "--threads",
                 "4",
                 "--batch-size",
-                "512",
+                if embedding { "2048" } else { "512" },
                 "--ubatch-size",
-                "128",
+                if embedding { "2048" } else { "128" },
                 "--n-gpu-layers",
                 "99",
                 "--no-webui",
@@ -223,7 +223,7 @@ impl Engine {
     ) -> AppResult<String> {
         let messages = json!([{"role":"system","content":system},{"role":"user","content":text}]);
         if self.ollama {
-            let mut body = json!({"model":self.model,"messages":messages,"stream":false,"think":false,"keep_alive":0,"options":{"num_ctx":8192,"num_predict":1400,"temperature":0.1}});
+            let mut body = json!({"model":self.model,"messages":messages,"stream":false,"think":false,"keep_alive":0,"options":{"num_ctx":8192,"num_predict":2000,"temperature":0}});
             if let Some(schema) = schema {
                 body["format"] = schema;
             }
@@ -241,10 +241,10 @@ impl Engine {
                 state,
             )
             .await?;
-        if tokens["tokens"].as_array().map_or(true, |t| t.len() > 6200) {
+        if tokens["tokens"].as_array().map_or(true, |t| t.len() > 5800) {
             return Err(AppError::Invalid("This request is too long for the local model. Use a shorter selection or narrower question.".into()));
         }
-        let mut body = json!({"model":self.model,"messages":messages,"stream":false,"max_tokens":1400,"temperature":0.1,"chat_template_kwargs":{"enable_thinking":false}});
+        let mut body = json!({"model":self.model,"messages":messages,"stream":false,"max_tokens":2000,"temperature":0,"chat_template_kwargs":{"enable_thinking":false}});
         if let Some(schema) = schema {
             body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"result","strict":true,"schema":schema}});
         }

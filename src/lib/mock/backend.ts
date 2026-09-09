@@ -1,3 +1,4 @@
+import { readStoredValue } from "@/lib/storage";
 /**
  * In-memory mock of the Rust command surface, used only in plain-web previews
  * (outside Tauri). Mirrors the real command names, args, and return shapes so
@@ -31,12 +32,12 @@ const MODEL_DEFS: { id: string; name: string; size: number }[] = [
   { id: "small", name: "Whisper Small", size: 487_600_000 },
   { id: "medium", name: "Whisper Medium", size: 1_530_000_000 },
 ];
-const MODEL_KEY = "appflower-mock-models";
+const MODEL_KEY = "tidy-mock-models";
 type ModelState = Record<string, { downloaded: boolean; selected: boolean }>;
 
 function mockModelState(): ModelState {
   try {
-    const raw = localStorage.getItem(MODEL_KEY);
+    const raw = readStoredValue(localStorage, MODEL_KEY);
     if (raw) return JSON.parse(raw) as ModelState;
   } catch {
     /* default */
@@ -82,7 +83,7 @@ interface MockDb {
   settings: Record<string, string>;
 }
 
-const KEY = "appflower-mock-db";
+const KEY = "tidy-mock-db";
 const uid = () =>
   (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2));
 const now = () => Date.now();
@@ -326,7 +327,7 @@ function seed(): MockDb {
 
 function load(): MockDb {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = readStoredValue(localStorage, KEY);
     if (raw) return JSON.parse(raw) as MockDb;
   } catch {
     /* reseed */
@@ -676,11 +677,11 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         d.settings.mcp_token = token;
         commit();
       }
-      const sidecar = "/Applications/AppFlower.app/Contents/MacOS/appflower-mcp";
+      const sidecar = "/Applications/Tidy.app/Contents/MacOS/tidy-mcp";
       return {
         token,
         sidecar_path: sidecar,
-        claude_command: `claude mcp add --scope user --transport stdio --env APPFLOWER_MCP_TOKEN=${token} appflower -- "${sidecar}"`,
+        claude_command: `claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN=${token} tidy -- "${sidecar}"`,
       } as T;
     }
     case "mcp_disable": {
@@ -956,7 +957,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         { start_ms: 9000, end_ms: 20000, speaker: 1 },
       ] as T;
     case "local_ai_status":
-      return { memory_bytes: 16 * 1024 ** 3, recommended_model_id: 'qwen3-4b', config: { provider: previewAiEnabled ? 'builtin' : 'disabled', model_id: previewSelected, ollama_model: '' }, models: previewModels.map(m => ({ ...m, downloaded: previewDownloads.has(m.id) })), progress: null, runtime_available: true, ready: previewAiEnabled, search_ready: previewAiEnabled && previewDownloads.has('nomic-embed'), disk_bytes: previewModels.filter(m => previewDownloads.has(m.id)).reduce((n,m) => n+m.size,0) } as T;
+      return { memory_bytes: 16 * 1024 ** 3, recommended_model_id: 'qwen3-4b', config: { provider: previewAiEnabled ? 'builtin' : 'disabled', model_id: previewSelected, ollama_model: '' }, models: previewModels.map(m => ({ ...m, downloaded: previewDownloads.has(m.id) })), progress: null, recording_paused: mockRecording, runtime_available: true, ready: previewAiEnabled, search_ready: previewAiEnabled && previewDownloads.has('nomic-embed'), disk_bytes: previewModels.filter(m => previewDownloads.has(m.id)).reduce((n,m) => n+m.size,0) } as T;
     case "local_ai_setup":
       await new Promise(r => setTimeout(r, 1600));
       previewDownloads.add('qwen3-4b'); previewDownloads.add('nomic-embed'); previewAiEnabled = true;
@@ -971,7 +972,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
     case "local_ai_cancel":
     case "ai_end_recording": return undefined as T;
     case "meeting_ai_jobs":
-      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
+      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', sections: [{ heading: 'Recorder beta', points: ['The team agreed to ship the recorder beta by Friday.'] }, { heading: 'Scope and ownership', points: ['The team will confirm the first release scope and owners this week.'] }], open_questions: [], action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
     case "meeting_ai_retry": return undefined as T;
     case "ask_meetings": {
       await new Promise(r => setTimeout(r, 1200));

@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Clone, Serialize)]
@@ -32,11 +32,7 @@ pub fn model(id: &str) -> AppResult<&'static Model> {
         .ok_or_else(|| AppError::Invalid("Unknown local AI model".into()))
 }
 pub fn dir(app: &AppHandle) -> AppResult<PathBuf> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::Other(e.to_string()))?
-        .join("models/local-ai"))
+    Ok(crate::workspace::directory(app).join("models/local-ai"))
 }
 pub fn path(app: &AppHandle, id: &str) -> AppResult<PathBuf> {
     model(id)?;

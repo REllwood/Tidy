@@ -241,6 +241,8 @@ export interface MeetingSummary {
   summary: string;
   action_items: string[];
   decisions: string[];
+  sections?: { heading: string; points: string[] }[];
+  open_questions?: string[];
 }
 
 export const recordingApi = {
@@ -289,8 +291,8 @@ export const ollamaApi = {
   status: () => invoke<OllamaStatus>("ollama_status"),
   summarize: (transcript: string) =>
     invoke<MeetingSummary>("summarize_transcript", { transcript }),
-  generate: (instruction: string, context?: string) =>
-    invoke<string>("ai_generate", { instruction, context }),
+  generate: (instruction: string, context?: string, requestId?: string) =>
+    invoke<string>("ai_generate", { instruction, context, requestId }),
 };
 
 // ---- Ingest (flagship: blob -> filed note + tasks) ------------------------

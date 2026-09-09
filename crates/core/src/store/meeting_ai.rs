@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-pub const EMBEDDING_MODEL: &str = "nomic-v1.5-q8-3e243421";
+pub const EMBEDDING_MODEL: &str = "nomic-v1.5-q8-3e243421-context-v2";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Passage {
@@ -38,15 +38,15 @@ pub struct MeetingJob {
 pub fn list(conn: &Connection) -> AppResult<Vec<MeetingJob>> {
     let mut stmt = conn.prepare(
         "SELECT a.page_id,p.title,a.state,a.error,a.summary,
-        EXISTS(SELECT 1 FROM meeting_chunk c WHERE c.page_id=a.page_id AND c.embedding IS NOT NULL),
-        client.id,client.title,(SELECT count(*) FROM meeting_chunk c WHERE c.page_id=a.page_id),
+        EXISTS(SELECT 1 FROM meeting_chunk c WHERE c.page_id=a.page_id AND c.embedding IS NOT NULL AND c.embedding_model=?1),
+        client.id,client.title,(SELECT count(*) FROM meeting_chunk c WHERE c.page_id=a.page_id AND c.embedding_model=?1),
         (SELECT min(started_at) FROM meeting WHERE page_id=a.page_id)
         FROM meeting_ai a JOIN page p ON p.id=a.page_id
         LEFT JOIN page client ON client.id=(SELECT target_page_id FROM link WHERE source_page_id=p.id AND kind='task_of' ORDER BY target_page_id LIMIT 1) AND client.deleted_at IS NULL
         WHERE p.deleted_at IS NULL
         ORDER BY p.created_at DESC",
     )?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map([EMBEDDING_MODEL], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
@@ -111,7 +111,8 @@ pub fn passages(
 ) -> AppResult<Vec<Passage>> {
     let blocks: Vec<Value> = serde_json::from_str(content)?;
     let mut in_transcript = false;
-    let mut out = Vec::new();
+    let mut turns = Vec::new();
+    let mut speaker = String::new();
     for block in blocks {
         let text = inline_text(&block["content"]);
         if block["type"] == "heading" {
@@ -121,24 +122,102 @@ pub fn passages(
         if !in_transcript || text.trim().is_empty() || text.contains("(No speech detected.)") {
             continue;
         }
+        if text.starts_with("Speaker ") && text.len() < 40 && !text.contains('[') {
+            speaker = text;
+            continue;
+        }
         let timestamp = text
             .strip_prefix('[')
             .and_then(|s| s.split_once(']'))
             .map(|(t, _)| t.to_string());
-        let chars: Vec<char> = text.chars().collect();
-        for part in chars.chunks(1200) {
-            out.push(Passage {
+        let text = if speaker.is_empty() {
+            text
+        } else {
+            format!("{speaker}: {text}")
+        };
+        for part in text_windows(&text, 1200) {
+            turns.push(Passage {
                 id: new_id(),
                 page_id: page_id.into(),
                 title: title.into(),
                 block_id: block["id"].as_str().map(str::to_owned),
                 timestamp: timestamp.clone(),
-                text: part.iter().collect(),
+                text: part,
                 started_at,
             });
         }
     }
+    // Keep short utterances with the surrounding conversation. Retain the final
+    // turn as overlap so a question, correction or pronoun keeps its context.
+    let mut out = Vec::new();
+    let mut window: Vec<Passage> = Vec::new();
+    let mut size = 0;
+    for turn in turns {
+        let n = turn.text.len();
+        if size + n > 1600 && !window.is_empty() {
+            out.push(combine_passages(&window));
+            let overlap = window.last().filter(|p| p.text.len() <= 400).cloned();
+            window.clear();
+            if let Some(last) = overlap {
+                window.push(last);
+            }
+            size = window.iter().map(|p| p.text.len() + 1).sum();
+        }
+        size += n + 1;
+        window.push(turn);
+    }
+    if !window.is_empty() {
+        out.push(combine_passages(&window));
+    }
     Ok(out)
+}
+fn combine_passages(turns: &[Passage]) -> Passage {
+    let mut passage = turns[0].clone();
+    passage.id = new_id();
+    passage.text = turns
+        .iter()
+        .map(|p| p.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    passage
+}
+
+/// Split on sentence/word boundaries, never in the middle of a UTF-8 character.
+pub fn text_windows(text: &str, limit: usize) -> Vec<String> {
+    // A byte limit also bounds token count for multilingual transcript windows.
+    let limit = limit.max(4);
+    let mut result = Vec::new();
+    let mut rest = text.trim();
+    while rest.len() > limit {
+        let end = rest
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|i| *i <= limit)
+            .last()
+            .unwrap_or(rest.len());
+        let start = rest
+            .char_indices()
+            .map(|(i, _)| i)
+            .find(|i| *i >= limit / 2)
+            .unwrap_or(0);
+        let split = rest[start..end]
+            .rfind(['\n', '.', '!', '?'])
+            .map(|i| start + i + 1)
+            .or_else(|| rest[..end].rfind(char::is_whitespace))
+            .filter(|i| *i > 0)
+            .unwrap_or(end);
+        result.push(rest[..split].trim().to_string());
+        rest = rest[split..].trim();
+    }
+    if !rest.is_empty() {
+        result.push(rest.to_string());
+    }
+    result
+}
+
+/// Mark old indexes for rebuilding without modifying their source transcripts.
+pub fn queue_outdated(conn: &Connection) -> AppResult<usize> {
+    Ok(conn.execute("UPDATE meeting_ai SET state='queued',error=NULL WHERE state='ready' AND EXISTS(SELECT 1 FROM meeting_chunk c WHERE c.page_id=meeting_ai.page_id AND c.embedding_model<>?1)", [EMBEDDING_MODEL])?)
 }
 
 pub fn snapshot(conn: &Connection, id: &str) -> AppResult<(String, Vec<Passage>)> {
@@ -197,6 +276,104 @@ pub fn validate_vector(v: &[f32]) -> AppResult<()> {
     Ok(())
 }
 
+pub fn is_overview_question(question: &str) -> bool {
+    let q = question.to_lowercase();
+    [
+        "what was spoken about",
+        "what was discussed",
+        "what did we discuss",
+        "what did they discuss",
+        "what did we talk about",
+        "what was the meeting about",
+        "what was this meeting about",
+        "meeting summary",
+        "summarise the meeting",
+        "summarize the meeting",
+        "main topics",
+        "meeting overview",
+        "what were the meetings about",
+    ]
+    .iter()
+    .any(|p| q.contains(p))
+}
+
+/// Overview queries need coverage, not a semantic search for generic question words.
+fn overview_passages(passages: Vec<Passage>) -> Vec<Passage> {
+    let mut groups: std::collections::BTreeMap<(i64, String), Vec<Passage>> =
+        std::collections::BTreeMap::new();
+    for p in passages {
+        groups
+            .entry((p.started_at, p.page_id.clone()))
+            .or_default()
+            .push(p);
+    }
+    let groups: Vec<_> = groups.into_values().collect();
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    let mut size = 0;
+    // Opening establishes purpose; middle/end capture detail and final decisions.
+    for fraction in [0.0, 1.0, 0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875] {
+        for group in &groups {
+            let index = ((group.len() - 1) as f64 * fraction).round() as usize;
+            let p = &group[index];
+            if seen.contains(&p.id) {
+                continue;
+            }
+            if size + p.text.chars().count() > 12000 {
+                continue;
+            }
+            size += p.text.chars().count();
+            seen.insert(p.id.clone());
+            selected.push(p.clone());
+        }
+    }
+    // Include all remaining passages when the scope fits the context budget.
+    for group in &groups {
+        for p in group {
+            if !seen.contains(&p.id) && size + p.text.chars().count() <= 12000 {
+                size += p.text.chars().count();
+                seen.insert(p.id.clone());
+                selected.push(p.clone());
+            }
+        }
+    }
+    let order: HashMap<_, _> = groups
+        .iter()
+        .flatten()
+        .enumerate()
+        .map(|(i, p)| (p.id.clone(), i))
+        .collect();
+    selected.sort_by_key(|p| order[&p.id]);
+    selected
+}
+
+#[derive(Serialize)]
+pub struct Coverage {
+    pub passages_used: usize,
+    pub total_passages: usize,
+    pub meetings_used: usize,
+    pub total_meetings: usize,
+}
+pub fn coverage(
+    conn: &Connection,
+    sources: &[Passage],
+    from: Option<i64>,
+    until: Option<i64>,
+    client_id: Option<&str>,
+) -> AppResult<Coverage> {
+    let (total_passages,total_meetings) = conn.query_row("SELECT count(DISTINCT c.id),count(DISTINCT p.id) FROM meeting_chunk c JOIN page p ON p.id=c.page_id JOIN meeting m ON m.page_id=p.id WHERE p.deleted_at IS NULL AND c.embedding_model=?1 AND (?2 IS NULL OR m.started_at>=?2) AND (?3 IS NULL OR m.started_at<?3) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM link l JOIN page client ON client.id=l.target_page_id WHERE l.source_page_id=p.id AND l.kind='task_of' AND client.id=?4 AND client.deleted_at IS NULL))", params![EMBEDDING_MODEL,from,until,client_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    Ok(Coverage {
+        passages_used: sources.len(),
+        total_passages,
+        meetings_used: sources
+            .iter()
+            .map(|s| &s.page_id)
+            .collect::<HashSet<_>>()
+            .len(),
+        total_meetings,
+    })
+}
+
 /// Reciprocal-rank fusion combines exact wording and semantic matches.
 pub fn retrieve(
     conn: &Connection,
@@ -244,21 +421,38 @@ pub fn retrieve(
             "Narrow the date range to search this many transcript passages".into(),
         ));
     }
+    if is_overview_question(question) {
+        return Ok(overview_passages(
+            candidates.into_iter().map(|(p, _)| p).collect(),
+        ));
+    }
     candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
     let eligible: HashSet<_> = candidates.iter().map(|(p, _)| p.id.clone()).collect();
     let terms = question
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.len() > 2)
+        .filter(|t| {
+            t.len() > 2
+                && ![
+                    "what", "when", "where", "which", "who", "how", "the", "was", "were", "did",
+                    "does", "have", "has", "had", "for", "and", "about", "this", "that", "with",
+                    "our", "their", "they", "can", "you", "tell", "please", "meeting", "meetings",
+                ]
+                .contains(&t.to_lowercase().as_str())
+        })
         .take(32)
         .map(|t| format!("\"{}\"", t))
         .collect::<Vec<_>>()
         .join(" OR ");
     let mut scores: HashMap<String, f32> = HashMap::new();
     let mut semantic_meetings = HashSet::new();
+    let threshold = candidates
+        .first()
+        .map(|(_, s)| (s - 0.15).max(0.38))
+        .unwrap_or(1.0);
     for (rank, (p, score)) in candidates.iter().enumerate() {
         let first_for_meeting =
             semantic_meetings.len() < 30 && semantic_meetings.insert(&p.page_id);
-        if *score >= 0.3 && (rank < 30 || first_for_meeting) {
+        if *score >= threshold && (rank < 30 || first_for_meeting) {
             scores.insert(p.id.clone(), 1.0 / (60.0 + rank as f32));
         }
     }
@@ -289,13 +483,18 @@ pub fn retrieve(
     let mut selected = Vec::new();
     let mut remaining = Vec::new();
     for (passage, _) in found {
-        if selected.len() < 6 && meetings.insert(passage.page_id.clone()) {
+        if selected.len() < 8 && meetings.insert(passage.page_id.clone()) {
             selected.push(passage);
         } else {
             remaining.push(passage);
         }
     }
-    selected.extend(remaining.into_iter().take(6 - selected.len()));
+    selected.extend(remaining.into_iter().take(10 - selected.len()));
+    let mut used = 0;
+    selected.retain(|p| {
+        used += p.text.chars().count();
+        used <= 12000
+    });
     selected.sort_by_key(|p| p.started_at);
     Ok(selected)
 }
@@ -309,6 +508,15 @@ pub fn meeting_date(started_at: i64) -> String {
 /// A conservative guard against invented amounts/dates or incomplete source lists.
 /// This is not a proof of semantic correctness; users still see the source passages.
 pub fn check_numeric_evidence(answer: &str, sources: &[Passage]) -> AppResult<()> {
+    let evidence = sources
+        .iter()
+        .map(|s| format!("{} {}", s.text, meeting_date(s.started_at)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    check_numeric_text(answer, &evidence)
+}
+
+pub fn check_numeric_text(answer: &str, evidence: &str) -> AppResult<()> {
     fn numbers(text: &str) -> HashSet<String> {
         text.replace(',', "")
             .split(|c: char| !c.is_ascii_digit() && c != '.')
@@ -317,12 +525,7 @@ pub fn check_numeric_evidence(answer: &str, sources: &[Passage]) -> AppResult<()
             .map(str::to_owned)
             .collect()
     }
-    let evidence = sources
-        .iter()
-        .map(|s| format!("{} {}", s.text, meeting_date(s.started_at)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !numbers(answer).is_subset(&numbers(&evidence)) {
+    if !numbers(answer).is_subset(&numbers(evidence)) {
         return Err(AppError::Invalid("The answer included a number that its cited transcript passages do not support. Try a more focused question.".into()));
     }
     Ok(())
@@ -335,6 +538,84 @@ mod tests {
         db::Db,
         store::{documents, pages},
     };
+    #[test]
+    fn keeps_questions_answers_and_speakers_together() {
+        let blocks = serde_json::json!([
+            {"type":"heading","content":"Transcript"},
+            {"id":"speaker","type":"paragraph","content":"Speaker 1"},
+            {"id":"question","type":"paragraph","content":"[00:10] Is the handover on Friday?"},
+            {"type":"paragraph","content":"Speaker 2"},
+            {"id":"answer","type":"paragraph","content":"[00:15] No, Monday. Priya owns it."}
+        ]);
+        let chunks = passages("m", "Handover", &blocks.to_string(), 0).unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].text.contains("Speaker 1: [00:10]"));
+        assert!(chunks[0].text.contains("No, Monday. Priya owns it."));
+        assert_eq!(chunks[0].block_id.as_deref(), Some("question"));
+    }
+    #[test]
+    fn overview_includes_the_conversation_not_only_a_high_scoring_aside() {
+        let (db, id) = fixture();
+        let mut c = db.conn.lock().unwrap();
+        let (hash, mut chunks) = snapshot(&c, &id).unwrap();
+        chunks[0].text = "We are planning client handovers and ownership.".into();
+        let mut aside = chunks[0].clone();
+        aside.id = new_id();
+        aside.text = "A fly-by-night remark.".into();
+        let mut ending = chunks[0].clone();
+        ending.id = new_id();
+        ending.text = "Priya will prepare the handover checklist.".into();
+        chunks.extend([aside, ending]);
+        let mut query = vec![0.0; 768];
+        query[0] = 1.0;
+        let mut unrelated = vec![0.0; 768];
+        unrelated[1] = 1.0;
+        replace_index(
+            &mut c,
+            &id,
+            &hash,
+            &chunks,
+            &[unrelated.clone(), query.clone(), unrelated],
+        )
+        .unwrap();
+        let found = retrieve(&c, "What was spoken about?", &query, None, None, None).unwrap();
+        assert_eq!(found.len(), 3);
+        assert!(found[0].text.contains("client handovers"));
+        assert!(found[2].text.contains("checklist"));
+        let coverage = coverage(&c, &found, None, None, None).unwrap();
+        assert_eq!(coverage.total_passages, 3);
+    }
+    #[test]
+    fn old_indexes_are_queued_and_excluded_until_rebuilt() {
+        let (db, id) = fixture();
+        let mut c = db.conn.lock().unwrap();
+        let (hash, chunks) = snapshot(&c, &id).unwrap();
+        let vector = vec![1.0; 768];
+        replace_index(&mut c, &id, &hash, &chunks, &[vector.clone()]).unwrap();
+        c.execute(
+            "UPDATE meeting_chunk SET embedding_model='previous-version'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(queue_outdated(&c).unwrap(), 1);
+        assert!(!list(&c).unwrap()[0].indexed);
+        assert_eq!(list(&c).unwrap()[0].passage_count, 0);
+        assert_eq!(list(&c).unwrap()[0].state, "queued");
+        assert!(retrieve(&c, "budget", &vector, None, None, None)
+            .unwrap()
+            .is_empty());
+        assert!(snapshot(&c, &id).unwrap().1[0].text.contains("$500"));
+    }
+    #[test]
+    fn windows_preserve_words_and_unicode() {
+        let text = "handover café 客户 ".repeat(1000);
+        let windows = text_windows(&text, 1200);
+        assert!(windows.iter().all(|w| w.len() <= 1200));
+        assert_eq!(
+            windows.join(" ").split_whitespace().collect::<Vec<_>>(),
+            text.split_whitespace().collect::<Vec<_>>()
+        );
+    }
     fn fixture() -> (Db, String) {
         let db = Db::open_in_memory().unwrap();
         let id = {
@@ -450,7 +731,7 @@ mod tests {
                 .find(|j| j.page_id == first)
                 .unwrap()
                 .passage_count,
-            40
+            1
         );
         c.execute("UPDATE page SET deleted_at=1 WHERE id=?1", [&client.id])
             .unwrap();

@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -19,10 +19,7 @@ pub struct SpeakerSegment {
 }
 
 pub fn diarization_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::Other(format!("app_data_dir: {e}")))?
+    let dir = crate::workspace::directory(app)
         .join("models")
         .join("diarization");
     Ok(dir)
@@ -33,9 +30,7 @@ fn model_paths(app: &AppHandle) -> AppResult<(PathBuf, PathBuf)> {
     let seg = dir.join("segmentation.onnx");
     let emb = dir.join("embedding.onnx");
     if !seg.exists() || !emb.exists() {
-        return Err(AppError::Invalid(
-            "diarization models not installed".into(),
-        ));
+        return Err(AppError::Invalid("diarization models not installed".into()));
     }
     Ok((seg, emb))
 }
@@ -105,11 +100,9 @@ pub async fn diarize(
         return Err(AppError::Invalid("recording not found".into()));
     }
     let app2 = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        diarize_file(&app2, &canon_audio, num_speakers)
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("diarize task: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || diarize_file(&app2, &canon_audio, num_speakers))
+        .await
+        .map_err(|e| AppError::Other(format!("diarize task: {e}")))?
 }
 
 #[tauri::command]
@@ -127,7 +120,7 @@ pub async fn download_diarization_models(app: AppHandle) -> AppResult<()> {
     let dir = diarization_dir(&app)?;
     tokio::fs::create_dir_all(&dir).await?;
     let client = reqwest::Client::builder()
-        .user_agent("AppFlower/0.1")
+        .user_agent("Tidy/0.1")
         .build()
         .map_err(|e| AppError::Other(e.to_string()))?;
 

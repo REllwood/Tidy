@@ -114,7 +114,7 @@ function EditorInner({
         <BlockNoteView
           editor={editor}
           theme={dark ? "dark" : "light"}
-          className="appflower-editor"
+          className="tidy-editor"
         />
         <BacklinksPanel pageId={pageId} />
       </div>

@@ -58,7 +58,7 @@ export function CalendarView({
   }
 
   return (
-    <div className="appflower-calendar h-full p-4">
+    <div className="tidy-calendar h-full p-4">
       <Calendar
         localizer={localizer}
         events={events}

@@ -109,7 +109,7 @@ export function useMeetingFlow() {
         mockTimer.current = setInterval(() => {
           patch({
             elapsedMs: Date.now() - t0,
-            levels: { mic: 0.3 + Math.random() * 0.4, system: 0.2 + Math.random() * 0.3 },
+            levels: { mic: Math.random() < 0.2 ? 0 : 0.002 + Math.random() * 0.04, system: Math.random() < 0.3 ? 0 : 0.001 + Math.random() * 0.03 },
           });
         }, 150);
       }

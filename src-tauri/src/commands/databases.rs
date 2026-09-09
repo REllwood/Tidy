@@ -1,14 +1,14 @@
-//! Tauri command wrappers over `appflower_core::store::databases`.
+//! Tauri command wrappers over `tidy_core::store::databases`.
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::db::Db;
 use crate::error::AppResult;
-use appflower_core::store::databases::{
+use tidy_core::store::databases::{
     core, DatabaseBundle, DatabaseSummary, DbView, Field, RowWithCells,
 };
-use appflower_core::store::pages::Page;
+use tidy_core::store::pages::Page;
 
 fn changed(app: &AppHandle) {
     let _ = app.emit("database-changed", ());

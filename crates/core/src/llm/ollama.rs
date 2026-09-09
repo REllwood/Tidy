@@ -130,12 +130,14 @@ fn parse_summary(content: &str) -> MeetingSummary {
             summary: r.summary,
             action_items: r.action_items,
             decisions: r.decisions,
+            ..MeetingSummary::default()
         },
         // If the model didn't return clean JSON, keep the raw text as the summary.
         Err(_) => MeetingSummary {
             summary: content.trim().to_string(),
             action_items: vec![],
             decisions: vec![],
+            ..MeetingSummary::default()
         },
     }
 }

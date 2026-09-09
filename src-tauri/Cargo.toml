@@ -1,6 +1,6 @@
 [package]
-name = "appflower"
-version = "0.2.0"
+name = "tidy"
+version = "0.2.1"
 description = "Tidy, a local-first workspace with on-device meeting notes"
 authors = ["Tidy"]
 license = "AGPL-3.0-or-later"
@@ -10,14 +10,14 @@ rust-version = "1.77.2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "appflower_lib"
+name = "tidy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.2" }
 
 [dependencies]
-appflower-core = { workspace = true }
+tidy-core = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }

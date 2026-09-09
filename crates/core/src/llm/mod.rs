@@ -3,13 +3,23 @@
 
 pub mod ollama;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SummarySection {
+    pub heading: String,
+    pub points: Vec<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MeetingSummary {
     pub summary: String,
     pub action_items: Vec<String>,
     pub decisions: Vec<String>,
+    #[serde(default)]
+    pub sections: Vec<SummarySection>,
+    #[serde(default)]
+    pub open_questions: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

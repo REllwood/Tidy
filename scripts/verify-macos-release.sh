@@ -13,7 +13,7 @@ dmg="$2"
 verify_app() {
   local candidate="$1" executable metadata
   codesign --verify --deep --strict --verbose=2 "$candidate"
-  for executable in "$candidate/Contents/MacOS/appflower" "$candidate/Contents/MacOS/appflower-mcp" "$candidate/Contents/MacOS/tidy-ai"; do
+  for executable in "$candidate/Contents/MacOS/tidy" "$candidate/Contents/MacOS/tidy-mcp" "$candidate/Contents/MacOS/tidy-ai"; do
     lipo "$executable" -verify_arch arm64
     codesign --verify --strict --verbose=2 "$executable"
     metadata=$(codesign -d --verbose=4 "$executable" 2>&1)

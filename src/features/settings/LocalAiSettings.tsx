@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/errors";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -75,7 +76,16 @@ export function LocalAiSettings() {
   if (!data)
     return (
       <p role="alert" className="text-sm text-danger-c">
-        Could not load AI settings: {String(status.error)}
+        Could not load AI settings: {errorMessage(status.error)}
+        <Button
+          className="ml-2"
+          size="sm"
+          disabled={status.isFetching}
+          onClick={() => status.refetch()}
+        >
+          {status.isFetching && <Loader2 className="size-3 animate-spin" />}
+          Retry
+        </Button>
       </p>
     );
   const setupBytes = data.models
@@ -85,11 +95,30 @@ export function LocalAiSettings() {
         [data.recommended_model_id, "nomic-embed"].includes(m.id),
     )
     .reduce((sum, m) => sum + m.size, 0);
-  const busy = action.isPending || !!data.progress;
+  const busy =
+    action.isPending ||
+    !!data.progress ||
+    data.recording_paused ||
+    status.isError;
   const configure = (config: AiConfig) =>
     action.mutate(() => localAi.configure(config));
   return (
     <div className="space-y-5">
+      {status.error && (
+        <p role="alert" className="text-sm text-danger-c">
+          Could not refresh local AI: {errorMessage(status.error)}
+        </p>
+      )}
+      {data.recording_paused && (
+        <p
+          role="status"
+          className="rounded-lg border border-border bg-brand-soft p-3 text-sm text-text-muted"
+        >
+          Local AI is paused while recording or transcribing. Your installed
+          models are still available below. Finish the meeting, then retry any
+          interrupted download.
+        </p>
+      )}
       {!isTauri() && (
         <p className="text-xs text-text-faint">
           Browser preview · setup and answers are demonstrations.
@@ -174,7 +203,7 @@ export function LocalAiSettings() {
       )}
       {(action.error || cancel.error) && (
         <p role="alert" className="text-sm text-danger-c">
-          {String(action.error || cancel.error)}
+          {errorMessage(action.error || cancel.error)}
         </p>
       )}
       <div>
@@ -317,6 +346,11 @@ export function LocalAiSettings() {
                   ))}
               </select>
             </label>
+            {ollama.error && (
+              <p role="alert" className="text-sm text-danger-c">
+                {errorMessage(ollama.error)}
+              </p>
+            )}
             {ollama.data && !ollama.data.available && (
               <p className="text-xs text-text-muted">
                 Ollama is not running on this Mac.

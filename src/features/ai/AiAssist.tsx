@@ -1,4 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { localAi, aiStatusKey } from "@/lib/localAi";
+import { errorMessage } from "@/lib/errors";
+import { useUi } from "@/store/ui";
 import { Sparkles, Loader2 } from "lucide-react";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Editor = any;
@@ -27,6 +31,41 @@ export function AiAssist({ editor }: { editor: Editor }) {
   const [busy, setBusy] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [result, setResult] = useState("");
+  const inFlight = useRef(false);
+  const request = useRef<string | null>(null);
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+      if (request.current)
+        localAi
+          .cancelRequest(request.current)
+          .catch((error) =>
+            console.warn("Could not cancel AI request", errorMessage(error)),
+          );
+    },
+    [],
+  );
+  const cancel = useMutation({
+    mutationFn: async () => {
+      generation.current += 1;
+      if (request.current) await localAi.cancelRequest(request.current);
+    },
+    onSuccess: () => close(),
+  });
+  const status = useQuery({
+    queryKey: aiStatusKey,
+    queryFn: localAi.status,
+    enabled: open,
+    refetchInterval: open ? 1500 : false,
+  });
+  const setPane = useUi((s) => s.setActivePane);
+  const unavailable =
+    status.isPending ||
+    status.isError ||
+    !status.data?.ready ||
+    status.data.recording_paused ||
+    (!!status.data.progress && !busy);
   const [error, setError] = useState<string | null>(null);
 
   const selectedText = (): string => {
@@ -45,6 +84,9 @@ export function AiAssist({ editor }: { editor: Editor }) {
   };
 
   const run = async (action: Action) => {
+    if (inFlight.current || unavailable) return;
+    inFlight.current = true;
+    const currentGeneration = ++generation.current;
     setError(null);
     setResult("");
     setBusy(true);
@@ -56,7 +98,8 @@ export function AiAssist({ editor }: { editor: Editor }) {
         instruction = "Summarize the following notes in a short paragraph.";
         context = sel || docText();
       } else if (action === "rewrite") {
-        instruction = "Rewrite the following text to be clearer and more concise.";
+        instruction =
+          "Rewrite the following text to be clearer and more concise.";
         context = sel || docText();
       } else if (action === "continue") {
         instruction = "Continue writing naturally from where this leaves off.";
@@ -64,19 +107,21 @@ export function AiAssist({ editor }: { editor: Editor }) {
       } else if (!instruction) {
         setBusy(false);
         return;
+      } else {
+        context = sel || docText();
       }
-      const text = await ollamaApi.generate(instruction, context);
-      // simple typewriter reveal
-      setResult("");
-      for (let i = 1; i <= text.length; i += Math.max(1, Math.round(text.length / 60))) {
-        setResult(text.slice(0, i));
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 12));
-      }
-      setResult(text);
+      request.current = crypto.randomUUID();
+      const text = await ollamaApi.generate(
+        instruction,
+        context,
+        request.current,
+      );
+      if (generation.current === currentGeneration) setResult(text);
     } catch (e) {
-      setError(String(e));
+      if (generation.current === currentGeneration) setError(errorMessage(e));
     } finally {
+      request.current = null;
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -94,6 +139,8 @@ export function AiAssist({ editor }: { editor: Editor }) {
   };
 
   const close = () => {
+    generation.current += 1;
+    cancel.reset();
     setOpen(false);
     setResult("");
     setPrompt("");
@@ -103,13 +150,21 @@ export function AiAssist({ editor }: { editor: Editor }) {
   return (
     <>
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
         className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-note text-brand transition-colors hover:bg-surface-hover"
       >
         <Sparkles className="size-3.5" /> Ask AI
       </button>
 
-      <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          if (!busy) o ? setOpen(true) : close();
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -117,12 +172,56 @@ export function AiAssist({ editor }: { editor: Editor }) {
             </DialogTitle>
           </DialogHeader>
 
+          {status.isPending ? (
+            <p
+              role="status"
+              className="flex items-center gap-2 text-sm text-text-muted"
+            >
+              <Loader2 className="size-4 animate-spin" />
+              Checking local AI…
+            </p>
+          ) : status.error ? (
+            <p role="alert" className="text-sm text-danger-c">
+              {errorMessage(status.error)}
+            </p>
+          ) : status.data?.recording_paused ? (
+            <p className="rounded-lg bg-brand-soft p-3 text-sm">
+              AI assistance will be available after the recording has finished
+              processing.
+            </p>
+          ) : !status.data?.ready ? (
+            <div className="rounded-lg bg-bg-subtle p-3 text-sm">
+              <p>
+                Enable local AI and finish downloading an answer model to use
+                the assistant.
+              </p>
+              <Button
+                className="mt-3"
+                size="sm"
+                onClick={() => {
+                  close();
+                  setPane({ kind: "settings" });
+                }}
+              >
+                Open AI settings
+              </Button>
+            </div>
+          ) : status.data.progress && !busy ? (
+            <p
+              role="status"
+              className="flex items-center gap-2 text-sm text-text-muted"
+            >
+              <Loader2 className="size-4 animate-spin" />
+              {status.data.progress.label}. The assistant will be ready when
+              this finishes.
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-1.5">
             {ACTIONS.map((a) => (
               <button
                 key={a.id}
                 onClick={() => run(a.id)}
-                disabled={busy}
+                disabled={busy || unavailable}
                 className="rounded-md border border-border bg-surface px-2.5 py-1 text-note text-text-muted hover:bg-surface-hover hover:text-text disabled:opacity-50"
               >
                 {a.label}
@@ -131,6 +230,8 @@ export function AiAssist({ editor }: { editor: Editor }) {
           </div>
 
           <input
+            disabled={busy || unavailable}
+            aria-label="AI instruction"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && run("ask")}
@@ -143,7 +244,16 @@ export function AiAssist({ editor }: { editor: Editor }) {
               <Loader2 className="size-4 animate-spin" /> Generating locally…
             </div>
           )}
-          {error && <div className="text-sm text-danger-c">{error}</div>}
+          {cancel.error && (
+            <p role="alert" className="text-sm text-danger-c">
+              {errorMessage(cancel.error)}
+            </p>
+          )}
+          {error && (
+            <div role="alert" className="text-sm text-danger-c">
+              {error}
+            </div>
+          )}
           {result && (
             <div className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-bg-subtle p-3 text-sm">
               {result}
@@ -151,8 +261,13 @@ export function AiAssist({ editor }: { editor: Editor }) {
           )}
 
           <DialogFooter>
-            <Button variant="secondary" onClick={close}>
-              Cancel
+            <Button
+              variant="secondary"
+              disabled={cancel.isPending}
+              onClick={() => (busy ? cancel.mutate() : close())}
+            >
+              {cancel.isPending && <Loader2 className="size-3 animate-spin" />}
+              {busy ? "Cancel generation" : "Close"}
             </Button>
             <Button onClick={insert} disabled={!result || busy}>
               Insert

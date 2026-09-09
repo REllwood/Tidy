@@ -1,7 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { localAi, meetingJobsKey } from "@/lib/localAi";
+import { localAi, meetingJobsKey, aiStatusKey } from "@/lib/localAi";
 import { useUi } from "@/store/ui";
+
+import { MeetingNotes } from "./MeetingNotes";
+import { Button } from "@/components/ui/button";
+import { errorMessage } from "@/lib/errors";
 
 export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
   const { data } = useQuery({
@@ -9,17 +13,27 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
     queryFn: localAi.jobs,
     refetchInterval: 2000,
   });
+  const qc = useQueryClient();
+  const status = useQuery({
+    queryKey: aiStatusKey,
+    queryFn: localAi.status,
+    refetchInterval: 2000,
+  });
+  const regenerate = useMutation({
+    mutationFn: () => localAi.retry(pageId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: meetingJobsKey }),
+  });
   const setPane = useUi((s) => s.setActivePane);
   const job = data?.find((j) => j.page_id === pageId);
   if (!job) return null;
   const busy = ["summarising", "indexing"].includes(job.state);
   return (
     <section
-      className="my-5 rounded-lg border border-border bg-bg-subtle p-4"
+      className="my-6 rounded-xl border border-border bg-surface p-6 sm:p-8"
       aria-label="Generated meeting summary"
     >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Meeting summary</h2>
+        <h2 className="text-sm font-semibold">Meeting notes</h2>
         <button
           className="text-xs text-brand hover:underline"
           onClick={() => setPane({ kind: "ask" })}
@@ -39,8 +53,12 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
         </p>
       )}
       {job.state === "queued" && (
-        <p className="mt-2 text-sm text-text-muted">
-          Transcript saved. Waiting for local AI to process this meeting.
+        <p
+          role="status"
+          className="mt-2 flex items-center gap-2 text-sm text-text-muted"
+        >
+          <Loader2 className="size-3 animate-spin" /> Transcript saved. Waiting
+          for local AI to process this meeting.
         </p>
       )}
       {job.error && (
@@ -48,35 +66,38 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
           {job.error} Open the meeting library to retry.
         </p>
       )}
+      {regenerate.error && (
+        <p role="alert" className="mt-3 text-sm text-danger-c">
+          {errorMessage(regenerate.error)}
+        </p>
+      )}
       {job.summary && (
         <div className="mt-3 space-y-3 text-sm leading-relaxed">
-          <p className="whitespace-pre-wrap">{job.summary.summary}</p>
-          {job.summary.action_items.length > 0 && (
-            <div>
-              <h3 className="font-medium">Action items</h3>
-              <ul className="mt-1 list-disc space-y-1 pl-5">
-                {job.summary.action_items.map((item, i) => (
-                  <li key={i}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {job.summary.decisions.length > 0 && (
-            <div>
-              <h3 className="font-medium">Decisions</h3>
-              <ul className="mt-1 list-disc space-y-1 pl-5">
-                {job.summary.decisions.map((item, i) => (
-                  <li key={i}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <MeetingNotes summary={job.summary} />
           <p className="text-xs text-text-faint">
             Generated locally. Check names, dates and commitments against the
             original transcript.
           </p>
         </div>
       )}
+      <div className="mt-5 border-t border-border pt-4">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={
+            regenerate.isPending ||
+            busy ||
+            job.state === "queued" ||
+            !status.data?.ready ||
+            !!status.data.progress ||
+            status.data.recording_paused
+          }
+          onClick={() => regenerate.mutate()}
+        >
+          {regenerate.isPending && <Loader2 className="size-3 animate-spin" />}
+          Regenerate notes
+        </Button>
+      </div>
     </section>
   );
 }

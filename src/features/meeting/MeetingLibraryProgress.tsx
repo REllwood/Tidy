@@ -32,12 +32,13 @@ export function MeetingLibraryProgress({
           <p className="mt-2 text-lg font-semibold">
             {ready}{" "}
             <span className="font-normal text-text-muted">
-              of {jobs.length} meetings ready
+              of {jobs.length} {jobs.length === 1 ? "meeting" : "meetings"}{" "}
+              ready
             </span>
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            {passages.toLocaleString("en-AU")} searchable passages · kept on
-            this Mac
+            {passages.toLocaleString("en-AU")} searchable{" "}
+            {passages === 1 ? "passage" : "passages"} · kept on this Mac
           </p>
         </div>
         <span className="font-mono text-3xl font-medium tabular-nums text-brand">

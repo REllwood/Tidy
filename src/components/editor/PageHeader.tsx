@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Smile } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
 import { usePages, useRenamePage, useSetPageIcon } from "@/hooks/usePages";
 import {
   Popover,
@@ -8,9 +8,36 @@ import {
 } from "@/components/ui/popover";
 
 const EMOJI = [
-  "📝", "📄", "📒", "📓", "📔", "🗂️", "🗒️", "📅", "✅", "💡",
-  "🚀", "🔥", "⭐", "🎯", "🧠", "📌", "🎙️", "🗓️", "📊", "🧩",
-  "🏷️", "🔖", "📚", "🛠️", "🧪", "🌱", "🌿", "🍀", "💬", "🔒",
+  "📝",
+  "📄",
+  "📒",
+  "📓",
+  "📔",
+  "🗂️",
+  "🗒️",
+  "📅",
+  "✅",
+  "💡",
+  "🚀",
+  "🔥",
+  "⭐",
+  "🎯",
+  "🧠",
+  "📌",
+  "🎙️",
+  "🗓️",
+  "📊",
+  "🧩",
+  "🏷️",
+  "🔖",
+  "📚",
+  "🛠️",
+  "🧪",
+  "🌱",
+  "🌿",
+  "🍀",
+  "💬",
+  "🔒",
 ];
 
 function timeAgo(ts: number): string {
@@ -45,7 +72,11 @@ export function PageHeader({
     if (lastId.current !== pageId) {
       lastId.current = pageId;
       setTitle(page?.title ?? "");
-    } else if (page && page.title !== title && document.activeElement?.tagName !== "TEXTAREA") {
+    } else if (
+      page &&
+      page.title !== title &&
+      document.activeElement?.tagName !== "TEXTAREA"
+    ) {
       setTitle(page.title);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,9 +94,11 @@ export function PageHeader({
       <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
         <PopoverTrigger
           aria-label="Change icon"
-          className="mb-2 grid size-[60px] place-items-center rounded-lg text-[56px] leading-none transition-colors hover:bg-surface-hover"
+          className="mb-3 grid size-12 place-items-center rounded-lg text-[36px] leading-none transition-colors hover:bg-surface-hover"
         >
-          {page.icon ?? <Smile className="size-12 text-text-faint" />}
+          {page.icon ?? (
+            <FileText className="size-7 text-text-faint" strokeWidth={1.3} />
+          )}
         </PopoverTrigger>
         <PopoverContent className="w-64 p-2">
           <div className="grid grid-cols-8 gap-1">
@@ -109,10 +142,15 @@ export function PageHeader({
         rows={1}
         placeholder="Untitled"
         aria-label="Page title"
-        className="w-full resize-none bg-transparent text-[40px] font-bold leading-tight tracking-tight outline-none placeholder:text-text-faint"
+        className="w-full resize-none bg-transparent text-[38px] font-medium leading-tight tracking-tight outline-none placeholder:text-text-faint"
       />
-      <div className="mt-1 text-note text-text-faint">
-        {saving ? "Saving…" : `Edited ${timeAgo(page.updated_at)} · Autosaved`}
+      <div className="mt-1 flex items-center gap-1.5 text-xs text-text-faint">
+        {(saving || rename.isPending || setIcon.isPending) && (
+          <Loader2 className="size-3 animate-spin" />
+        )}
+        {saving || rename.isPending || setIcon.isPending
+          ? "Saving…"
+          : `Edited ${timeAgo(page.updated_at)} · Autosaved`}
       </div>
     </div>
   );

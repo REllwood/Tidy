@@ -110,65 +110,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
-name = "appflower"
-version = "0.2.0"
-dependencies = [
- "appflower-core",
- "blake3",
- "bzip2-rs",
- "cpal",
- "futures-util",
- "hound",
- "log",
- "notify",
- "notify-debouncer-full",
- "reqwest 0.12.28",
- "rusqlite",
- "screencapturekit",
- "serde",
- "serde_json",
- "sha2",
- "sherpa-onnx",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-log",
- "tempfile",
- "tokio",
- "whisper-rs",
-]
-
-[[package]]
-name = "appflower-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "chrono",
- "log",
- "reqwest 0.12.28",
- "rusqlite",
- "rusqlite_migration",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "appflower-mcp"
-version = "0.1.0"
-dependencies = [
- "appflower-core",
- "rmcp",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "apple-cf"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4692,6 +4633,66 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "tidy"
+version = "0.2.1"
+dependencies = [
+ "blake3",
+ "bzip2-rs",
+ "cpal",
+ "futures-util",
+ "hound",
+ "log",
+ "notify",
+ "notify-debouncer-full",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "screencapturekit",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sherpa-onnx",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-log",
+ "tempfile",
+ "tidy-core",
+ "tokio",
+ "whisper-rs",
+]
+
+[[package]]
+name = "tidy-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "log",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "rusqlite_migration",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "tidy-mcp"
+version = "0.1.0"
+dependencies = [
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tidy-core",
+ "tokio",
 ]
 
 [[package]]

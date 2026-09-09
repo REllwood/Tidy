@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarCheck,
+  Loader2,
   Plus,
   AlertTriangle,
   Sun,
@@ -27,10 +28,31 @@ export function PlannerView() {
     (!filter || t.databaseId === filter) && (!day || t.due === day);
 
   const sections = [
-    { key: "overdue", label: "Overdue", overdue: true, icon: <AlertTriangle className="size-3.5 text-danger-c" />, items: agenda.overdue.filter(match) },
-    { key: "today", label: "Today", icon: <Sun className="size-3.5 text-brand" />, items: agenda.today.filter(match) },
-    { key: "week", label: "This week", icon: <CalendarDays className="size-3.5 text-text-faint" />, items: agenda.week.filter(match) },
-    { key: "later", label: "Later", icon: <CalendarClock className="size-3.5 text-text-faint" />, items: agenda.later.filter(match) },
+    {
+      key: "overdue",
+      label: "Overdue",
+      overdue: true,
+      icon: <AlertTriangle className="size-3.5 text-danger-c" />,
+      items: agenda.overdue.filter(match),
+    },
+    {
+      key: "today",
+      label: "Today",
+      icon: <Sun className="size-3.5 text-brand" />,
+      items: agenda.today.filter(match),
+    },
+    {
+      key: "week",
+      label: "This week",
+      icon: <CalendarDays className="size-3.5 text-text-faint" />,
+      items: agenda.week.filter(match),
+    },
+    {
+      key: "later",
+      label: "Later",
+      icon: <CalendarClock className="size-3.5 text-text-faint" />,
+      items: agenda.later.filter(match),
+    },
   ];
   const openCount = sections.reduce((n, s) => n + s.items.length, 0);
   const doneItems = done.filter(match);
@@ -38,17 +60,19 @@ export function PlannerView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-5xl gap-8 px-10 py-10 lg:grid-cols-[1fr_248px]">
+      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-10 sm:px-10 lg:grid-cols-[1fr_248px]">
         <div className="min-w-0">
           <header className="mb-6">
-            <div className="mb-1 flex items-center gap-2 text-note font-medium text-text-faint">
+            <div className="page-eyebrow mb-1 flex items-center gap-2">
               <CalendarCheck className="size-3.5" /> Planner
             </div>
-            <h1 className="text-2xl font-bold tracking-tight">Your tasks</h1>
-            <p className="mt-1 text-sm text-text-muted">
+            <h1 className="page-title">A clearer week</h1>
+            <p className="page-description">
               {openCount} open{" "}
               {agenda.overdue.length > 0 && (
-                <span className="text-danger-c">· {agenda.overdue.length} overdue</span>
+                <span className="text-danger-c">
+                  · {agenda.overdue.length} overdue
+                </span>
               )}
             </p>
           </header>
@@ -57,7 +81,11 @@ export function PlannerView() {
 
           {databases.length > 1 && (
             <div className="mb-5 flex flex-wrap gap-1.5">
-              <FilterChip label="All" active={!filter} onClick={() => setFilter(null)} />
+              <FilterChip
+                label="All"
+                active={!filter}
+                onClick={() => setFilter(null)}
+              />
               {databases.map((d) => (
                 <FilterChip
                   key={d.id}
@@ -101,7 +129,9 @@ export function PlannerView() {
               </span>
               <div className="text-sm font-semibold">Nothing to do here</div>
               <p className="mt-1 text-note text-text-muted">
-                {day || filter ? "No tasks match this filter." : "You're all caught up. Add a task above."}
+                {day || filter
+                  ? "No tasks match this filter."
+                  : "You're all caught up. Add a task above."}
               </p>
             </div>
           ) : (
@@ -117,7 +147,12 @@ export function PlannerView() {
                       danger={s.overdue}
                     >
                       {s.items.map((t) => (
-                        <TaskRow key={t.rowId} task={t} today={today} overdue={s.overdue} />
+                        <TaskRow
+                          key={t.rowId}
+                          task={t}
+                          today={today}
+                          overdue={s.overdue}
+                        />
                       ))}
                     </Section>
                   ),
@@ -148,7 +183,12 @@ export function PlannerView() {
         </div>
 
         <aside className="hidden lg:block">
-          <MiniCalendar tasks={tasks} today={today} selected={day} onSelect={setDay} />
+          <MiniCalendar
+            tasks={tasks}
+            today={today}
+            selected={day}
+            onSelect={setDay}
+          />
         </aside>
       </div>
     </div>
@@ -172,7 +212,9 @@ function Section({
     <div>
       <div className="mb-1.5 flex items-center gap-1.5 px-1">
         {icon}
-        <span className={`text-xs font-semibold ${danger ? "text-danger-c" : "text-text-muted"}`}>
+        <span
+          className={`text-xs font-semibold ${danger ? "text-danger-c" : "text-text-muted"}`}
+        >
           {label}
         </span>
         <span className="text-xs text-text-faint">· {count}</span>
@@ -207,7 +249,13 @@ function FilterChip({
   );
 }
 
-function QuickAdd({ databases, today }: { databases: PlannerDb[]; today: string }) {
+function QuickAdd({
+  databases,
+  today,
+}: {
+  databases: PlannerDb[];
+  today: string;
+}) {
   const [title, setTitle] = useState("");
   const [dbId, setDbId] = useState(databases[0]?.id ?? "");
   const qc = useQueryClient();
@@ -216,8 +264,10 @@ function QuickAdd({ databases, today }: { databases: PlannerDb[]; today: string 
       const db = databases.find((d) => d.id === dbId) ?? databases[0];
       if (!db) return;
       const row = await databasesApi.createRow(db.id);
-      if (db.nameFieldId) await databasesApi.setCell(row.id, db.nameFieldId, title.trim());
-      if (db.dueFieldId) await databasesApi.setCell(row.id, db.dueFieldId, today);
+      if (db.nameFieldId)
+        await databasesApi.setCell(row.id, db.nameFieldId, title.trim());
+      if (db.dueFieldId)
+        await databasesApi.setCell(row.id, db.dueFieldId, today);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["database-by-id"] });
@@ -236,6 +286,8 @@ function QuickAdd({ databases, today }: { databases: PlannerDb[]; today: string 
     >
       <Plus className="size-4 shrink-0 text-text-faint" />
       <input
+        disabled={add.isPending}
+        aria-label="New task title"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Add a task for today…"
@@ -243,6 +295,8 @@ function QuickAdd({ databases, today }: { databases: PlannerDb[]; today: string 
       />
       {databases.length > 1 && (
         <select
+          disabled={add.isPending}
+          aria-label="Task database"
           value={dbId}
           onChange={(e) => setDbId(e.target.value)}
           className="shrink-0 rounded-md border border-border bg-bg-subtle px-1.5 py-1 text-xs text-text-muted outline-none"
@@ -257,9 +311,10 @@ function QuickAdd({ databases, today }: { databases: PlannerDb[]; today: string 
       <button
         type="submit"
         disabled={!title.trim() || add.isPending}
-        className="shrink-0 rounded-md bg-brand px-2.5 py-1 text-note font-medium text-white hover:bg-brand/90 disabled:opacity-40"
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-brand px-2.5 py-1 text-note font-medium text-brand-fg hover:bg-brand/90 disabled:opacity-40"
       >
-        Add
+        {add.isPending && <Loader2 className="size-3 animate-spin" />}{" "}
+        {add.isPending ? "Adding…" : "Add"}
       </button>
     </form>
   );
@@ -329,7 +384,9 @@ function MiniCalendar({
           ),
         )}
       </div>
-      <p className="mt-2 px-1 text-2xs text-text-faint">Click a day to filter tasks.</p>
+      <p className="mt-2 px-1 text-2xs text-text-faint">
+        Click a day to filter tasks.
+      </p>
     </div>
   );
 }

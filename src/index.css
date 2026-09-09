@@ -6,26 +6,26 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ----------------------------------------------------------------------------
-   Tidy design tokens (corrected per UI-DESIGN.md, AA-checked).
+   Tidy design tokens: warm paper, evergreen and mineral neutrals.
    The Tidy semantic palette is the source of truth; shadcn's contract
    (background, foreground, primary, sidebar tokens, etc.) is mapped onto it
    so shadcn components render in the evergreen/neutral brand automatically.
 ---------------------------------------------------------------------------- */
 :root {
   /* Tidy semantic palette — LIGHT */
-  --bg: #ffffff;
-  --bg-subtle: #f7f7f5;
-  --sidebar-bg: #fbfbfa;
+  --bg: #f9f8f5;
+  --bg-subtle: #f0f0ea;
+  --sidebar-bg: #eeefe9;
   --surface: #ffffff;
-  --surface-hover: #efefed;
-  --border-c: #ebeae8;
-  --border-strong: #dddcd9;
-  --text: #1f1f1d;
-  --text-muted: #6b6a66;
-  --text-faint: #85847f;
-  --brand: #2f6f4e;
+  --surface-hover: #e6e9e1;
+  --border-c: #e0e3d9;
+  --border-strong: #c8cec1;
+  --text: #24372d;
+  --text-muted: #5b695e;
+  --text-faint: #6c776c;
+  --brand: #285d46;
   --brand-fg: #ffffff;
-  --brand-soft: #e7f1ec;
+  --brand-soft: #ddeade;
   --info: #3b6fb0;
   --success: #2f7d54;
   --warning: #a8730f;
@@ -82,19 +82,19 @@
 }
 
 .dark {
-  --bg: #1a1a19;
-  --bg-subtle: #202020;
-  --sidebar-bg: #161615;
-  --surface: #1f1f1e;
-  --surface-hover: #2a2a28;
-  --border-c: #2e2e2c;
-  --border-strong: #3a3a37;
-  --text: #ededeb;
-  --text-muted: #a3a29d;
-  --text-faint: #6f6e69;
-  --brand: #5fae84;
-  --brand-fg: #11261c;
-  --brand-soft: #1e3329;
+  --bg: #14201a;
+  --bg-subtle: #1c2b22;
+  --sidebar-bg: #101a15;
+  --surface: #19271f;
+  --surface-hover: #25362b;
+  --border-c: #2c3b30;
+  --border-strong: #445548;
+  --text: #eff2e9;
+  --text-muted: #b0bdae;
+  --text-faint: #96a791;
+  --brand: #a4ceb0;
+  --brand-fg: #173622;
+  --brand-soft: #273f2e;
   --info: #6f9fd8;
   --success: #5fae84;
   --warning: #d6a13e;
@@ -102,7 +102,7 @@
   --rec: #e0796d;
   --rec-text: #e0796d;
 
-  --destructive-foreground: #1a1a19;
+  --destructive-foreground: #14201a;
   --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.5);
 }
 
@@ -166,7 +166,11 @@
   --radius-md: var(--radius);
   --radius-lg: var(--radius-lg);
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --font-sans:
+    "Geist Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-editorial:
+    "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia,
+    serif;
   --font-heading: var(--font-sans);
 
   /* Type scale — named steps replace arbitrary text-[NNpx] values.
@@ -234,5 +238,49 @@
   .overflow-hidden {
     overflow: visible !important;
     height: auto !important;
+  }
+}
+
+/* Shared page rhythm keeps the product's main views visually related. */
+@layer components {
+  .page-eyebrow {
+    @apply text-2xs font-semibold uppercase tracking-[0.16em] text-text-faint;
+  }
+  .page-title {
+    @apply mt-2 text-3xl font-medium leading-tight tracking-tight text-text;
+  }
+  .page-description {
+    @apply mt-3 max-w-xl text-sm leading-relaxed text-text-muted;
+  }
+  .workspace-panel {
+    @apply rounded-xl border border-border bg-surface;
+    box-shadow: 0 2px 3px rgb(20 35 25 / 0.02);
+  }
+}
+:root {
+  color-scheme: light;
+}
+.dark {
+  color-scheme: dark;
+}
+::selection {
+  background: var(--brand-soft);
+  color: var(--text);
+}
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+.home-page {
+  container-type: inline-size;
+  container-name: home;
+}
+.home-layout {
+  display: grid;
+  gap: 2.5rem;
+}
+@container home (min-width: 760px) {
+  .home-layout {
+    grid-template-columns: minmax(0, 1fr) 290px;
   }
 }

@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::db::Db;
 use crate::error::AppResult;
-use appflower_core::store::ingest::{self, IngestArgs, IngestResult};
+use tidy_core::store::ingest::{self, IngestArgs, IngestResult};
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]

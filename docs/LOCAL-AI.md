@@ -30,6 +30,12 @@ Interrupted jobs resume after restart; failed/cancelled jobs show their error an
 can be retried in Ask meetings. Existing recorded meetings enter the queue on
 upgrade, but do not process until AI is enabled. Generated summaries are displayed
 separately above the original document and never overwrite the transcript.
+Notes are organised into topic sections, decisions, next steps and open questions.
+They retain verified points rather than repeatedly compressing summary paragraphs.
+The Regenerate notes control rebuilds the notes and search index for a meeting.
+Older index versions are queued for rebuilding on startup; original transcripts
+are retained. The additional evidence checks take extra inference time.
+
 Generated action items are suggestions; this feature does not automatically create
 planner tasks. These generated summaries are not currently included in Markdown
 vault exports, which continue to export the original page content.
@@ -39,8 +45,13 @@ vault exports, which continue to export the original page content.
 Only content below a Transcript heading in a recorded meeting is indexed. Summary
 text is excluded. Transcript passages retain their source page, block and timestamp.
 The local index combines SQLite FTS5 keyword ranking and Nomic cosine similarity
-using reciprocal-rank fusion. Up to six passages are supplied to the answer
-model, reserving places for distinct relevant meetings before filling remaining places.
+using reciprocal-rank fusion. Short turns and speaker labels are grouped into
+conversational windows, with overlap at boundaries. Specific questions retrieve up
+to ten passages within a 12,000-character evidence budget. Generic question words
+are excluded from keyword ranking. Broad overview questions instead select material
+across the beginning, middle and end of the scoped meetings. The answer shows how
+many indexed passages and meetings were read; a sampled overview is not a complete
+review of a large library.
 Client and date filters restrict meetings before ranking; the Through date is inclusive.
 Queries spanning more than 50,000 passages require a narrower date range.
 
@@ -49,8 +60,10 @@ meetings are excluded. Results are checked again after generation so sources edi
 or deleted while answering are not returned as current evidence. Embedding vectors
 are tied to a fixed model version; changing that model requires a re-index.
 
-Answers display supporting transcript excerpts and links. Invalid source numbers
-and numeric claims missing from the cited text are rejected. When the model provides
+Answers are assembled as individual claims with inline source links. Each generated
+claim must include a verbatim quote from its cited passage. Unsupported quotes,
+numeric claims and common completed-versus-planned status changes are filtered out.
+A separate model pass checks entailment, attribution, negation and certainty. When the model provides
 no supporting sources, Tidy shows an insufficient-evidence response. These checks
 reduce certain failure modes; they do not prove semantic correctness. Names,
 commitments, indirect references and transcription errors still need human review.
@@ -129,7 +142,7 @@ python3 scripts/smoke-ai-runtime.py /path/to/tidy-ai /path/to/qwen3-4b.gguf /pat
 The optional native integration test uses the same files under a fixture directory:
 
 ```bash
-TIDY_AI_MODEL_DIR=/path/to/fixtures DYLD_FALLBACK_LIBRARY_PATH=/usr/lib/swift cargo test -p appflower --lib real_runtime_roundtrip_and_cancellation -- --ignored
+TIDY_AI_MODEL_DIR=/path/to/fixtures DYLD_FALLBACK_LIBRARY_PATH=/usr/lib/swift cargo test -p tidy --lib real_runtime_roundtrip_and_cancellation -- --ignored
 ```
 
 Initial synthetic tests on this development Mac (32 GiB RAM) measured sampled

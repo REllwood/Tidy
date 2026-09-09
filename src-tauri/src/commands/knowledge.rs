@@ -1,10 +1,10 @@
-//! Tauri command wrappers over `appflower_core::store::knowledge`.
+//! Tauri command wrappers over `tidy_core::store::knowledge`.
 
 use tauri::{AppHandle, Emitter, State};
 
 use crate::db::Db;
 use crate::error::AppResult;
-use appflower_core::store::knowledge::{core, Backlink, LinkGraph, LinkInput};
+use tidy_core::store::knowledge::{core, Backlink, LinkGraph, LinkInput};
 
 #[tauri::command]
 pub fn set_page_links(

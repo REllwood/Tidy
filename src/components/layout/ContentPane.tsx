@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { lazy, Suspense } from "react";
 import { useUi } from "@/store/ui";
 
@@ -31,7 +32,11 @@ const PlannerView = lazy(() =>
   })),
 );
 
-const AskMeetings = lazy(() => import("@/features/meeting/AskMeetings").then(m => ({ default: m.AskMeetings })));
+const AskMeetings = lazy(() =>
+  import("@/features/meeting/AskMeetings").then((m) => ({
+    default: m.AskMeetings,
+  })),
+);
 
 /** Content router, dispatches the active pane to its surface. */
 export function ContentPane() {
@@ -62,7 +67,17 @@ export function ContentPane() {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Suspense fallback={<div className="p-12 text-sm text-text-faint">Loading…</div>}>
+      <Suspense
+        fallback={
+          <div
+            role="status"
+            className="flex items-center gap-2 p-12 text-sm text-text-muted"
+          >
+            <Loader2 className="size-4 animate-spin" />
+            Opening your workspace…
+          </div>
+        }
+      >
         {body}
       </Suspense>
     </div>
