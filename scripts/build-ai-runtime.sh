@@ -11,15 +11,20 @@ if [[ ! -f "$cache/source/CMakeLists.txt" ]]; then
   mkdir -p "$cache/source"
   tar -xzf "$cache/source.tar.gz" --strip-components=1 -C "$cache/source"
 fi
-cmake -S "$cache/source" -B "$cache/build" \
+# Separate cache prevents older builds' downloaded web assets being reused.
+[[ ! -f "$cache/build-headless/tools/ui/dist/index.html" ]] || {
+  echo 'Unexpected web assets in the headless build cache; choose a fresh TIDY_AI_BUILD_CACHE.' >&2
+  exit 1
+}
+GIT_CEILING_DIRECTORIES="$cache" cmake -S "$cache/source" -B "$cache/build-headless" \
   -DLLAMA_BUILD_COMMIT="$revision" -DLLAMA_BUILD_NUMBER=0 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4 \
   -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
   -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON \
-  -DLLAMA_BUILD_UI=OFF -DGGML_OPENMP=OFF
-cmake --build "$cache/build" --config Release --target llama-server -j 4
+  -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DGGML_OPENMP=OFF
+cmake --build "$cache/build-headless" --config Release --target llama-server -j 4
 triple=$(rustc -vV | awk '/host:/{print $2}')
-cp "$cache/build/bin/llama-server" "src-tauri/binaries/tidy-ai-$triple"
+cp "$cache/build-headless/bin/llama-server" "src-tauri/binaries/tidy-ai-$triple"
 cp "$cache/source/LICENSE" src-tauri/resources/llama-cpp-LICENSE.txt
 chmod +x "src-tauri/binaries/tidy-ai-$triple"
 # Fail if the runtime depends on libraries from the maintainer's machine.
