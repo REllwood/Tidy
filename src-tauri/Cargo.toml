@@ -1,6 +1,6 @@
 [package]
 name = "tidy"
-version = "0.2.1"
+version = "0.3.0"
 description = "Tidy, a local-first workspace with on-device meeting notes"
 authors = ["Tidy"]
 license = "AGPL-3.0-or-later"
@@ -38,6 +38,7 @@ tokio = { workspace = true }
 sherpa-onnx = "1.13.2"
 tar = "0.4.46"
 bzip2-rs = "0.1.2"
+tauri-plugin-updater = "2"
 
 # Whisper: Metal acceleration on Apple Silicon, CPU on Intel.
 [target.'cfg(target_arch = "aarch64")'.dependencies]
@@ -47,4 +48,7 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 whisper-rs = { version = "0.16", default-features = false }
 
 [dev-dependencies]
+tauri = { version = "2.11.2", features = ["test"] }
+base64 = "0.22"
+minisign-verify = "0.2.5"
 tempfile = "3"

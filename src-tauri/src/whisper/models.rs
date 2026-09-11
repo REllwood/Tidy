@@ -6,50 +6,20 @@ use std::path::PathBuf;
 use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 
 use crate::db::{now_ms, Db};
 use crate::error::{AppError, AppResult};
 
-struct ModelDef {
-    id: &'static str,
-    name: &'static str,
-    file: &'static str,
-    size: u64,
-}
-
-const MODELS: &[ModelDef] = &[
-    ModelDef {
-        id: "tiny",
-        name: "Whisper Tiny",
-        file: "ggml-tiny.bin",
-        size: 77_700_000,
-    },
-    ModelDef {
-        id: "base",
-        name: "Whisper Base",
-        file: "ggml-base.bin",
-        size: 147_900_000,
-    },
-    ModelDef {
-        id: "small",
-        name: "Whisper Small",
-        file: "ggml-small.bin",
-        size: 487_600_000,
-    },
-    ModelDef {
-        id: "medium",
-        name: "Whisper Medium",
-        file: "ggml-medium.bin",
-        size: 1_530_000_000,
-    },
-];
-
-const HF_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
+use crate::model_catalogue::{catalogue, ModelDefinition as ModelDef};
 
 #[derive(Serialize)]
 pub struct ModelInfo {
+    pub description: String,
+    pub recommended_ram_gb: u64,
+    pub tier: String,
     pub id: String,
     pub name: String,
     pub size: u64,
@@ -58,7 +28,8 @@ pub struct ModelInfo {
 }
 
 fn def(id: &str) -> AppResult<&'static ModelDef> {
-    MODELS
+    catalogue()?
+        .transcription
         .iter()
         .find(|m| m.id == id)
         .ok_or_else(|| AppError::Invalid(format!("unknown model '{id}'")))
@@ -75,8 +46,8 @@ pub mod core {
     pub fn list(conn: &Connection, app: &AppHandle) -> AppResult<Vec<ModelInfo>> {
         let dir = models_dir(app)?;
         let mut out = Vec::new();
-        for m in MODELS {
-            let path = dir.join(m.file);
+        for m in &catalogue()?.transcription {
+            let path = dir.join(&m.file);
             let selected: bool = conn
                 .query_row(
                     "SELECT is_selected FROM model WHERE id = ?1",
@@ -87,10 +58,13 @@ pub mod core {
                 .map(|v| v != 0)
                 .unwrap_or(false);
             out.push(ModelInfo {
+                description: m.description.clone(),
+                recommended_ram_gb: m.recommended_ram_gb,
+                tier: m.tier.clone(),
                 id: m.id.to_string(),
                 name: m.name.to_string(),
                 size: m.size,
-                downloaded: path.exists(),
+                downloaded: path.metadata().is_ok_and(|meta| meta.len() == m.size),
                 selected,
             });
         }
@@ -110,12 +84,22 @@ pub mod core {
 
     pub fn delete(conn: &Connection, app: &AppHandle, id: &str) -> AppResult<()> {
         let d = def(id)?;
-        let path = models_dir(app)?.join(d.file);
+        let path = models_dir(app)?.join(&d.file);
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
         conn.execute("DELETE FROM model WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    pub fn path_for(app: &AppHandle, id: &str) -> AppResult<PathBuf> {
+        let path = models_dir(app)?.join(&def(id)?.file);
+        if !path.is_file() {
+            return Err(AppError::Invalid(
+                "Download this Whisper model in Settings first.".into(),
+            ));
+        }
+        Ok(path)
     }
 
     /// Filesystem path of the currently-selected, downloaded model.
@@ -128,7 +112,7 @@ pub mod core {
             )
             .optional()?;
         let id = id.ok_or_else(|| AppError::Invalid("no Whisper model selected".into()))?;
-        let path = models_dir(app)?.join(def(&id)?.file);
+        let path = models_dir(app)?.join(&def(&id)?.file);
         if !path.exists() {
             return Err(AppError::Invalid(format!("model '{id}' not downloaded")));
         }
@@ -159,15 +143,16 @@ pub async fn download_model(app: AppHandle, db: State<'_, Db>, id: String) -> Ap
     let d = def(&id)?;
     let dir = models_dir(&app)?;
     tokio::fs::create_dir_all(&dir).await?;
-    let path = dir.join(d.file);
-    let url = format!("{HF_BASE}{}", d.file);
+    let path = dir.join(&d.file);
+    let url = &d.url;
 
     let client = reqwest::Client::builder()
-        .user_agent("Tidy/0.1")
+        .user_agent("Tidy")
+        .connect_timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| AppError::Other(format!("http client: {e}")))?;
     let resp = client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|e| AppError::Other(format!("download request: {e}")))?
@@ -175,23 +160,34 @@ pub async fn download_model(app: AppHandle, db: State<'_, Db>, id: String) -> Ap
         .map_err(|e| AppError::Other(format!("download status: {e}")))?;
     let total = resp.content_length().unwrap_or(d.size);
 
-    let tmp = path.with_extension("part");
+    let tmp = path.with_extension(format!("{}.part", crate::db::new_id()));
+    let mut hash = Sha256::new();
     let mut file = tokio::fs::File::create(&tmp).await?;
     let mut downloaded: u64 = 0;
     let mut last_emit: u64 = 0;
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = tokio::time::timeout(std::time::Duration::from_secs(60), stream.next())
+        .await
+        .map_err(|_| {
+            AppError::Other("Model download stalled. Check your connection and retry.".into())
+        })?
+    {
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => {
-                // Don't leave a partial file behind on failure.
+                // Keep partial data out of the selectable model path.
                 drop(file);
-                let _ = tokio::fs::remove_file(&tmp).await;
                 return Err(AppError::Other(format!("download stream: {e}")));
             }
         };
-        file.write_all(&chunk).await?;
         downloaded += chunk.len() as u64;
+        if downloaded > d.size {
+            return Err(AppError::Other(
+                "Unexpected transcription model size.".into(),
+            ));
+        }
+        hash.update(&chunk);
+        file.write_all(&chunk).await?;
         if downloaded - last_emit > 1_000_000 {
             last_emit = downloaded;
             let _ = app.emit(
@@ -201,7 +197,13 @@ pub async fn download_model(app: AppHandle, db: State<'_, Db>, id: String) -> Ap
         }
     }
     file.flush().await?;
+    file.sync_all().await?;
     drop(file);
+    if downloaded != d.size || format!("{:x}", hash.finalize()) != d.sha256 {
+        return Err(AppError::Other(
+            "Model verification failed. Download it again before use.".into(),
+        ));
+    }
     tokio::fs::rename(&tmp, &path).await?;
     let _ = app.emit(
         "model-download-progress",

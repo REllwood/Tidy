@@ -58,7 +58,7 @@ export function HomeDashboard() {
               {greeting(now).replace(/[.!]$/, "")}.
             </h1>
             <p className="mt-2 text-sm text-text-muted">
-              A little space to think. A clear place to begin.
+              Your notes, meetings and tasks.
             </p>
           </div>
           <Button
@@ -72,7 +72,7 @@ export function HomeDashboard() {
         {!onboarded && (
           <div className="mb-7 flex items-start gap-4 rounded-xl border border-border bg-surface px-5 py-4">
             <div className="flex-1">
-              <h2 className="text-sm font-semibold">Make this space yours</h2>
+              <h2 className="text-sm font-semibold">Get started</h2>
               <p className="mt-1 text-note text-text-muted">
                 Start with a note, plan your week, or record a conversation.
                 Your work stays on your Mac.
@@ -117,7 +117,7 @@ export function HomeDashboard() {
             onClick={() => setPane({ kind: "planner" })}
           />
           <span className="ml-auto hidden self-center text-xs text-text-faint sm:block">
-            Everything in its place.
+            Saved on this Mac
           </span>
         </div>
         {create.error && (
@@ -130,7 +130,7 @@ export function HomeDashboard() {
             <section aria-label="Your agenda">
               <div className="mb-5 flex items-baseline justify-between gap-3">
                 <h2 className="text-lg font-semibold tracking-tight">
-                  Coming into focus
+                  Your agenda
                 </h2>
                 <button
                   onClick={() => setPane({ kind: "planner" })}
@@ -200,7 +200,7 @@ export function HomeDashboard() {
             </section>
             <section className="mt-9" aria-label="Recently edited pages">
               <h2 className="mb-3 text-sm font-semibold">
-                Pick up where you left off
+                Recent pages
               </h2>
               {pagesPending ? (
                 <p
@@ -236,7 +236,7 @@ export function HomeDashboard() {
             <section aria-label="Favourite pages">
               <div className="mb-3 flex items-center gap-2">
                 <Star className="size-3.5 text-text-faint" />
-                <h2 className="text-sm font-semibold">Close to hand</h2>
+                <h2 className="text-sm font-semibold">Favourites</h2>
               </div>
               {favourites.length ? (
                 favourites.map((page) => (

@@ -9,3 +9,5 @@ pub mod pages;
 pub mod search;
 
 pub mod meeting_ai;
+
+pub mod recordings;

@@ -7,3 +7,9 @@ pub mod mcp;
 pub mod pages;
 pub mod recording;
 pub mod search;
+
+pub mod recording_history;
+
+pub mod recording_preferences;
+
+pub mod updates;

@@ -7,6 +7,8 @@ export interface AiConfig {
   ollama_model: string;
 }
 export interface AiModel {
+  recommended_ram_gb: number;
+  tier: string;
   id: string;
   name: string;
   description: string;

@@ -1,14 +1,10 @@
+import { UpdateSettings } from "@/features/updates/UpdateProvider";
+import { RecordingSettings } from "./RecordingSettings";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, Trash2, Circle, RefreshCw, Lock } from "lucide-react";
+import { Check, Download, Circle, RefreshCw, Lock } from "lucide-react";
 import { useUi, type Theme } from "@/store/ui";
 import {
-  useModels,
-  useModelMutations,
-  useDownloadProgress,
-} from "@/hooks/useModels";
-import {
-  type ModelInfo,
   diarizeApi,
   vaultApi,
   mcpApi,
@@ -16,14 +12,9 @@ import {
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Skeleton } from "@/components/ui/skeleton";
+import { TranscriptionModels } from "./TranscriptionModels";
 
 import { LocalAiSettings } from "./LocalAiSettings";
-
-function fmtSize(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  return `${Math.round(bytes / 1e6)} MB`;
-}
 
 function Section({
   title,
@@ -50,11 +41,10 @@ export function SettingsView() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-6 py-10 sm:px-10">
-        <p className="page-eyebrow">Make it yours</p>
+        <p className="page-eyebrow">Tidy</p>
         <h1 className="page-title">Settings</h1>
         <p className="page-description">
-          A workspace that works the way you do. Manage appearance, local models
-          and your data.
+          Appearance, recording, local AI and updates.
         </p>
 
         <Section title="Appearance">
@@ -75,11 +65,13 @@ export function SettingsView() {
           </div>
         </Section>
 
+        <Section title="Recording"><RecordingSettings /></Section>
+
         <Section
-          title="Whisper models"
+          title="Transcription models"
           desc="Speech-to-text runs entirely on your Mac. Download a model to enable transcription."
         >
-          <ModelManager />
+          <TranscriptionModels />
         </Section>
 
         <Section
@@ -91,7 +83,7 @@ export function SettingsView() {
 
         <Section
           title="Speaker labels"
-          desc="Label who-said-what in meeting transcripts. Runs on-device via downloadable models (~35 MB)."
+          desc="Add speaker labels to transcripts. The models run on this Mac and use about 35 MB."
         >
           <DiarizationSettings />
         </Section>
@@ -105,122 +97,22 @@ export function SettingsView() {
 
         <Section
           title="Agent connection (MCP)"
-          desc="Let Claude Code or Codex read and file notes into this workspace via a local MCP server. Read access is always on; enabling writes mints a token."
+          desc="Let Claude Code or Codex read and file notes into this workspace via a local MCP server. Read access is always on; you can enable write access below."
         >
           <McpSettings />
         </Section>
+
+        <Section title="Updates"><UpdateSettings /></Section>
 
         <Section title="Privacy & data">
           <div className="flex items-start gap-2.5 rounded-lg bg-brand-soft px-4 py-3 text-sm text-text-muted">
             <Lock className="mt-0.5 size-4 shrink-0" />
             <span>
-              All your pages, databases, recordings, and transcripts are stored
-              locally on this Mac. Nothing is uploaded and there is no
-              telemetry. Optional model downloads connect to Hugging Face. AI
-              processing runs locally using Tidy’s bundled runtime or your
-              selected local Ollama model.
+              Your notes and transcripts stay on this Mac. Audio is only kept if you enable it. Model downloads use Hugging Face; update checks and downloads use GitHub. Meeting content is never sent with these requests. AI processing runs locally.
             </span>
           </div>
         </Section>
       </div>
-    </div>
-  );
-}
-
-function ModelManager() {
-  const { data: models, isLoading } = useModels();
-  const progress = useDownloadProgress();
-  const m = useModelMutations();
-
-  if (isLoading)
-    return (
-      <div className="space-y-2">
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-12 w-full" />
-      </div>
-    );
-  if (!models?.length)
-    return <div className="text-sm text-text-faint">No models available.</div>;
-
-  return (
-    <div className="divide-y divide-border rounded-lg border border-border">
-      {models.map((model) => (
-        <ModelRow
-          key={model.id}
-          model={model}
-          downloading={
-            m.download.isPending && m.download.variables === model.id
-          }
-          progress={progress[model.id]}
-          onDownload={() => m.download.mutate(model.id)}
-          onSelect={() => m.select.mutate(model.id)}
-          onDelete={() => m.remove.mutate(model.id)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ModelRow({
-  model,
-  downloading,
-  progress,
-  onDownload,
-  onSelect,
-  onDelete,
-}: {
-  model: ModelInfo;
-  downloading: boolean;
-  progress?: number;
-  onDownload: () => void;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const pct = progress != null ? Math.round(progress * 100) : null;
-  return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{model.name}</span>
-          {model.selected && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-2xs font-semibold text-brand">
-              <Check className="size-3" /> Selected
-            </span>
-          )}
-        </div>
-        <div className="text-xs text-text-faint">{fmtSize(model.size)}</div>
-        {downloading && pct != null && (
-          <div className="mt-1.5 h-1.5 w-40 overflow-hidden rounded-full bg-bg-subtle">
-            <div className="h-full bg-brand" style={{ width: `${pct}%` }} />
-          </div>
-        )}
-      </div>
-      {!model.downloaded ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={onDownload}
-          disabled={downloading}
-        >
-          <Download className="size-3.5" />{" "}
-          {downloading ? `${pct ?? 0}%` : "Download"}
-        </Button>
-      ) : (
-        <div className="flex items-center gap-1.5">
-          {!model.selected && (
-            <Button size="sm" variant="secondary" onClick={onSelect}>
-              Select
-            </Button>
-          )}
-          <button
-            aria-label={`Delete ${model.name}`}
-            onClick={onDelete}
-            className="grid size-8 place-items-center rounded-md text-text-faint hover:bg-surface-hover hover:text-danger-c"
-          >
-            <Trash2 className="size-4" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -293,9 +293,14 @@ pub async fn process_next(app: &AppHandle) -> AppResult<()> {
         return Ok(());
     }
     let job = db(app, |c| {
-        Ok(meeting_ai::list(c)?
-            .into_iter()
-            .find(|j| j.state == "queued"))
+        for job in meeting_ai::list(c)?.into_iter().filter(|j| j.state == "queued") {
+            let ready: bool = c.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM meeting m WHERE m.page_id=?1 AND m.transcript_state!='saved' AND NOT EXISTS(SELECT 1 FROM transcript_version v WHERE v.meeting_id=m.id AND v.reason IN ('Existing transcript','Transcribed from saved audio')))",
+                [&job.page_id], |r| r.get(0),
+            )?;
+            if ready { return Ok(Some(job)); }
+        }
+        Ok(None)
     })
     .await?;
     let Some(job) = job else {

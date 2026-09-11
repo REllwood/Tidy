@@ -218,10 +218,15 @@ export const searchApi = {
 // ---- Meeting: recording / models / transcription / summary ----------------
 
 export interface Recording {
+  keep_audio: boolean;
+  page_id: string | null;
   audio_path: string;
   duration_ms: number;
 }
 export interface ModelInfo {
+  description: string;
+  recommended_ram_gb: number;
+  tier: string;
   id: string;
   name: string;
   size: number; // bytes
@@ -246,8 +251,8 @@ export interface MeetingSummary {
 }
 
 export const recordingApi = {
-  start: () => invoke<void>("start_recording"),
-  stop: () => invoke<Recording>("stop_recording"),
+  start: () => invoke<boolean>("start_recording"),
+  stop: (client = "") => invoke<Recording>("stop_recording", { client }),
   isRecording: () => invoke<boolean>("is_recording"),
   record: (
     pageId: string,
@@ -368,3 +373,51 @@ export function buildTree(pages: Page[]): PageNode[] {
   sort(roots);
   return roots;
 }
+
+export interface SavedRecording {
+  retain_audio: boolean;
+  id: string;
+  page_id: string | null;
+  title: string;
+  client: string | null;
+  started_at: number;
+  duration_ms: number;
+  audio_path: string | null;
+  audio_available: boolean;
+  model_used: string | null;
+  transcript_state: string;
+  transcript_error: string | null;
+}
+export interface TranscriptVersion {
+  id: string;
+  created_at: number;
+  model: string | null;
+  language: string | null;
+  body_json: string;
+  reason: string;
+}
+export interface RetranscriptionResult {
+  body_json: string;
+  applied: boolean;
+  segments: TranscriptSegment[];
+}
+export const recordingHistoryApi = {
+  list: () => invoke<SavedRecording[]>("recording_history"),
+  versions: (pageId: string) =>
+    invoke<TranscriptVersion[]>("transcript_versions", { pageId }),
+  transcribe: (pageId: string, modelId?: string, language = "en") =>
+    invoke<RetranscriptionResult>("retranscribe_meeting", {
+      pageId,
+      modelId,
+      language,
+    }),
+  cancel: (pageId: string) => invoke<void>("cancel_transcription", { pageId }),
+};
+
+export const recordingPreferencesApi = {
+  get: () => invoke<boolean>("get_recording_preferences"),
+  set: (keepAudio: boolean) => invoke<void>("set_recording_preferences", {keepAudio}),
+  finish: (pageId: string) => invoke<void>("finish_recording", {pageId}),
+};
+
+export const recordingHistoryKey = ["recording-history"];

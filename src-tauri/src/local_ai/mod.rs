@@ -103,14 +103,21 @@ impl AiState {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
-    pub async fn pause_for_recording(&self) -> AppResult<()> {
+    pub fn reserve_recording(&self) -> AppResult<()> {
         if self.recording.swap(true, Ordering::SeqCst) {
             return Err(AppError::Other(
                 "A meeting is already recording or processing".into(),
             ));
         }
         self.cancel.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    pub async fn wait_until_idle(&self) {
         let _guard = self.gate.lock().await;
+    }
+    pub async fn pause_for_recording(&self) -> AppResult<()> {
+        self.reserve_recording()?;
+        self.wait_until_idle().await;
         Ok(())
     }
     pub fn cancel_request(&self, request_id: Option<&str>) {
@@ -165,11 +172,14 @@ pub fn read_config(c: &rusqlite::Connection) -> AppResult<Config> {
 pub fn start_worker(app: AppHandle) {
     let handle = app.clone();
     let worker = tauri::async_runtime::spawn(async move {
-        if let Err(e) = db(&handle, |c| {
+        let recovery_app = handle.clone();
+        if let Err(e) = db(&handle, move |c| {
             c.execute(
                 "UPDATE meeting_ai SET state='queued' WHERE state IN ('summarising','indexing')",
                 [],
             )?;
+            c.execute("UPDATE meeting SET transcript_state='error',transcript_error='Transcription was interrupted. Open Recording history for details.' WHERE transcript_state='transcribing'",[])?;
+            crate::commands::recording_preferences::recover(&recovery_app, c)?;
             tidy_core::store::meeting_ai::queue_outdated(c)?;
             Ok(())
         })
@@ -214,8 +224,9 @@ pub async fn local_ai_status(app: AppHandle) -> AppResult<Status> {
     let recommended_model_id = recommended_model(memory_bytes).to_string();
     let config = db(&app, read_config_mut).await?;
     let a = app.clone();
+    let catalogue = models::all()?;
     let (models, disk_bytes) = tauri::async_runtime::spawn_blocking(move || {
-        let models = models::MODELS
+        let models = catalogue
             .iter()
             .map(|m| ModelStatus {
                 model: m.clone(),
@@ -273,10 +284,13 @@ pub async fn local_ai_status(app: AppHandle) -> AppResult<Status> {
     })
 }
 fn recommended_model(memory: Option<u64>) -> &'static str {
-    if memory.is_some_and(|bytes| bytes < 12 * 1024 * 1024 * 1024) {
-        "qwen3-small"
-    } else {
-        "qwen3-4b"
+    match memory.map(|bytes| bytes / (1024 * 1024 * 1024)) {
+        Some(0..=7) => "qwen3-small",
+        Some(8..=11) => "qwen3-1.7b",
+        Some(12..=23) | None => "qwen3-4b",
+        Some(24..=31) => "qwen3-8b",
+        Some(32..=63) => "qwen3-14b",
+        Some(_) => "qwen3-32b",
     }
 }
 async fn machine_memory() -> AppResult<Option<u64>> {
@@ -401,6 +415,18 @@ pub fn ai_end_recording(state: tauri::State<AiState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recommendations_leave_headroom_and_never_select_search_models() {
+        for (gb, expected) in [(4, "qwen3-small"), (8, "qwen3-1.7b"), (12, "qwen3-4b"), (16, "qwen3-4b"), (24, "qwen3-8b"), (32, "qwen3-14b"), (48, "qwen3-14b"), (64, "qwen3-32b"), (128, "qwen3-32b")] {
+            let id = recommended_model(Some(gb * 1024 * 1024 * 1024));
+            assert_eq!(id, expected);
+            let model = models::model(id).unwrap();
+            assert_eq!(model.purpose, "chat");
+            assert!(model.recommended_ram_gb <= gb);
+        }
+        assert_eq!(recommended_model(None), "qwen3-4b");
+    }
+
     #[test]
     fn stale_assistant_cancellation_does_not_cancel_a_download() {
         let state = AiState::default();

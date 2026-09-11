@@ -49,3 +49,6 @@ docs/ai/llama-server-reference.txt
 
 # Local planning notes and design drafts
 .forge/
+
+# Private update-signing keys
+*.key

@@ -1,3 +1,4 @@
+import { recordingPreferencesApi } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import {
   Mic,
@@ -26,6 +27,10 @@ function mmss(ms: number) {
 }
 
 export function MeetingRecorder() {
+  const retention = useQuery({
+    queryKey: ["recording-preferences"],
+    queryFn: recordingPreferencesApi.get,
+  });
   const { state, start, stop, reset, setClient } = useSharedMeetingFlow();
   const openPage = useUi((s) => s.openPage);
   const { data: models } = useQuery({
@@ -45,9 +50,18 @@ export function MeetingRecorder() {
         <p className="page-eyebrow">Capture a conversation</p>
         <h1 className="page-title">Meeting recorder</h1>
         <p className="page-description mb-7">
-          Be present. Tidy will keep the details.
+          Your transcript is saved on this Mac. Keeping the audio is optional.
         </p>
 
+        <p className="mb-5 text-sm text-text-muted">
+          {(
+            state.phase === "recording" || state.savedPageId
+              ? state.keepAudio
+              : retention.data
+          )
+            ? "Meeting audio will be kept for re-transcription."
+            : "Audio is discarded after processing. Turn on Keep meeting audio in Settings if you want to re-transcribe later."}
+        </p>
         {(state.phase === "idle" || state.phase === "starting") && (
           <div className="workspace-panel p-6 sm:p-7">
             <SourceRow
@@ -66,7 +80,8 @@ export function MeetingRecorder() {
                 <b className="text-text">{selected.name} · on-device</b>
               ) : (
                 <span className="text-warning">
-                  No Whisper model yet. Download one in Settings.
+                  Download a transcription model in Settings. To record without
+                  one, turn on Keep meeting audio.
                 </span>
               )}
               <br />
@@ -90,7 +105,11 @@ export function MeetingRecorder() {
               </span>
               <input
                 list="meeting-clients"
-                disabled={state.phase === "starting"}
+                disabled={
+                  state.phase === "starting" ||
+                  retention.isPending ||
+                  (!selected && !retention.data)
+                }
                 value={state.client}
                 onChange={(e) => setClient(e.target.value)}
                 placeholder="e.g. Acme Corp"
@@ -110,16 +129,22 @@ export function MeetingRecorder() {
               className="mt-4 w-full"
               size="lg"
               onClick={start}
-              disabled={!selected || state.phase === "starting"}
+              disabled={
+                state.phase === "starting" ||
+                retention.isPending ||
+                (!selected && !retention.data)
+              }
             >
-              {state.phase === "starting" ? (
+              {state.phase === "starting" || retention.isPending ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <CircleDot className="size-4" />
               )}{" "}
               {state.phase === "starting"
                 ? "Preparing recording…"
-                : "Start recording"}
+                : retention.isPending
+                  ? "Loading recording settings…"
+                  : "Start recording"}
             </Button>
             <p className="mt-3 flex items-start gap-2 text-xs text-text-faint">
               <Lock className="mt-0.5 size-3.5 shrink-0" />
@@ -204,7 +229,7 @@ export function MeetingRecorder() {
             <div className="text-lg font-semibold">
               {state.client.trim()
                 ? `Filed under ${state.client.trim()}`
-                : "Saved to Meeting Notes"}
+                : "Saved to Recording history"}
             </div>
             <p className="mt-1 text-sm text-text-muted">
               Your transcript is saved. Summaries and search will process in the
@@ -229,6 +254,16 @@ export function MeetingRecorder() {
               <AlertCircle className="size-5" /> Something went wrong
             </div>
             <p className="mt-2 text-sm text-text-muted">{state.error}</p>
+            {state.savedPageId && (
+              <Button
+                className="mt-4"
+                onClick={() => {
+                  if (state.savedPageId) openPage(state.savedPageId);
+                }}
+              >
+                Open saved recording
+              </Button>
+            )}
             <Button className="mt-5" variant="secondary" onClick={reset}>
               Try again
             </Button>

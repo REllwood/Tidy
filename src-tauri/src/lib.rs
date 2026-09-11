@@ -1,3 +1,4 @@
+mod model_catalogue;
 mod audio;
 mod commands;
 mod local_ai;
@@ -20,6 +21,7 @@ use vault::VaultState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -41,6 +43,8 @@ pub fn run() {
             })?;
             app.manage(database);
             app.manage(RecorderState::default());
+            app.manage(commands::updates::UpdateState::default());
+            app.manage(commands::recording_history::TranscriptionState::default());
             app.manage(VaultState::default());
             app.manage(local_ai::AiState::default());
             local_ai::start_worker(app.handle().clone());
@@ -89,10 +93,21 @@ pub fn run() {
             commands::databases::set_cell,
             commands::databases::update_view,
             commands::search::search,
+            commands::updates::check_app_update,
+            commands::updates::install_app_update,
+            commands::recording_preferences::get_recording_preferences,
+            commands::recording_preferences::set_recording_preferences,
+            commands::recording_preferences::finish_recording,
             commands::recording::start_recording,
             commands::recording::stop_recording,
             commands::recording::is_recording,
             commands::recording::record_meeting,
+            commands::recording_history::recording_history,
+            commands::recording_history::transcript_versions,
+            commands::recording_history::retranscribe_meeting,
+            commands::recording_history::cancel_transcription,
+            commands::recording_history::export_recording_text,
+            commands::recording_history::export_recording_audio,
             whisper::models::list_models,
             whisper::models::download_model,
             whisper::models::select_model,

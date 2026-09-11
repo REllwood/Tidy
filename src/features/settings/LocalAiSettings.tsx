@@ -1,3 +1,4 @@
+import { MemoryGuidance, ModelRangeFilter, type ModelRange } from "./ModelGuidance";
 import { errorMessage } from "@/lib/errors";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -49,6 +50,7 @@ export function LocalAiSettings() {
     queryFn: localAi.status,
     refetchInterval: 1500,
   });
+  const [range, setRange] = useState<ModelRange>("all");
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [ollamaModel, setOllamaModel] = useState("");
@@ -88,6 +90,8 @@ export function LocalAiSettings() {
         </Button>
       </p>
     );
+  const recommended = data.models.find((m) => m.id === data.recommended_model_id);
+  const visibleModels = data.models.filter((m) => range === "all" || m.tier === range || m.purpose === "embedding");
   const setupBytes = data.models
     .filter(
       (m) =>
@@ -130,11 +134,10 @@ export function LocalAiSettings() {
             <h3 className="text-sm font-semibold">
               {data.ready
                 ? "Local AI is enabled"
-                : "Your meetings, understood on your Mac"}
+                : "Summaries and meeting questions"}
             </h3>
             <p className="mt-1 text-sm leading-relaxed text-text-muted">
-              Automatic summaries and answers grounded in your transcripts. No
-              account or separate app required.
+              Create meeting notes and ask questions using your saved transcripts. Processing runs on this Mac.
             </p>
           </div>
           <span className="shrink-0 rounded-full bg-bg-subtle px-2 py-1 text-xs text-text-muted">
@@ -152,8 +155,8 @@ export function LocalAiSettings() {
             <p className="mt-3 text-xs leading-relaxed text-text-faint">
               Downloads {size(setupBytes)} from Hugging Face.{" "}
               {data.memory_bytes
-                ? `This Mac has ${Math.round(data.memory_bytes / 1024 ** 3)} GB RAM; ${data.recommended_model_id === "qwen3-small" ? "the lightweight model is recommended" : "the balanced model is recommended"}.`
-                : "The balanced model is recommended for Macs with 16 GB RAM."}{" "}
+                ? `This Mac has ${Math.round(data.memory_bytes / 1024 ** 3)} GB RAM. Suggested starting point: ${recommended?.name ?? "Qwen 3 4B"}.`
+                : "Could not read this Mac’s RAM. Qwen 3 4B is the default; you can choose another model below."}{" "}
               Once downloaded, your meeting text stays on this Mac.
             </p>
             <Button
@@ -208,19 +211,26 @@ export function LocalAiSettings() {
       )}
       <div>
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-medium">Models on this Mac</h3>
+          <h3 className="text-sm font-medium">Answer and search models</h3>
           <span className="text-xs text-text-faint">
             {size(data.disk_bytes)} used, including partial downloads
           </span>
         </div>
+        <p className="mb-3 text-xs leading-relaxed text-text-muted">
+          Choose one answer model, plus Meeting search for questions about saved transcripts.
+          RAM guidance estimates total system memory, with room for other apps. It is not a measured requirement or a speed guarantee.
+          Every model remains available, even if it exceeds this Mac’s suggested range.
+        </p>
+        <div className="mb-3"><ModelRangeFilter value={range} onChange={setRange} label="Answer model options" /></div>
         <div className="divide-y divide-border rounded-lg border border-border">
-          {data.models.map((model) => (
+          {visibleModels.map((model) => (
             <div key={model.id} className="p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium">{model.name}</span>
                 <span className="text-xs text-text-faint">
-                  {size(model.size)}
+                  {size(model.size)} download
                 </span>
+                {model.id === data.recommended_model_id && <span className="text-xs text-text-muted">Suggested for this Mac</span>}
                 {data.config.provider === "builtin" &&
                   data.config.model_id === model.id && (
                     <span className="text-xs text-brand">Selected</span>
@@ -229,12 +239,14 @@ export function LocalAiSettings() {
               <p className="mt-1 text-xs leading-relaxed text-text-muted">
                 {model.description}
               </p>
+              <MemoryGuidance suggested={model.recommended_ram_gb} memoryBytes={data.memory_bytes} />
               <div className="mt-3 flex flex-wrap gap-2">
                 {!model.downloaded ? (
                   <Button
                     size="sm"
                     variant="secondary"
                     disabled={busy}
+                    aria-label={`Download ${model.name}`}
                     onClick={() =>
                       action.mutate(() => localAi.download(model.id))
                     }
@@ -250,6 +262,7 @@ export function LocalAiSettings() {
                           size="sm"
                           variant="secondary"
                           disabled={busy}
+                          aria-label={`Use ${model.name}`}
                           onClick={() =>
                             configure({
                               ...data.config,

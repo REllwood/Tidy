@@ -4,6 +4,9 @@ Tidy can run summaries, writing assistance and meeting questions using a bundled
 llama.cpp runtime. Ollama remains an optional advanced provider. AI is disabled
 until the user enables it or selects a downloaded answer model.
 
+Recording-history and transcription changes in v0.3.0 are described in
+[Recording reliability](MEETING-RELIABILITY.md), including retention and recovery limits.
+
 ## User flow
 
 In Settings > Local AI, Enable local AI downloads the recommended answer model
@@ -13,9 +16,12 @@ Removal requires confirmation and never removes meetings or transcripts.
 Interrupted downloads are retained as partial files; Remove files also clears
 those partials after confirmation. Retry starts a fresh download.
 
-A Mac with less than 12 GiB of physical memory is offered the lightweight model;
-other Macs are offered the balanced model. This is a conservative default, not a
-speed guarantee. Models are loaded one at a time with an 8,192-token context and
+Version 0.3.0 includes the expanded model catalogue. Setup suggests Qwen 0.6B below 8 GB,
+1.7B at 8 GB, 4B at 12–16 GB, 8B at 24 GB, 14B at 32–48 GB and 32B at 64 GB
+or more. If RAM cannot be detected, it defaults to 4B. These are starting points,
+not benchmark results or minimum requirements. Manual selection remains available
+for every model, with a notice when the Mac has less RAM than suggested.
+Models are loaded one at a time with an 8,192-token context and
 one inference slot. Starting a recording cancels current AI work and pauses the
 queue until the recording/transcription flow finishes. The inference process is
 stopped after each operation, on cancellation/error, and on application exit.
@@ -92,15 +98,34 @@ must not be interpreted as a whole-meeting time estimate.
 
 ## Models and runtime
 
-| Purpose | Model | Download |
+| Answer model | Download | Suggested total RAM |
 | --- | --- | --- |
-| Balanced answers | Qwen3-4B Q4_K_M | 2,497,280,256 bytes |
-| Lightweight answers | Qwen3-0.6B Q8_0 | 639,446,688 bytes |
-| Meeting search | Nomic Embed Text v1.5 Q8_0 | 146,146,432 bytes |
+| Qwen 3 0.6B Q8_0 | 639 MB | 4 GB or more |
+| Qwen 3 1.7B Q8_0 | 1.8 GB | 8 GB or more |
+| Qwen 3 4B Q4_K_M | 2.5 GB | 12 GB or more |
+| Qwen 3 8B Q4_K_M | 5.0 GB | 16 GB or more |
+| Qwen 3 14B Q4_K_M | 9.0 GB | 24 GB or more |
+| Qwen 3 32B Q4_K_M | 19.8 GB | 48 GB or more |
 
-Model URLs use fixed upstream revisions. Every completed download and every model
-load is SHA-256 checked. Model weights are downloaded separately from the app.
-The catalogue in `src-tauri/src/local_ai/models.rs` records the exact URLs and hashes.
+Meeting search uses Nomic Embed Text v1.5 Q8_0 (146 MB) alongside the selected
+answer model. Larger models give users more options; they do not guarantee more
+accurate meeting answers. Download size describes disk space. RAM guidance includes
+headroom for macOS and other apps and has not been benchmarked across these machines.
+
+Transcription has 12 Whisper choices: Tiny, Base and Small in multilingual and
+English-only versions; Medium in full and compressed versions; and Large V3 and
+Large V3 Turbo, each in full and compressed versions. Downloads range from 78 MB
+to 3.1 GB. Compressed versions use reduced precision and may change accuracy.
+Whisper and the answer model are chosen separately.
+
+The native app and preview share `src/lib/modelCatalogue.json`. It records exact
+file sizes, fixed upstream revisions and SHA-256 hashes. Answer model downloads
+and loads are verified; transcription downloads are verified before they become
+selectable. Existing model IDs and file locations are preserved.
+
+Run `node scripts/verify-model-catalogue.mjs` to verify the pinned revision, file
+size and checksum against Hugging Face headers without downloading model weights.
+A complete hardware and transcription-quality comparison remains to be done.
 
 The runtime is built from llama.cpp commit
 `427291b5b34cd914a31b3fd3b61a68f6184f4b9f`. It binds only to loopback, uses a fresh

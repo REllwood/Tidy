@@ -16,7 +16,7 @@ pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
     db: State<'_, Db>,
-) -> AppResult<()> {
+) -> AppResult<bool> {
     use std::sync::atomic::Ordering;
     use tauri::Manager;
     let ai = app.state::<crate::local_ai::AiState>();
@@ -31,8 +31,18 @@ pub async fn start_recording(
             let conn = db.conn.lock().unwrap();
             crate::whisper::models::core::selected_path(&conn, &app).ok()
         };
-        *guard = Some(recorder::start(app.clone(), model_path)?);
-        Ok(())
+        let keep_audio = {
+            let conn = db
+                .conn
+                .lock()
+                .map_err(|_| AppError::Other("Database unavailable".into()))?;
+            super::recording_preferences::retention_enabled(&conn)?
+        };
+        if model_path.is_none() && !keep_audio {
+            return Err(AppError::Invalid("Download a transcription model in Settings before recording, or turn on Keep meeting audio to transcribe later.".into()));
+        }
+        *guard = Some(recorder::start(app.clone(), model_path, keep_audio)?);
+        Ok(keep_audio)
     })();
     if result.is_err() {
         ai.recording.store(false, Ordering::SeqCst);
@@ -41,14 +51,43 @@ pub async fn start_recording(
 }
 
 #[tauri::command]
-pub fn stop_recording(app: AppHandle, state: State<RecorderState>) -> AppResult<Recording> {
+pub async fn stop_recording(
+    app: AppHandle,
+    state: State<'_, RecorderState>,
+    client: Option<String>,
+) -> AppResult<Recording> {
     let session = state
         .0
         .lock()
-        .unwrap()
+        .map_err(|_| AppError::Other("Recorder unavailable".into()))?
         .take()
-        .ok_or_else(|| AppError::Other("no recording in progress".into()))?;
-    recorder::stop(&app, session)
+        .ok_or_else(|| AppError::Other("No recording in progress".into()))?;
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        let mut rec = recorder::stop(&handle, session)?;
+        let db = handle.state::<Db>();
+        let c = db
+            .conn
+            .lock()
+            .map_err(|_| AppError::Other("Database unavailable".into()))?;
+        rec.page_id = Some(tidy_core::store::recordings::register_with_retention(
+            &c,
+            &rec.audio_path,
+            rec.duration_ms,
+            now_ms() - rec.duration_ms,
+            &client.unwrap_or_default(),
+            rec.keep_audio,
+        )?);
+        Ok(rec)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()));
+    use tauri::Manager;
+    app.state::<crate::local_ai::AiState>()
+        .recording
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    result?
 }
 
 #[tauri::command]

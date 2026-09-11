@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Tidy",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "com.tidy.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -50,5 +50,13 @@
     "resources": [
       "resources/llama-cpp-LICENSE.txt"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFRDQ5QTY4QjIyMjJENkYKUldSdkxTS3lhSnJVdnJSM0wxUHJXeHpEVWNrSEM0U29CaW53cGdqWldobFQ1MGZCT3htVXkwdXcK",
+      "endpoints": [
+        "https://github.com/REllwood/Tidy/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

@@ -38,13 +38,21 @@ pub fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
 }
 
 /// Mix two mono streams (already at the same rate). Pads the shorter with
-/// silence and soft-clamps the sum to [-1, 1].
+/// silence and scales peaks to avoid clipping while preserving the waveform.
 pub fn mix_mono(a: &[f32], b: &[f32]) -> Vec<f32> {
     let n = a.len().max(b.len());
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let s = a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0);
-        out.push(s.clamp(-1.0, 1.0));
+        out.push(s);
+    }
+    let peak = out
+        .iter()
+        .fold(1.0_f32, |peak, sample| peak.max(sample.abs()));
+    if peak > 1.0 {
+        for sample in &mut out {
+            *sample /= peak;
+        }
     }
     out
 }
@@ -59,12 +67,7 @@ pub fn rms(samples: &[f32]) -> f32 {
 }
 
 /// Combine two raw captured sources into a single 16 kHz mono buffer.
-pub fn combine_sources(
-    mic: &[f32],
-    mic_rate: u32,
-    system: &[f32],
-    system_rate: u32,
-) -> Vec<f32> {
+pub fn combine_sources(mic: &[f32], mic_rate: u32, system: &[f32], system_rate: u32) -> Vec<f32> {
     let mic16 = resample_mono(mic, mic_rate, WHISPER_RATE);
     let sys16 = resample_mono(system, system_rate, WHISPER_RATE);
     mix_mono(&mic16, &sys16)
@@ -95,13 +98,13 @@ mod tests {
     }
 
     #[test]
-    fn mix_pads_and_clamps() {
+    fn mix_preserves_waveform_without_clipping() {
         let a = vec![0.8, 0.8, 0.8];
         let b = vec![0.8]; // shorter
         let m = mix_mono(&a, &b);
         assert_eq!(m.len(), 3);
-        assert_eq!(m[0], 1.0); // 1.6 clamped
-        assert_eq!(m[1], 0.8); // padded with silence
+        assert_eq!(m[0], 1.0); // peak normalised from 1.6
+        assert_eq!(m[1], 0.5); // same gain preserves the quieter part
     }
 
     #[test]

@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "@/lib/tauri";
 import { modelsApi, ollamaApi } from "@/lib/api";
+
+const DOWNLOAD_KEY = ["whisper-download"] as const;
+
+export function useModelDownloads() {
+  return useMutationState({
+    filters: { mutationKey: DOWNLOAD_KEY, status: "pending" },
+    select: (m) => m.state.variables as string,
+  });
+}
 
 const MODELS_KEY = ["models"] as const;
 
@@ -20,14 +29,15 @@ export function useDownloadProgress() {
   useEffect(() => {
     if (!isTauri()) return;
     let un: (() => void) | undefined;
+    let disposed = false;
     listen<{ id: string; downloaded: number; total: number }>(
       "model-download-progress",
       (e) => {
         const { id, downloaded, total } = e.payload;
         setProgress((p) => ({ ...p, [id]: total ? downloaded / total : 0 }));
       },
-    ).then((fn) => (un = fn));
-    return () => un?.();
+    ).then((fn) => { if (disposed) fn(); else un = fn; });
+    return () => { disposed = true; un?.(); };
   }, []);
   return progress;
 }
@@ -37,6 +47,7 @@ export function useModelMutations() {
   const invalidate = () => qc.invalidateQueries({ queryKey: MODELS_KEY });
   return {
     download: useMutation({
+      mutationKey: DOWNLOAD_KEY,
       mutationFn: (id: string) => modelsApi.download(id),
       onSettled: invalidate,
     }),

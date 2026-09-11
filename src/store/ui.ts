@@ -11,6 +11,7 @@ export type ActivePane =
   | { kind: "settings" }
   | { kind: "meeting" }
   | { kind: "ask" }
+  | { kind: "history" }
   | { kind: "graph" }
   | { kind: "planner" }
   | { kind: "home" };

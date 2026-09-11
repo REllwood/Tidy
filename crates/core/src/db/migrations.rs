@@ -193,12 +193,43 @@ pub fn migrations() -> Migrations<'static> {
             UPDATE meeting_ai SET state='queued',summary=NULL,error=NULL,source_hash=NULL WHERE page_id=new.id;
             DELETE FROM meeting_chunk WHERE page_id=new.id;
         END;
-    "#)])
+    "#),
+    M::up(r#"
+        ALTER TABLE meeting ADD COLUMN transcript_state TEXT NOT NULL DEFAULT 'saved';
+        ALTER TABLE meeting ADD COLUMN transcript_error TEXT;
+        CREATE TABLE transcript_version (
+            id TEXT PRIMARY KEY,
+            meeting_id TEXT NOT NULL REFERENCES meeting(id),
+            created_at INTEGER NOT NULL,
+            model TEXT,
+            language TEXT,
+            body_json TEXT NOT NULL,
+            reason TEXT NOT NULL
+        );
+        CREATE INDEX transcript_version_meeting ON transcript_version(meeting_id, created_at);
+        INSERT INTO transcript_version(id,meeting_id,created_at,model,body_json,reason)
+            SELECT lower(hex(randomblob(16))),m.id,m.started_at,m.model_used,p.content,'Existing transcript'
+            FROM meeting m JOIN page p ON p.id=m.page_id WHERE p.content IS NOT NULL;
+    "#),
+    M::up("ALTER TABLE meeting ADD COLUMN retain_audio INTEGER NOT NULL DEFAULT 1;")])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_keeps_existing_meeting_text_and_audio_reference() {
+        let mut c = rusqlite::Connection::open_in_memory().unwrap();
+        migrations().to_version(&mut c, 4).unwrap();
+        let body = r#"[{"type":"paragraph","content":"Original client handover"}]"#;
+        c.execute("INSERT INTO page(id,title,content,created_at,updated_at) VALUES('page','Handover',?1,1,1)", [body]).unwrap();
+        c.execute("INSERT INTO meeting(id,page_id,started_at,audio_path,model_used) VALUES('meeting','page',1,'/saved.wav','base')", []).unwrap();
+        migrations().to_latest(&mut c).unwrap();
+        let row: (String,String,String) = c.query_row("SELECT m.audio_path,m.transcript_state,v.body_json FROM meeting m JOIN transcript_version v ON v.meeting_id=m.id", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(row, ("/saved.wav".into(),"saved".into(),body.into()));
+        assert_eq!(c.query_row("SELECT content FROM page WHERE id='page'", [], |r| r.get::<_,String>(0)).unwrap(), body);
+    }
 
     #[test]
     fn migrations_validate() {

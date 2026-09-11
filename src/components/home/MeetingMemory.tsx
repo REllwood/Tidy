@@ -39,13 +39,10 @@ export function MeetingMemory() {
           </span>
         </div>
         <h2 className="mt-7 font-editorial text-[30px] leading-[1.15] tracking-tight">
-          Good conversations.
-          <br />
-          Nothing lost.
+          Ask about your meetings
         </h2>
         <p className="mt-3 text-note leading-relaxed text-text-muted">
-          Bring together decisions, ideas and next steps from your client's
-          meetings.
+          Find decisions and next steps across meetings with the same client.
         </p>
         <div className="mt-5 border-y border-border py-3">
           {loading ? (

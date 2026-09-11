@@ -1,3 +1,4 @@
+import catalogue from "@/lib/modelCatalogue.json";
 import { readStoredValue } from "@/lib/storage";
 /**
  * In-memory mock of the Rust command surface, used only in plain-web previews
@@ -12,26 +13,21 @@ import type {
   DbView,
   DatabaseBundle,
   ModelInfo,
+  SavedRecording,
+  TranscriptVersion,
+  TranscriptSegment,
 } from "@/lib/api";
 
 // ---- mock meeting state (browser preview only) ----
 let mockRecording = false;
+let mockRecordingKeepAudio = false;
+const cancelledTranscriptions = new Set<string>();
 let previewAiEnabled = false;
 let previewSelected = 'qwen3-4b';
 const previewDownloads = new Set<string>();
 const previewMeetings = new Set<string>();
-const previewModels = [
-  { id: 'qwen3-4b', name: 'Qwen 3 · Balanced', description: 'Recommended for 16 GB Macs. Summaries and meeting answers.', size: 2497280256, purpose: 'chat' },
-  { id: 'qwen3-small', name: 'Qwen 3 · Lightweight', description: 'Uses less memory. Review answers carefully.', size: 639446688, purpose: 'chat' },
-  { id: 'nomic-embed', name: 'Meeting search', description: 'Finds related transcript passages.', size: 146146432, purpose: 'embedding' },
-];
-
-const MODEL_DEFS: { id: string; name: string; size: number }[] = [
-  { id: "tiny", name: "Whisper Tiny", size: 77_700_000 },
-  { id: "base", name: "Whisper Base", size: 147_900_000 },
-  { id: "small", name: "Whisper Small", size: 487_600_000 },
-  { id: "medium", name: "Whisper Medium", size: 1_530_000_000 },
-];
+const previewModels = catalogue.ai;
+const MODEL_DEFS = catalogue.transcription;
 const MODEL_KEY = "tidy-mock-models";
 type ModelState = Record<string, { downloaded: boolean; selected: boolean }>;
 
@@ -53,9 +49,7 @@ function saveModelState(s: ModelState) {
 function mockModels(): ModelInfo[] {
   const st = mockModelState();
   return MODEL_DEFS.map((d) => ({
-    id: d.id,
-    name: d.name,
-    size: d.size,
+    ...d,
     downloaded: st[d.id]?.downloaded ?? false,
     selected: st[d.id]?.selected ?? false,
   }));
@@ -81,6 +75,8 @@ interface MockDb {
   links: MockLink[];
   pageTags: Record<string, string[]>;
   settings: Record<string, string>;
+  recordings?: SavedRecording[];
+  transcriptVersions?: Record<string, TranscriptVersion[]>;
 }
 
 const KEY = "tidy-mock-db";
@@ -346,7 +342,17 @@ function save(db: MockDb) {
 
 let db: MockDb | null = null;
 function store(): MockDb {
-  if (!db) db = load();
+  if (!db) {
+    db = load();
+    for (const meeting of db.recordings ?? []) {
+      meeting.retain_audio ??= true;
+      if (meeting.page_id) previewMeetings.add(meeting.page_id);
+      if (meeting.transcript_state === "transcribing") {
+        meeting.transcript_state = "error";
+        meeting.transcript_error = "Preview interrupted; saved text has been kept.";
+      }
+    }
+  }
   // backfill v3 fields for DBs seeded before this version
   if (!db.links) db.links = [];
   if (!db.pageTags) db.pageTags = {};
@@ -907,18 +913,129 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
     // ---- meeting (mock) ----
     case "is_recording":
       return mockRecording as T;
-    case "start_recording":
-      mockRecording = true;
+    case "check_app_update":
+      await new Promise(resolve=>setTimeout(resolve,700));
+      return {version:"0.3.1",notes:"Improved transcription controls and recording history."} as T;
+    case "install_app_update":
+      await new Promise(resolve=>setTimeout(resolve,1600));
       return undefined as T;
-    case "stop_recording":
+    case "get_recording_preferences": return (d.settings["recording.keep_audio"] === "true") as T;
+    case "set_recording_preferences": d.settings["recording.keep_audio"] = args.keepAudio ? "true" : "false";commit();return undefined as T;
+    case "finish_recording": {
+      const meeting=d.recordings?.find(m=>m.page_id===args.pageId);
+      if(meeting && !meeting.retain_audio){meeting.audio_path=null;meeting.audio_available=false;commit();}
+      return undefined as T;
+    }
+    case "start_recording":
+      mockRecordingKeepAudio = d.settings["recording.keep_audio"] === "true";
+      mockRecording = true;
+      return mockRecordingKeepAudio as T;
+    case "stop_recording": {
       mockRecording = false;
-      return { audio_path: "mock://recording.wav", duration_ms: 142_000 } as T;
+      const note = await mockInvoke<{ page_id: string }>("ingest_note", {
+        bodyJson: JSON.stringify([
+          {
+            type: "paragraph",
+            content:
+              "Recording saved. Open Recording & transcript to transcribe.",
+          },
+        ]),
+        clientHint: args.client,
+        title: "Saved meeting",
+      });
+      const rec: SavedRecording = {
+        retain_audio: mockRecordingKeepAudio,
+        id: uid(),
+        page_id: note.page_id,
+        title: "Saved meeting",
+        client: args.client || null,
+        started_at: now(),
+        duration_ms: 142000,
+        audio_path: `mock://${note.page_id}.wav`,
+        audio_available: true,
+        model_used: null,
+        transcript_state: "pending",
+        transcript_error: null,
+      };
+      (d.recordings ??= []).push(rec);
+      previewMeetings.add(note.page_id);
+      commit();
+      return {
+        keep_audio: rec.retain_audio,
+        audio_path: rec.audio_path,
+        duration_ms: rec.duration_ms,
+        page_id: note.page_id,
+      } as T;
+    }
+    case "recording_history":
+      return (d.recordings ?? []).map((m) => ({
+        ...m,
+        title: d.pages.find((p) => p.id === m.page_id)?.title ?? m.title,
+      })) as T;
+    case "transcript_versions":
+      return (d.transcriptVersions?.[args.pageId] ?? []) as T;
+    case "cancel_transcription":
+      cancelledTranscriptions.add(args.pageId);
+      return undefined as T;
+    case "retranscribe_meeting": {
+      const m = d.recordings?.find((m) => m.page_id === args.pageId);
+      if (!m?.audio_available)
+        throw new Error(
+          "Original audio is unavailable. Saved text is still available.",
+        );
+      cancelledTranscriptions.delete(args.pageId);
+      m.transcript_state = "transcribing";
+      commit();
+      const expected = d.documents[args.pageId] ?? "[]";
+      const segments = await mockInvoke<TranscriptSegment[]>("transcribe", {});
+      if (cancelledTranscriptions.has(args.pageId)) {
+        m.transcript_state = "error";
+        m.transcript_error = "Transcription cancelled; audio and text kept.";
+        commit();
+        throw new Error(m.transcript_error);
+      }
+      const body = JSON.stringify([
+        { type: "heading", props: { level: 2 }, content: "Transcript" },
+        ...segments.map((s) => ({
+          type: "paragraph",
+          content: `[00:${String(Math.floor(s.start_ms / 1000)).padStart(2, "0")}] ${s.text}`,
+        })),
+      ]);
+      const versions = (d.transcriptVersions ??= {})[args.pageId] ?? [];
+      versions.unshift(
+        {
+          id: uid(),
+          created_at: now(),
+          model: args.modelId ?? "Whisper Base",
+          language: args.language,
+          body_json: body,
+          reason: "Transcribed from saved audio",
+        },
+        {
+          id: uid(),
+          created_at: now(),
+          model: m.model_used,
+          language: null,
+          body_json: d.documents[args.pageId] ?? "[]",
+          reason: "Before re-transcription",
+        },
+      );
+      d.transcriptVersions[args.pageId] = versions;
+      const applied = expected === d.documents[args.pageId];
+      if (applied) d.documents[args.pageId] = body;
+      m.transcript_state = "saved";
+      m.transcript_error = null;
+      m.model_used = args.modelId ?? "Whisper Base";
+      commit();
+      return { body_json: body, segments, applied } as T;
+    }
     case "record_meeting":
       previewMeetings.add(args.pageId);
       return undefined as T; // mock: no-op (meeting metadata persistence)
     case "list_models":
       return mockModels() as T;
     case "download_model": {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
       const m = mockModelState();
       m[args.id] = { downloaded: true, selected: m[args.id]?.selected ?? false };
       saveModelState(m);

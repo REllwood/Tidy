@@ -49,7 +49,7 @@ public distribution. Build caches are reused, and earlier build directories are 
 Use the exact directory printed at the end of the build:
 
 ```bash
-npm run release:notarise -- /absolute/path/to/release-builds/Tidy-0.2.1.XXXXXX tidy-notary
+npm run release:notarise -- /absolute/path/to/release-builds/Tidy-0.3.0.XXXXXX tidy-notary
 ```
 
 The script notarises and staples the app first, creates a DMG with an Applications
@@ -67,13 +67,13 @@ submitting again. No failed or incomplete attempt is automatically uploaded.
 
 Once the source/version tag and finished download have been reviewed, upload the exact
 verified DMG and its SHA256SUMS.txt through the repository's New Release page. Use a new
-`v0.2.1` tag tied to the matching source, not an unrelated commit. Save it as a draft for a
+`v0.3.0` tag tied to the matching source, not an unrelated commit. Save it as a draft for a
 final download/launch check on a separate Mac, then publish it to make it public.
 
 The equivalent upload command, once a matching tag already exists on GitHub, is:
 
 ```bash
-gh release create v0.2.1 /absolute/path/Tidy_0.2.1_aarch64.dmg /absolute/path/SHA256SUMS.txt --repo REllwood/Tidy --verify-tag --draft --title "Tidy v0.2.1" --notes-file /absolute/path/release-notes.md
+gh release create v0.3.0 /absolute/path/Tidy_0.3.0_aarch64.dmg /absolute/path/SHA256SUMS.txt --repo REllwood/Tidy --verify-tag --draft --title "Tidy v0.3.0" --notes-file /absolute/path/release-notes.md
 ```
 
 This command creates a draft, refuses a missing tag and does not overwrite an existing
@@ -87,7 +87,7 @@ The current build targets Apple Silicon. The configured minimum macOS version is
 test that version separately before claiming support. Intel, Windows and Linux are not
 included. Signing fixes distribution trust, not application bugs or OS compatibility.
 
-Version 0.1.3 is the public signed replacement. Version 0.1.2 remains available as an older,
+Version 0.1.3 was the first public signed replacement. Version 0.1.2 remains available as an older,
 ad-hoc signed release.
 
 For v0.1.3, no source commit was created. Its tag refers to base commit
@@ -111,3 +111,45 @@ for model downloads, synthetic inference tests and current product limitations.
 Version 0.2.0 introduces managed AI, client-scoped meeting questions and progress reporting.
 For this and subsequent releases, commit the reviewed source and tag that exact commit
 before publishing. The build excludes local `.forge` working notes.
+
+## In-app updates
+
+Version 0.3.0 adds **Check for updates** in Settings and a prompt when a
+new version is available. Users choose whether to download and install it. Tidy
+saves pending editor changes and restarts after installation. Recording and
+transcription block installation. Automatic checks run after opening and every
+six hours, using GitHub; meeting content is not sent.
+
+People using v0.2.1 need to install the first updater-enabled release manually.
+The updater cannot be added remotely to a version that does not include it.
+
+Updater signatures are separate from Apple signing. The public key is in
+`src-tauri/tauri.conf.json`; the private key on the maintainer's Mac is at
+`~/.tidy-signing/updater.key`. Back up that key securely. Do not commit or share it.
+Keep using the same key for future releases. `TIDY_UPDATER_KEY_PATH` can select a
+backup key location, with the matching public key in the adjacent `.pub` file.
+
+After notarisation and stapling, `prepare-updater.sh` creates and signs
+`Tidy.app.tar.gz`, verifies its signature (including rejection of changed bytes),
+and writes `latest.json`. Packaging happens after stapling so the downloaded app
+contains its notarisation ticket. The script checks that the key matches the app's
+source snapshot and does not overwrite an earlier attempt.
+
+Upload these files to the same versioned GitHub release:
+
+- The verified DMG and `SHA256SUMS.txt`
+- `Tidy.app.tar.gz` and `Tidy.app.tar.gz.sig`
+- `latest.json`
+
+The manifest points to the archive under that exact release tag. Publish only once
+all files are uploaded. It currently includes Apple Silicon only. A missing feed,
+failed download or invalid signature produces an error; it is not reported as an
+up-to-date result. Nothing is installed automatically in the browser preview.
+
+The release checks exercise signature verification and the actual updater installer
+against an isolated app fixture. A full upgrade between running app versions on a
+separate Mac, including the Applications permission prompt and restart, remains
+an additional manual check. The fixture test does not launch the app or open a
+user workspace.
+
+Reference: [Tauri updater](https://v2.tauri.app/plugin/updater/).

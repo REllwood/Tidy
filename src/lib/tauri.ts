@@ -1,3 +1,4 @@
+import { trackWrite } from "./pendingEdits";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { CommandError } from "./errors";
 import { mockInvoke } from "@/lib/mock/backend";
@@ -16,9 +17,9 @@ export async function invoke<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   try {
-    return await (isTauri()
-      ? tauriInvoke<T>(cmd, args)
-      : mockInvoke<T>(cmd, args ?? {}));
+    const request = isTauri() ? tauriInvoke<T>(cmd, args) : mockInvoke<T>(cmd, args ?? {});
+    const writes = ["update_document", "update_document_if_unchanged", "rename_page", "set_cell", "update_field", "update_view", "create_page", "set_page_links"];
+    return await (writes.includes(cmd) ? trackWrite(request) : request);
   } catch (error) {
     throw error instanceof Error ? error : new CommandError(error);
   }

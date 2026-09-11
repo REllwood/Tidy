@@ -1,32 +1,17 @@
 use super::{db, AiState, Config, Progress};
 use crate::error::{AppError, AppResult};
 use futures_util::StreamExt;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[derive(Clone, Serialize)]
-pub struct Model {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub size: u64,
-    pub purpose: &'static str,
-    pub description: &'static str,
-    pub url: &'static str,
-    pub sha256: &'static str,
+pub use crate::model_catalogue::ModelDefinition as Model;
+pub fn all() -> AppResult<&'static [Model]> {
+    Ok(&crate::model_catalogue::catalogue()?.ai)
 }
-pub const MODELS:&[Model]=&[
-    Model {id:"qwen3-4b",name:"Qwen 3 · Balanced",size:2497280256,purpose:"chat",description:"Recommended for 16 GB Macs. Summaries and meeting answers.",
-        url:"https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf",sha256:"7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"},
-    Model {id:"qwen3-small",name:"Qwen 3 · Lightweight",size:639446688,purpose:"chat",description:"Uses less memory. Less reliable on complex questions; review its answers.",
-        url:"https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf",sha256:"9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"},
-    Model {id:"nomic-embed",name:"Meeting search",size:146146432,purpose:"embedding",description:"Finds related transcript passages, even when the wording differs.",
-        url:"https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/0188c9bf409793f810680a5a431e7b899c46104c/nomic-embed-text-v1.5.Q8_0.gguf",sha256:"3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"},
-];
 pub fn model(id: &str) -> AppResult<&'static Model> {
-    MODELS
+    all()?
         .iter()
         .find(|m| m.id == id)
         .ok_or_else(|| AppError::Invalid("Unknown local AI model".into()))
@@ -39,7 +24,7 @@ pub fn path(app: &AppHandle, id: &str) -> AppResult<PathBuf> {
     Ok(dir(app)?.join(format!("{id}.gguf")))
 }
 pub fn installed(app: &AppHandle, m: &Model) -> bool {
-    path(app, m.id)
+    path(app, &m.id)
         .ok()
         .and_then(|p| std::fs::metadata(p).ok())
         .is_some_and(|meta| meta.len() == m.size)
@@ -105,7 +90,7 @@ pub async fn download(app: &AppHandle, id: &str, state: &AiState) -> AppResult<(
         .map_err(|e| AppError::Other(e.to_string()))?;
     let response = tokio::select! {
         _=state.cancelled()=>return Err(AppError::Other("Download cancelled".into())),
-        r=client.get(m.url).send()=>r.map_err(|e|AppError::Other(e.to_string()))?.error_for_status().map_err(|e|AppError::Other(e.to_string()))?
+        r=client.get(&m.url).send()=>r.map_err(|e|AppError::Other(e.to_string()))?.error_for_status().map_err(|e|AppError::Other(e.to_string()))?
     };
     let mut output = tokio::fs::OpenOptions::new()
         .write(true)

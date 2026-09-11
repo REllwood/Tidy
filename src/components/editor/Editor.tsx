@@ -1,3 +1,9 @@
+import { registerPendingEdits } from "@/lib/pendingEdits";
+import { listen } from "@tauri-apps/api/event";
+import { errorMessage } from "@/lib/errors";
+import { Button } from "@/components/ui/button";
+import { Loader2 } from "lucide-react";
+import { isTauri } from "@/lib/tauri";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BlockNoteView } from "@blocknote/mantine";
@@ -18,6 +24,7 @@ import { AiAssist } from "@/features/ai/AiAssist";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FeatureTip } from "@/components/help/FeatureTip";
 
+import { MeetingRecordingPanel } from "@/features/meeting/MeetingRecordingPanel";
 import { MeetingSummaryPanel } from "@/features/meeting/MeetingSummaryPanel";
 
 const Kbd = ({ children }: { children: React.ReactNode }) => (
@@ -40,20 +47,26 @@ function EditorInner({
   const qc = useQueryClient();
   const editor = useCreateBlockNote({ initialContent });
   const [saving, setSaving] = useState(false);
-  const pane = useUi(s => s.activePane);
-  const sourceBlock = pane.kind === "page" && pane.pageId === pageId ? pane.blockId : undefined;
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const lastSave = useRef<Promise<void>>(Promise.resolve());
+  const pane = useUi((s) => s.activePane);
+  const sourceBlock =
+    pane.kind === "page" && pane.pageId === pageId ? pane.blockId : undefined;
   useEffect(() => {
     if (!sourceBlock) return;
     const frame = requestAnimationFrame(() => {
-      const element = document.querySelector(`[data-id="${CSS.escape(sourceBlock)}"]`);
-      element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const element = document.querySelector(
+        `[data-id="${CSS.escape(sourceBlock)}"]`,
+      );
+      element?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
     return () => cancelAnimationFrame(frame);
   }, [sourceBlock, editor]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<string | null>(null);
 
-  const flush = () => {
+  const flush = (): Promise<void> => {
     if (timer.current) {
       clearTimeout(timer.current);
       timer.current = null;
@@ -61,13 +74,28 @@ function EditorInner({
     if (pending.current !== null) {
       const content = pending.current;
       pending.current = null;
-      documentsApi
-        .update(pageId, content)
-        .catch((e) => console.error("autosave failed", e))
-        .finally(() => {
+      setSaving(true);
+      // A failed earlier save is already reported below. Allow a newer edit or
+      // explicit retry to save, while keeping the promise rejectable for callers.
+      lastSave.current = lastSave.current
+        .catch(() => undefined)
+        .then(() => documentsApi.update(pageId, content));
+      const thisSave = lastSave.current;
+      void thisSave.then(
+        () => {
+          if (lastSave.current === thisSave) {
+            setSaving(false);
+            setSaveError(null);
+          }
+          void qc.invalidateQueries({ queryKey: ["pages"] });
+        },
+        (error) => {
+          if (lastSave.current !== thisSave) return;
+          if (pending.current === null) pending.current = content;
           setSaving(false);
-          qc.invalidateQueries({ queryKey: ["pages"] });
-        });
+          setSaveError(errorMessage(error));
+        },
+      );
       // extract wiki-links + tags → knowledge graph (backlinks)
       try {
         const { links, tags } = extractLinksAndTags(editor.document as Block[]);
@@ -79,7 +107,41 @@ function EditorInner({
         /* non-fatal */
       }
     }
+    return lastSave.current;
   };
+
+  const saveRef = useRef(flush);
+  saveRef.current = flush;
+  useEffect(() => registerPendingEdits(() => saveRef.current()), []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const listening = listen<{ page_id: string; body_json: string }>(
+      "meeting-transcript-updated",
+      async ({ payload }) => {
+        if (payload.page_id !== pageId || pending.current !== null) return;
+        try {
+          await lastSave.current;
+          const stored = await documentsApi.get(pageId);
+          if (
+            !disposed &&
+            pending.current === null &&
+            stored === payload.body_json
+          )
+            editor.replaceBlocks(editor.document, JSON.parse(stored));
+        } catch (error) {
+          console.error("Could not refresh the saved transcript", error);
+        }
+      },
+    );
+    return () => {
+      disposed = true;
+      void listening
+        .then((unlisten) => unlisten())
+        .catch((error) => console.error("Transcript listener cleanup", error));
+    };
+  }, [pageId, editor]);
 
   // Save on the editor's change events (debounced); flush on unmount + window blur.
   useEffect(() => {
@@ -106,6 +168,37 @@ function EditorInner({
           <AiAssist editor={editor} />
         </div>
         <PageHeader pageId={pageId} saving={saving} />
+        {saveError && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border border-danger-c p-3 text-sm"
+          >
+            <p>Changes could not be saved: {saveError}</p>
+            <Button
+              className="mt-2"
+              variant="secondary"
+              disabled={saving}
+              onClick={() => {
+                void flush().catch(() => undefined);
+              }}
+            >
+              {saving && <Loader2 className="size-4 animate-spin" />}Retry save
+            </Button>
+          </div>
+        )}
+        <MeetingRecordingPanel
+          pageId={pageId}
+          beforeTranscribe={flush}
+          onBusy={setTranscribing}
+          onResult={(result) => {
+            if (result.applied) {
+              editor.replaceBlocks(
+                editor.document,
+                JSON.parse(result.body_json),
+              );
+            }
+          }}
+        />
         <MeetingSummaryPanel pageId={pageId} />
         <FeatureTip id="wikilinks">
           Type <Kbd>/</Kbd> for blocks, <Kbd>[[</Kbd> to link another page, or{" "}
@@ -113,6 +206,7 @@ function EditorInner({
         </FeatureTip>
         <BlockNoteView
           editor={editor}
+          editable={!transcribing}
           theme={dark ? "dark" : "light"}
           className="tidy-editor"
         />

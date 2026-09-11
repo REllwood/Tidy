@@ -38,6 +38,8 @@ const AskMeetings = lazy(() =>
   })),
 );
 
+const RecordingHistory = lazy(() => import("@/features/meeting/RecordingHistory").then(m=>({default:m.RecordingHistory})));
+
 /** Content router, dispatches the active pane to its surface. */
 export function ContentPane() {
   const pane = useUi((s) => s.activePane);
@@ -46,6 +48,9 @@ export function ContentPane() {
   switch (pane.kind) {
     case "page":
       body = <PageRouter pageId={pane.pageId} />;
+      break;
+    case "history":
+      body = <RecordingHistory />;
       break;
     case "ask":
       body = <AskMeetings />;

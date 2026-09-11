@@ -4,17 +4,19 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "@/lib/tauri";
 import {
   recordingApi,
-  transcribeApi,
+  recordingHistoryApi,
+  recordingPreferencesApi,
   diarizeApi,
   pagesApi,
   documentsApi,
-  ingestApi,
-  modelsApi,
-  type MeetingSummary,
 } from "@/lib/api";
-import { localAi } from "@/lib/localAi";
+import { errorMessage } from "@/lib/errors";
 import { useUi } from "@/store/ui";
-import { buildMeetingBlocks, assignSpeakers, type LabeledSegment } from "./meetingDoc";
+import {
+  buildMeetingBlocks,
+  assignSpeakers,
+  type LabeledSegment,
+} from "./meetingDoc";
 
 export type MeetingPhase =
   | "idle"
@@ -28,6 +30,7 @@ export type MeetingPhase =
 
 export interface MeetingState {
   phase: MeetingPhase;
+  keepAudio: boolean;
   elapsedMs: number;
   levels: { mic: number; system: number };
   sources: { mic: boolean; system: boolean };
@@ -41,6 +44,7 @@ export interface MeetingState {
 
 const initial: MeetingState = {
   phase: "idle",
+  keepAudio: false,
   elapsedMs: 0,
   levels: { mic: 0, system: 0 },
   sources: { mic: true, system: true },
@@ -92,31 +96,35 @@ export function useMeetingFlow() {
           await listen<{ mic: number; system: number }>("audio-level", (e) =>
             patch({ levels: e.payload }),
           ),
-          await listen<{ mic: boolean; system: boolean }>("recording-sources", (e) =>
-            patch({ sources: e.payload }),
+          await listen<{ mic: boolean; system: boolean }>(
+            "recording-sources",
+            (e) => patch({ sources: e.payload }),
           ),
           await listen<string>("live-transcript", (e) =>
             patch({ liveTranscript: e.payload }),
           ),
         );
-        await recordingApi.start();
-        patch({ phase: "recording" });
+        const keepAudio = await recordingApi.start();
+        patch({ phase: "recording", keepAudio });
       } else {
         // Browser/mock: self-drive timer + fake levels so the UI is demoable.
-        await recordingApi.start();
-        patch({ phase: "recording" });
+        const keepAudio = await recordingApi.start();
+        patch({ phase: "recording", keepAudio });
         const t0 = Date.now();
         mockTimer.current = setInterval(() => {
           patch({
             elapsedMs: Date.now() - t0,
-            levels: { mic: Math.random() < 0.2 ? 0 : 0.002 + Math.random() * 0.04, system: Math.random() < 0.3 ? 0 : 0.001 + Math.random() * 0.03 },
+            levels: {
+              mic: Math.random() < 0.2 ? 0 : 0.002 + Math.random() * 0.04,
+              system: Math.random() < 0.3 ? 0 : 0.001 + Math.random() * 0.03,
+            },
           });
         }, 150);
       }
     } catch (e) {
       cleanup();
       busy.current = false;
-      patch({ phase: "error", error: String(e) });
+      patch({ phase: "error", error: errorMessage(e) });
     }
   }, [cleanup]);
 
@@ -126,6 +134,7 @@ export function useMeetingFlow() {
     stopping.current = true;
     cleanup();
     let progressUnlisten: UnlistenFn | null = null;
+    let savedPage: string | null = null;
     try {
       patch({ phase: "transcribing", transcribeProgress: 0 });
       if (isTauri()) {
@@ -133,16 +142,24 @@ export function useMeetingFlow() {
           patch({ transcribeProgress: e.payload }),
         );
       }
-      const rec = await recordingApi.stop();
-      const modelUsed = (await modelsApi.list()).find((m) => m.selected)?.name ?? null;
-      const segments = await transcribeApi.run(rec.audio_path);
-      patch({ transcribeProgress: 100 });
-
-      // Persist the original transcript before any optional AI or speaker labelling.
-      patch({ phase: "saving" });
-      const { pageId, bodyJson } = await fileMeeting(segments, null, false, clientRef.current);
+      const rec = await recordingApi.stop(clientRef.current);
+      if (!rec.page_id)
+        throw new Error(
+          "Recording saved, but its meeting page could not be opened. Check Recording history.",
+        );
+      const pageId = rec.page_id;
+      savedPage = pageId;
       patch({ savedPageId: pageId });
-      await recordingApi.record(pageId, rec.duration_ms, rec.audio_path, modelUsed);
+      const now = new Date();
+      await pagesApi.rename(
+        pageId,
+        `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
+      );
+      await qc.invalidateQueries({ queryKey: ["recording-history"] });
+      const result = await recordingHistoryApi.transcribe(pageId);
+      const segments = result.segments;
+      const bodyJson = result.body_json;
+      patch({ transcribeProgress: 100, phase: "saving" });
 
       // Speaker diarization (optional; native-only, models must be installed).
       let labeled: LabeledSegment[] = segments;
@@ -157,18 +174,32 @@ export function useMeetingFlow() {
         }
       }
 
-      if (labeled !== segments) {
-        await documentsApi.updateIfUnchanged(pageId, bodyJson, JSON.stringify(buildMeetingBlocks(labeled, null, false)));
+      if (result.applied && labeled !== segments) {
+        await documentsApi.updateIfUnchanged(
+          pageId,
+          bodyJson,
+          JSON.stringify(buildMeetingBlocks(labeled, null, false)),
+        );
       }
       qc.invalidateQueries();
       patch({ phase: "done", savedPageId: pageId });
     } catch (e) {
-      patch({ phase: "error", error: String(e) });
+      patch({ phase: "error", error: errorMessage(e) });
     } finally {
+      if (savedPage) {
+        try {
+          await recordingPreferencesApi.finish(savedPage);
+        } catch (error) {
+          patch({
+            phase: "error",
+            error: `Temporary audio could not be cleared: ${errorMessage(error)}`,
+          });
+        }
+      }
       progressUnlisten?.();
       stopping.current = false;
       busy.current = false;
-      await localAi.endRecording().catch(e => patch({ error: String(e) }));
+      await qc.invalidateQueries();
     }
   }, [cleanup, qc, diarizeEnabled]);
 
@@ -180,39 +211,4 @@ export function useMeetingFlow() {
   }, [cleanup]);
 
   return { state, start, stop, reset, setClient };
-}
-
-/**
- * File the meeting through the shared `ingest_note` pipeline: it creates the
- * record page, files it under the client (creating one if needed), links it,
- * and turns action items into Task rows, while we keep the rich diarized
- * transcript by passing it as the pre-rendered `bodyJson`.
- */
-async function fileMeeting(
-  segments: LabeledSegment[],
-  summary: MeetingSummary | null,
-  ollamaUsed: boolean,
-  client: string,
-): Promise<{ pageId: string; bodyJson: string }> {
-  const now = new Date();
-  const title = `Meeting ${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-  const blocks = buildMeetingBlocks(segments, summary, ollamaUsed);
-
-  const bodyJson = JSON.stringify(blocks);
-  const res = await ingestApi.ingestNote({
-    rawText: segments.map((s) => s.text).join(" "),
-    bodyJson,
-    title,
-    clientHint: client.trim() || undefined,
-    actionItems: summary?.action_items ?? [],
-  });
-  await pagesApi.setIcon(res.page_id, "🎙️").catch(() => {});
-
-  // With no client, keep the old default of grouping under "Meeting Notes".
-  if (!client.trim()) {
-    const pages = await pagesApi.list();
-    const parent = pages.find((p) => p.title.toLowerCase() === "meeting notes")?.id;
-    if (parent) await pagesApi.move(res.page_id, parent, 999).catch(() => {});
-  }
-  return { pageId: res.page_id, bodyJson };
 }

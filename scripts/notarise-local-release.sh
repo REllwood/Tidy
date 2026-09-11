@@ -60,5 +60,6 @@ APPLE_TEAM_ID="$team" bash "$root/scripts/verify-macos-release.sh" "$app" "$dmg"
   cd "$attempt"
   shasum -a 256 "Tidy_${version}_aarch64.dmg" > SHA256SUMS.txt
 )
+bash "$root/scripts/prepare-updater.sh" "$attempt" "$run_dir"
 echo "Verified release download: $dmg"
 echo 'Ready for upload to a GitHub release. Nothing has been uploaded or published.'

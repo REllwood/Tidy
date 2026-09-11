@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  A calmer place for your notes, tasks and meetings.<br />
-  Record a conversation, keep the useful details, and ask across your client's meeting history.
+  Notes, tasks and meeting transcripts on your Mac.<br />
+  Record meetings and ask questions across each client's meeting history.
 </p>
 
 <p align="center">
@@ -23,11 +23,11 @@
 
 Tidy brings a block editor, daily planner, relational tables and meeting recorder into one Mac app. Notes link to pages, dated tasks appear in your agenda, and recordings become a searchable meeting library.
 
-No Tidy account, subscription or telemetry. Your workspace lives on your Mac. Optional model downloads need an internet connection; transcription and built-in AI processing run locally after setup.
+No Tidy account, subscription or telemetry. Your workspace lives on your Mac. Model downloads and update checks use an internet connection; transcription and built-in AI processing run locally after setup.
 
 ## Install
 
-Download [Tidy v0.2.1 for Apple Silicon](https://github.com/REllwood/Tidy/releases/download/v0.2.1/Tidy_0.2.1_aarch64.dmg), open the DMG and drag **Tidy** into **Applications**.
+Download [Tidy v0.3.0 for Apple Silicon](https://github.com/REllwood/Tidy/releases/download/v0.3.0/Tidy_0.3.0_aarch64.dmg), open the DMG and drag **Tidy** into **Applications**.
 
 | | Current release |
 | --- | --- |
@@ -36,9 +36,17 @@ Download [Tidy v0.2.1 for Apple Silicon](https://github.com/REllwood/Tidy/releas
 | Distribution | Developer ID signed and notarised by Apple |
 | Verification | Signatures, notarisation tickets and Gatekeeper acceptance checked, including the app inside the DMG |
 
-The [release page](https://github.com/REllwood/Tidy/releases/tag/v0.2.1) includes a SHA-256 checksum and upgrade notes. Intel, Windows and Linux installers are not included.
+The [release page](https://github.com/REllwood/Tidy/releases/tag/v0.3.0) includes a SHA-256 checksum and upgrade notes. Intel, Windows and Linux installers are not included.
 
 On upgrade, existing transcripts remain in place while older meeting indexes queue for rebuilding. Keep Tidy open with local AI enabled until preparation completes. Use **Regenerate notes** to refresh an existing summary. macOS may ask for microphone and screen-recording permissions again after the application identifier change.
+
+**Updating from v0.2.1:** install v0.3.0 manually using the DMG. Future releases can
+be installed through **Settings → Updates**. Tidy checks for updates automatically;
+you choose when to download, install and restart.
+
+**Audio is off by default.** Turn on **Settings → Recording → Keep meeting audio**
+before a meeting if you want to export or re-transcribe its audio later. Existing
+saved audio is preserved. [Recording history and recovery limits](docs/MEETING-RELIABILITY.md).
 
 ## From a conversation to useful notes
 
@@ -83,6 +91,15 @@ In **Settings → Local AI**, choose **Enable local AI** to download the recomme
 | Nomic meeting search | Find related transcript passages | 146 MB |
 
 The app bundles the inference runtime. **Ollama is optional**, available as an advanced provider. Models load one at a time, and recording pauses background AI work. A 16 GB Mac is offered the balanced model, but speed and memory pressure depend on the meeting and other open apps; we have not benchmarked the full workflow on an M1 with 16 GB. [Setup, model licences and limits](docs/LOCAL-AI.md).
+
+### More model choices
+
+Version 0.3.0 expands transcription to 12 Whisper options, including
+English-only models, Large V3, Turbo and compressed versions. It also adds Qwen
+answer models at 1.7B, 8B, 14B and 32B alongside the existing 0.6B and 4B choices.
+Settings shows download sizes, suggested RAM and filters for lower-memory,
+everyday and larger models. Suggestions do not prevent users choosing another
+model. RAM guidance is an estimate, and the full range has not been benchmarked across Mac models.
 
 ## Keep the rest of your work close
 

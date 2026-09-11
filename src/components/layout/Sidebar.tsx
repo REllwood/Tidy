@@ -136,6 +136,7 @@ export function Sidebar() {
             active={pane.kind === "ask"}
             onClick={() => setActivePane({ kind: "ask" })}
           />
+          <NavButton icon={<Mic className="size-4" />} label="Recording history" active={pane.kind === "history"} onClick={() => setActivePane({kind: "history"})} />
           <NavButton
             icon={<Waypoints className="size-4" />}
             label="Graph view"

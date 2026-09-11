@@ -27,6 +27,7 @@ struct TickEvent {
 }
 
 pub struct RecordingSession {
+    keep_audio: bool,
     stop: Arc<AtomicBool>,
     mic_buf: Arc<Mutex<Vec<f32>>>,
     sys_buf: Arc<Mutex<Vec<f32>>>,
@@ -39,11 +40,17 @@ pub struct RecordingSession {
 /// Result of stopping a recording.
 #[derive(Serialize)]
 pub struct Recording {
+    pub keep_audio: bool,
     pub audio_path: String,
     pub duration_ms: i64,
+    pub page_id: Option<String>,
 }
 
-pub fn start(app: AppHandle, model_path: Option<PathBuf>) -> AppResult<RecordingSession> {
+pub fn start(
+    app: AppHandle,
+    model_path: Option<PathBuf>,
+    keep_audio: bool,
+) -> AppResult<RecordingSession> {
     let stop = Arc::new(AtomicBool::new(false));
     let mic_buf = Arc::new(Mutex::new(Vec::<f32>::new()));
     let sys_buf = Arc::new(Mutex::new(Vec::<f32>::new()));
@@ -120,6 +127,7 @@ pub fn start(app: AppHandle, model_path: Option<PathBuf>) -> AppResult<Recording
     });
 
     Ok(RecordingSession {
+        keep_audio,
         stop,
         mic_buf,
         sys_buf,
@@ -141,21 +149,34 @@ pub fn stop(app: &AppHandle, mut session: RecordingSession) -> AppResult<Recordi
     if let Some(h) = session.live_handle.take() {
         let _ = h.join();
     }
-    let mic = session.mic_buf.lock().unwrap().clone();
-    let sys = session.sys_buf.lock().unwrap().clone();
+    let mic = std::mem::take(&mut *session.mic_buf.lock().unwrap());
+    let sys = std::mem::take(&mut *session.sys_buf.lock().unwrap());
     let mic_rate = session.mic_rate.load(Ordering::Relaxed);
 
     let mixed = combine_sources(&mic, mic_rate, &sys, SYSTEM_RATE);
     let duration_ms = (mixed.len() as i64 * 1000) / WHISPER_RATE as i64;
 
-    let dir = app_recordings_dir(app)?;
+    let dir = if session.keep_audio {
+        app_recordings_dir(app)?
+    } else {
+        app_recordings_dir(app)?.join("temporary")
+    };
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.wav", session.started_at));
-    write_wav(&path, &mixed)?;
+    let path = dir.join(format!(
+        "{}-{}.wav",
+        session.started_at,
+        crate::db::new_id()
+    ));
+    let partial = path.with_extension("partial");
+    write_wav(&partial, &mixed)?;
+    std::fs::File::open(&partial)?.sync_all()?;
+    std::fs::rename(&partial, &path)?;
 
     Ok(Recording {
+        keep_audio: session.keep_audio,
         audio_path: path.to_string_lossy().to_string(),
         duration_ms,
+        page_id: None,
     })
 }
 
@@ -201,8 +222,21 @@ fn spawn_live_transcription(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let mic = mic_buf.lock().unwrap().clone();
-            let sys = sys_buf.lock().unwrap().clone();
+            // Copy only the preview window, not the entire meeting every 2.5 seconds.
+            let mic = {
+                let samples = mic_buf.lock().unwrap();
+                samples[samples
+                    .len()
+                    .saturating_sub(mic_rate.load(Ordering::Relaxed) as usize * 15)..]
+                    .to_vec()
+            };
+            let sys = {
+                let samples = sys_buf.lock().unwrap();
+                samples[samples
+                    .len()
+                    .saturating_sub(super::system::SYSTEM_RATE as usize * 15)..]
+                    .to_vec()
+            };
             let mixed = super::pipeline::combine_sources(
                 &mic,
                 mic_rate.load(Ordering::Relaxed),
@@ -221,7 +255,9 @@ fn spawn_live_transcription(
                 continue; // skip silent windows (cheap VAD gate)
             }
             let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(threads);
+            params.set_n_threads(threads.min(4));
+            params.set_translate(false);
+            params.set_language(Some("en"));
             params.set_print_special(false);
             params.set_print_progress(false);
             params.set_print_realtime(false);
