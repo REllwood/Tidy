@@ -46,3 +46,6 @@ release-builds/
 
 # Local upstream API reference
 docs/ai/llama-server-reference.txt
+
+# Local planning notes and design drafts
+.forge/
