@@ -23,7 +23,9 @@ app_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a
 COPYFILE_DISABLE=1 tar -czf "$attempt/Tidy.app.tar.gz" -C "$attempt" Tidy.app
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
   npx tauri signer sign --private-key-path "$key" "$attempt/Tidy.app.tar.gz" > "$attempt/updater-signing.log"
-node scripts/write-update-manifest.mjs "$attempt" "$version"
+notes_file="$build/source/docs/releases/v$version.md"
+[[ -f "$notes_file" ]] || { echo "Release notes are missing: $notes_file" >&2; exit 1; }
+node scripts/write-update-manifest.mjs "$attempt" "$version" "$notes_file"
 (
   cd "$build/source"
   CARGO_TARGET_DIR="$root/target" TIDY_UPDATE_FIXTURE="$attempt/Tidy.app.tar.gz" DYLD_FALLBACK_LIBRARY_PATH=/usr/lib/swift \

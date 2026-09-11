@@ -36,6 +36,7 @@ export CARGO_TARGET_DIR="$root/target"
   cargo test -p tidy-core --locked
   bash scripts/build-sidecar.sh
   TIDY_AI_BUILD_CACHE="$root/target/tidy-ai-runtime" bash scripts/build-ai-runtime.sh
+  DYLD_FALLBACK_LIBRARY_PATH=/usr/lib/swift cargo test -p tidy --lib --locked
   echo 'Building and signing Tidy with the certificate in Keychain...'
   # Notarisation is a separate step using a Keychain profile; no exported key or
   # Apple password is passed to Tauri or stored in the source snapshot.

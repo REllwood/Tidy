@@ -187,9 +187,11 @@ mod tests {
         std::fs::write(destination.join("Contents/MacOS/tidy"), b"Synthetic previous application").unwrap();
         let config: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let pubkey = config["plugins"]["updater"]["pubkey"].as_str().unwrap();
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert("updater".into(), config["plugins"]["updater"].clone());
         let app = tauri::test::mock_builder()
             .plugin(tauri_plugin_updater::Builder::new().pubkey(pubkey).build())
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .build(context)
             .unwrap();
         let updater = app.handle().updater_builder()
             .executable_path(destination.join("Contents/MacOS/tidy"))
