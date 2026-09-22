@@ -1,20 +1,43 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Loader2, MessageSquare, Mic } from "lucide-react";
-import { localAi, aiStatusKey, meetingJobsKey } from "@/lib/localAi";
+import {
+  localAi,
+  aiStatusKey,
+  meetingJobsKey,
+  type AiStatus,
+  type MeetingJob,
+} from "@/lib/localAi";
+import { errorMessage } from "@/lib/errors";
+import { libraryInterval } from "@/features/meeting/polling";
 import { useUi } from "@/store/ui";
 import { useMeetingQuestion } from "@/features/meeting/meetingLibrary";
 
 export function MeetingMemory() {
   const setPane = useUi((s) => s.setActivePane);
+  const qc = useQueryClient();
+  // The dashboard is always on screen, so it only polls while the library is
+  // genuinely processing a meeting.
   const status = useQuery({
     queryKey: aiStatusKey,
     queryFn: localAi.status,
-    refetchInterval: 5000,
+    refetchInterval: (query) =>
+      libraryInterval(
+        qc.getQueryData<MeetingJob[]>(meetingJobsKey),
+        query.state.data?.progress,
+        !!query.state.data?.ready,
+      ),
   });
   const jobs = useQuery({
     queryKey: meetingJobsKey,
     queryFn: localAi.jobs,
-    refetchInterval: 5000,
+    refetchInterval: (query) => {
+      const ai = qc.getQueryData<AiStatus>(aiStatusKey);
+      return libraryInterval(
+        query.state.data as MeetingJob[] | undefined,
+        ai?.progress,
+        !!ai?.ready,
+      );
+    },
   });
   const ready = jobs.data?.filter((j) => j.indexed).length ?? 0;
   const active = jobs.data?.some((j) =>
@@ -55,7 +78,8 @@ export function MeetingMemory() {
             </p>
           ) : status.error || jobs.error ? (
             <p role="alert" className="text-xs text-danger-c">
-              Couldn't load the meeting library. Open Ask meetings to retry.
+              {errorMessage(status.error || jobs.error)} Open Ask meetings to
+              retry.
             </p>
           ) : (
             <div className="flex items-center justify-between gap-2 text-xs">

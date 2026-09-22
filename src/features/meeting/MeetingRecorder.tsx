@@ -1,5 +1,6 @@
-import { recordingPreferencesApi } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { listen } from "@tauri-apps/api/event";
 import {
   Mic,
   Volume2,
@@ -8,15 +9,31 @@ import {
   Check,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   CircleDot,
+  History,
+  RefreshCw,
 } from "lucide-react";
-import { modelsApi } from "@/lib/api";
+import {
+  modelsApi,
+  recordingHistoryApi,
+  recordingPreferencesApi,
+} from "@/lib/api";
+import { isTauri } from "@/lib/tauri";
+import { errorMessage } from "@/lib/errors";
 import { useUi } from "@/store/ui";
 import { type MeetingPhase } from "./useMeetingFlow";
 import { Button } from "@/components/ui/button";
 
 import { useSharedMeetingFlow } from "./MeetingFlowProvider";
 import { localAi, aiStatusKey, meetingJobsKey } from "@/lib/localAi";
+import { invalidateMeetingQueries } from "./invalidation";
+import { languageLabels, type TranscriptionLanguage } from "./transcriptionLanguage";
+import {
+  controlEnabled,
+  keepAudioNotice,
+  sourceWarning,
+} from "./recorderPresentation";
 
 import { AudioLevelMeter } from "./AudioLevelMeter";
 import { clientOptions } from "./meetingLibrary";
@@ -31,7 +48,8 @@ export function MeetingRecorder() {
     queryKey: ["recording-preferences"],
     queryFn: recordingPreferencesApi.get,
   });
-  const { state, start, stop, reset, setClient } = useSharedMeetingFlow();
+  const { state, language, setLanguage, start, stop, reset, cancelStart, setClient } =
+    useSharedMeetingFlow();
   const openPage = useUi((s) => s.openPage);
   const { data: models } = useQuery({
     queryKey: ["models"],
@@ -43,6 +61,8 @@ export function MeetingRecorder() {
   });
   const clients = useQuery({ queryKey: meetingJobsKey, queryFn: localAi.jobs });
   const selected = models?.find((m) => m.selected && m.downloaded);
+  const keepAudio = keepAudioNotice(state.phase, state.keepAudio, retention.data);
+  const blocked = retention.isPending || (!selected && !retention.data);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -54,11 +74,7 @@ export function MeetingRecorder() {
         </p>
 
         <p className="mb-5 text-sm text-text-muted">
-          {(
-            state.phase === "recording" || state.savedPageId
-              ? state.keepAudio
-              : retention.data
-          )
+          {keepAudio
             ? "Meeting audio will be kept for re-transcription."
             : "Audio is discarded after processing. Turn on Keep meeting audio in Settings if you want to re-transcribe later."}
         </p>
@@ -105,15 +121,11 @@ export function MeetingRecorder() {
               </span>
               <input
                 list="meeting-clients"
-                disabled={
-                  state.phase === "starting" ||
-                  retention.isPending ||
-                  (!selected && !retention.data)
-                }
+                disabled={!controlEnabled("start", state.phase) || blocked}
                 value={state.client}
                 onChange={(e) => setClient(e.target.value)}
                 placeholder="e.g. Acme Corp"
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
+                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-brand disabled:opacity-60"
               />
               <datalist id="meeting-clients">
                 {clientOptions(clients.data ?? []).map(([id, name]) => (
@@ -125,27 +137,46 @@ export function MeetingRecorder() {
                 same client can be searched together.
               </span>
             </label>
-            <Button
-              className="mt-4 w-full"
-              size="lg"
-              onClick={start}
-              disabled={
-                state.phase === "starting" ||
-                retention.isPending ||
-                (!selected && !retention.data)
-              }
-            >
-              {state.phase === "starting" || retention.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <CircleDot className="size-4" />
-              )}{" "}
-              {state.phase === "starting"
-                ? "Preparing recording…"
-                : retention.isPending
+            <LanguageChoice
+              value={language}
+              onChange={setLanguage}
+              disabled={!controlEnabled("start", state.phase)}
+            />
+            {state.phase === "starting" && (
+              <p
+                role="status"
+                className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
+              >
+                <Loader2 className="size-4 shrink-0 animate-spin" />
+                Preparing recording…
+              </p>
+            )}
+            {state.phase === "starting" ? (
+              <Button
+                className="mt-4 w-full"
+                size="lg"
+                variant="secondary"
+                onClick={() => void cancelStart()}
+              >
+                Cancel
+              </Button>
+            ) : (
+              <Button
+                className="mt-4 w-full"
+                size="lg"
+                onClick={() => void start()}
+                disabled={!controlEnabled("start", state.phase) || blocked}
+              >
+                {retention.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <CircleDot className="size-4" />
+                )}{" "}
+                {retention.isPending
                   ? "Loading recording settings…"
                   : "Start recording"}
-            </Button>
+              </Button>
+            )}
             <p className="mt-3 flex items-start gap-2 text-xs text-text-faint">
               <Lock className="mt-0.5 size-3.5 shrink-0" />
               Everything runs on your Mac. macOS will ask for microphone and
@@ -169,9 +200,19 @@ export function MeetingRecorder() {
             >
               {mmss(state.elapsedMs)}
             </div>
-            <div className="mb-6 inline-flex items-center gap-1.5 rounded-full bg-[color-mix(in_srgb,var(--success)_14%,transparent)] px-2.5 py-1 text-xs font-semibold text-success">
+            <div className="mb-5 inline-flex items-center gap-1.5 rounded-full bg-[color-mix(in_srgb,var(--success)_14%,transparent)] px-2.5 py-1 text-xs font-semibold text-success">
               <CircleDot className="size-3" /> On-device · nothing is uploaded
             </div>
+            {state.resumed && (
+              <p
+                role="status"
+                className="mb-4 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
+              >
+                Reconnected to a recording that was already running. Stop it
+                here when the meeting finishes.
+              </p>
+            )}
+            <SourceStatus sources={state.sources} />
             <SourceRow
               icon={<Mic className="size-4" />}
               name="Microphone"
@@ -200,7 +241,8 @@ export function MeetingRecorder() {
               variant="destructive"
               className="mt-6 w-full"
               size="lg"
-              onClick={stop}
+              disabled={!controlEnabled("stop", state.phase)}
+              onClick={() => void stop()}
             >
               <Square className="size-4" /> Stop &amp; transcribe
             </Button>
@@ -235,7 +277,7 @@ export function MeetingRecorder() {
               Your transcript is saved. Summaries and search will process in the
               meeting library when local AI is enabled.
             </p>
-            <div className="mt-5 flex justify-center gap-2">
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
               <Button
                 onClick={() => state.savedPageId && openPage(state.savedPageId)}
               >
@@ -248,29 +290,157 @@ export function MeetingRecorder() {
           </div>
         )}
 
-        {state.phase === "error" && (
-          <div className="workspace-panel p-6 sm:p-7">
-            <div className="flex items-center gap-2 font-semibold text-danger-c">
-              <AlertCircle className="size-5" /> Something went wrong
-            </div>
-            <p className="mt-2 text-sm text-text-muted">{state.error}</p>
-            {state.savedPageId && (
-              <Button
-                className="mt-4"
-                onClick={() => {
-                  if (state.savedPageId) openPage(state.savedPageId);
-                }}
-              >
-                Open saved recording
-              </Button>
-            )}
-            <Button className="mt-5" variant="secondary" onClick={reset}>
-              Try again
-            </Button>
-          </div>
-        )}
+        {state.phase === "error" && <RecorderError />}
       </div>
     </div>
+  );
+}
+
+function LanguageChoice({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: TranscriptionLanguage;
+  onChange: (value: TranscriptionLanguage) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="mt-4 block space-y-1">
+      <span className="text-xs font-medium text-text-faint">
+        Spoken language
+      </span>
+      <select
+        aria-label="Spoken language"
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onChange(e.target.value as TranscriptionLanguage)}
+        className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text outline-none focus:border-brand disabled:opacity-60"
+      >
+        <option value="en">{languageLabels.en}</option>
+        <option value="auto">{languageLabels.auto}</option>
+      </select>
+      <span className="block text-xs leading-relaxed text-text-faint">
+        Detect automatically suits meetings in another language. Transcription
+        keeps the spoken language; it does not translate.
+      </span>
+    </label>
+  );
+}
+
+/** The error card doubles as the recovery path for a meeting that was saved but not transcribed. */
+function RecorderError() {
+  const { state, reset, language } = useSharedMeetingFlow();
+  const qc = useQueryClient();
+  const openPage = useUi((s) => s.openPage);
+  const setPane = useUi((s) => s.setActivePane);
+  const [progress, setProgress] = useState<number | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const pageId = state.savedPageId;
+  const retry = useMutation({
+    mutationFn: async () => {
+      if (!pageId) throw new Error("This recording has no saved page yet.");
+      setProgress(null);
+      let unlisten: (() => void) | undefined;
+      try {
+        if (isTauri())
+          unlisten = await listen<number>("transcribe-progress", (e) => {
+            if (mounted.current) setProgress(e.payload);
+          });
+        return await recordingHistoryApi.transcribe(pageId, undefined, language);
+      } finally {
+        unlisten?.();
+        invalidateMeetingQueries(qc, pageId);
+      }
+    },
+  });
+  return (
+    <div className="workspace-panel p-6 sm:p-7">
+      <div className="flex items-center gap-2 font-semibold text-danger-c">
+        <AlertCircle className="size-5" /> Something went wrong
+      </div>
+      <p role="alert" className="mt-2 text-sm text-text-muted">
+        {state.error}
+      </p>
+      {pageId && (
+        <>
+          <p className="mt-3 text-sm text-text-muted">
+            The recording was saved. Its audio is kept until a transcript is
+            stored, so you can try transcribing it again.
+          </p>
+          {retry.error && (
+            <p role="alert" className="mt-3 text-sm text-danger-c">
+              {errorMessage(retry.error)}
+            </p>
+          )}
+          {retry.data && (
+            <p role="status" className="mt-3 text-sm text-success">
+              {retry.data.applied
+                ? "Transcript saved to the meeting note."
+                : "A new version was saved in Recording history because the page had changed."}
+            </p>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              disabled={retry.isPending}
+              onClick={() => retry.mutate()}
+            >
+              {retry.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              {retry.isPending
+                ? `Transcribing…${progress === null ? "" : ` ${progress}%`}`
+                : "Transcribe again"}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setPane({ kind: "history" })}
+            >
+              <History className="size-4" />
+              Open Recording history
+            </Button>
+            <Button variant="secondary" onClick={() => openPage(pageId)}>
+              Open saved recording
+            </Button>
+          </div>
+        </>
+      )}
+      <Button className="mt-5" variant="secondary" onClick={reset}>
+        Try again
+      </Button>
+    </div>
+  );
+}
+
+function SourceStatus({
+  sources,
+}: {
+  sources: { mic: boolean; system: boolean };
+}) {
+  const warning = sourceWarning(sources);
+  if (!warning)
+    return (
+      <p className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted">
+        <CircleDot className="size-4 shrink-0 text-success" />
+        Microphone and system audio are both being captured.
+      </p>
+    );
+  return (
+    <p
+      role="alert"
+      className="mb-4 flex items-start gap-2 rounded-lg border border-warning/40 bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] px-3 py-2.5 text-sm text-text"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+      {warning}
+    </p>
   );
 }
 

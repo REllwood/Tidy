@@ -3,16 +3,29 @@ import { Loader2 } from "lucide-react";
 import { recordingPreferencesApi } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { Switch } from "@/components/ui/switch";
+
+const KEY = ["recording-preferences"] as const;
+
 export function RecordingSettings() {
   const qc = useQueryClient();
   const saved = useQuery({
-    queryKey: ["recording-preferences"],
+    queryKey: KEY,
     queryFn: recordingPreferencesApi.get,
   });
   const change = useMutation({
     mutationFn: recordingPreferencesApi.set,
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["recording-preferences"] }),
+    // Flip the switch straight away, then put it back if the core refuses.
+    onMutate: async (keepAudio: boolean) => {
+      await qc.cancelQueries({ queryKey: KEY });
+      const previous = qc.getQueryData<boolean>(KEY);
+      qc.setQueryData<boolean>(KEY, keepAudio);
+      return { previous };
+    },
+    onError: (_error, _keepAudio, context) => {
+      if (context && context.previous !== undefined)
+        qc.setQueryData<boolean>(KEY, context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
   });
   return (
     <div className="space-y-3">
@@ -20,7 +33,7 @@ export function RecordingSettings() {
         <span>Keep meeting audio</span>
         <Switch
           checked={saved.data ?? false}
-          disabled={saved.isPending || saved.isError || change.isPending}
+          disabled={saved.isPending || saved.isError}
           onCheckedChange={(v) => change.mutate(v)}
         />
       </label>
@@ -29,9 +42,10 @@ export function RecordingSettings() {
         the audio so you can listen to it or transcribe it again.
       </p>
       <p className="text-xs text-text-muted">
-        Applies to new recordings. When off, temporary audio is discarded after
-        processing, including if transcription fails. Existing saved audio is
-        kept. Audio uses about 115 MB per hour.
+        Applies to new recordings. When off, audio is discarded once a
+        transcript has been saved. A meeting that has not been transcribed keeps
+        its audio so you can try again, and you can discard it from Recording
+        history. Existing saved audio is kept. Audio uses about 115 MB per hour.
       </p>
       {(saved.isPending || change.isPending) && (
         <p role="status" className="flex items-center gap-2 text-sm">

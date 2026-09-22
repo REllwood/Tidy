@@ -6,9 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use screencapturekit::prelude::*;
 
+use super::pipeline::downmix_to_mono;
 use crate::error::{AppError, AppResult};
 
 pub const SYSTEM_RATE: u32 = 48_000;
+/// The channel count we ask ScreenCaptureKit for below.
+pub const SYSTEM_CHANNELS: usize = 2;
 
 struct AudioHandler {
     buf: Arc<Mutex<Vec<f32>>>,
@@ -18,6 +21,15 @@ fn buffer_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Average a set of planar channel buffers element-wise.
+fn average_planar(channels: &[Vec<f32>]) -> Vec<f32> {
+    let len = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+    let denom = channels.len() as f32;
+    (0..len)
+        .map(|i| channels.iter().map(|c| c[i]).sum::<f32>() / denom)
         .collect()
 }
 
@@ -33,20 +45,46 @@ impl SCStreamOutputTrait for AudioHandler {
         if n == 0 {
             return;
         }
-        // ScreenCaptureKit delivers planar float (one buffer per channel).
-        // Average channels element-wise to mono. (A single buffer = already mono.)
-        let channels: Vec<Vec<f32>> = (0..n)
-            .filter_map(|i| list.buffer(i).map(|b| buffer_to_f32(b.data())))
-            .collect();
-        if channels.is_empty() {
-            return;
+        // ScreenCaptureKit usually delivers planar float, one buffer per
+        // channel, but a single buffer holding interleaved frames is just as
+        // valid. Treating interleaved data as planar halves the sample rate and
+        // turns speech into a chipmunk, so branch on what actually arrived
+        // instead of assuming.
+        if n != SYSTEM_CHANNELS && n != 1 {
+            log::warn!("system audio delivered {n} buffers for {SYSTEM_CHANNELS} channels");
         }
-        let len = channels.iter().map(|c| c.len()).min().unwrap_or(0);
-        let denom = channels.len() as f32;
-        let mut mono = Vec::with_capacity(len);
-        for i in 0..len {
-            let s: f32 = channels.iter().map(|c| c[i]).sum();
-            mono.push(s / denom);
+        let mono = if n == 1 {
+            let Some(buffer) = list.get(0) else {
+                return;
+            };
+            let channels = (buffer.number_channels as usize).max(1);
+            let samples = buffer_to_f32(buffer.data());
+            if channels > 1 {
+                downmix_to_mono(&samples, channels)
+            } else {
+                samples
+            }
+        } else {
+            let channels: Vec<Vec<f32>> = (0..n)
+                .filter_map(|i| {
+                    list.get(i).map(|buffer| {
+                        let samples = buffer_to_f32(buffer.data());
+                        let count = (buffer.number_channels as usize).max(1);
+                        if count > 1 {
+                            downmix_to_mono(&samples, count)
+                        } else {
+                            samples
+                        }
+                    })
+                })
+                .collect();
+            if channels.is_empty() {
+                return;
+            }
+            average_planar(&channels)
+        };
+        if mono.is_empty() {
+            return;
         }
         if let Ok(mut b) = self.buf.lock() {
             b.extend_from_slice(&mono);
@@ -73,7 +111,7 @@ pub fn start_system(buf: Arc<Mutex<Vec<f32>>>) -> AppResult<SCStream> {
         .with_height(2)
         .with_captures_audio(true)
         .with_sample_rate(SYSTEM_RATE as i32)
-        .with_channel_count(2);
+        .with_channel_count(SYSTEM_CHANNELS as i32);
 
     let mut stream = SCStream::new(&filter, &config);
     stream.add_output_handler(AudioHandler { buf }, SCStreamOutputType::Audio);
@@ -81,4 +119,34 @@ pub fn start_system(buf: Arc<Mutex<Vec<f32>>>) -> AppResult<SCStream> {
         .start_capture()
         .map_err(|e| AppError::Other(format!("start system audio capture: {e}")))?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interleaved_and_planar_stereo_downmix_to_the_same_mono() {
+        // Left and right channels of two frames.
+        let interleaved = vec![1.0, 0.0, 0.5, 0.5];
+        let planar = vec![vec![1.0, 0.5], vec![0.0, 0.5]];
+        assert_eq!(downmix_to_mono(&interleaved, SYSTEM_CHANNELS), vec![0.5, 0.5]);
+        assert_eq!(average_planar(&planar), vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn planar_buffers_of_different_lengths_use_the_shorter_one() {
+        let planar = vec![vec![1.0, 1.0, 1.0], vec![0.0]];
+        assert_eq!(average_planar(&planar), vec![0.5]);
+    }
+
+    #[test]
+    fn bytes_decode_as_little_endian_floats() {
+        let mut bytes = Vec::new();
+        for value in [0.25f32, -0.5] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.push(0); // a trailing partial sample is ignored
+        assert_eq!(buffer_to_f32(&bytes), vec![0.25, -0.5]);
+    }
 }

@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import { isTauri } from "@/lib/tauri";
 import {
   recordingApi,
   recordingHistoryApi,
   recordingPreferencesApi,
+  recordingHistoryKey,
   diarizeApi,
   pagesApi,
   documentsApi,
 } from "@/lib/api";
+import { localAi } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
 import { useUi } from "@/store/ui";
+import { invalidateMeetingQueries } from "./invalidation";
+import {
+  readTranscriptionLanguage,
+  writeTranscriptionLanguage,
+  type TranscriptionLanguage,
+} from "./transcriptionLanguage";
 import {
   buildMeetingBlocks,
   assignSpeakers,
@@ -40,6 +49,8 @@ export interface MeetingState {
   savedPageId: string | null;
   client: string;
   error: string | null;
+  /** True when the recorder adopted a recording that was already running (webview reload). */
+  resumed: boolean;
 }
 
 const initial: MeetingState = {
@@ -54,7 +65,19 @@ const initial: MeetingState = {
   savedPageId: null,
   client: "",
   error: null,
+  resumed: false,
 };
+
+const quiet = { mic: 0, system: 0 };
+
+/** Releasing the AI gate is best effort: it must never mask the real failure. */
+async function releaseAiGate() {
+  try {
+    await localAi.endRecording();
+  } catch (error) {
+    console.error("could not release the local AI recording gate", error);
+  }
+}
 
 export function useMeetingFlow() {
   const [state, setState] = useState<MeetingState>(initial);
@@ -64,11 +87,27 @@ export function useMeetingFlow() {
   const unlisten = useRef<UnlistenFn[]>([]);
   const mockTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const busy = useRef(false);
+  /** The native recorder is running, so stop() has something to stop. */
+  const live = useRef(false);
+  /** Bumped by reset(): a start still in flight belongs to an older attempt. */
+  const generation = useRef(0);
+  /** Resolves once the in-flight start() has settled, so stop() can wait for it. */
+  const starting = useRef<Promise<void> | null>(null);
   // Optional client to file the meeting under (read in the async stop() flow).
   const clientRef = useRef("");
   const setClient = useCallback((c: string) => {
     clientRef.current = c;
     setState((s) => ({ ...s, client: c }));
+  }, []);
+
+  const [language, setLanguageState] = useState<TranscriptionLanguage>(() =>
+    readTranscriptionLanguage(),
+  );
+  const languageRef = useRef(language);
+  const setLanguage = useCallback((value: TranscriptionLanguage) => {
+    languageRef.current = value;
+    setLanguageState(value);
+    writeTranscriptionLanguage(value);
   }, []);
 
   const cleanup = useCallback(() => {
@@ -82,61 +121,129 @@ export function useMeetingFlow() {
 
   useEffect(() => () => cleanup(), [cleanup]);
 
+  /**
+   * Each handle is stored as soon as it exists: if one subscription rejects,
+   * the ones already made are still tracked and torn down by cleanup().
+   */
+  const subscribe = useCallback(async () => {
+    if (!isTauri()) return;
+    unlisten.current.push(
+      await listen<{ elapsed_ms: number }>("recording-tick", (e) =>
+        patch({ elapsedMs: e.payload.elapsed_ms }),
+      ),
+    );
+    unlisten.current.push(
+      await listen<{ mic: number; system: number }>("audio-level", (e) =>
+        patch({ levels: e.payload }),
+      ),
+    );
+    unlisten.current.push(
+      await listen<{ mic: boolean; system: boolean }>("recording-sources", (e) =>
+        patch({ sources: e.payload }),
+      ),
+    );
+    unlisten.current.push(
+      await listen<string>("live-transcript", (e) =>
+        patch({ liveTranscript: e.payload }),
+      ),
+    );
+  }, []);
+
+  const startMockMeters = useCallback(() => {
+    const t0 = Date.now();
+    mockTimer.current = setInterval(() => {
+      patch({
+        elapsedMs: Date.now() - t0,
+        levels: {
+          mic: Math.random() < 0.2 ? 0 : 0.002 + Math.random() * 0.04,
+          system: Math.random() < 0.3 ? 0 : 0.001 + Math.random() * 0.03,
+        },
+      });
+    }, 150);
+  }, []);
+
   const start = useCallback(async () => {
     if (busy.current) return; // guard against double-start (duplicate listeners)
     busy.current = true;
+    const attempt = ++generation.current;
     // Reset everything except the client the user typed before hitting record.
     setState((s) => ({ ...initial, client: s.client, phase: "starting" }));
-    try {
-      if (isTauri()) {
-        unlisten.current.push(
-          await listen<{ elapsed_ms: number }>("recording-tick", (e) =>
-            patch({ elapsedMs: e.payload.elapsed_ms }),
-          ),
-          await listen<{ mic: number; system: number }>("audio-level", (e) =>
-            patch({ levels: e.payload }),
-          ),
-          await listen<{ mic: boolean; system: boolean }>(
-            "recording-sources",
-            (e) => patch({ sources: e.payload }),
-          ),
-          await listen<string>("live-transcript", (e) =>
-            patch({ liveTranscript: e.payload }),
-          ),
-        );
+    const run = async () => {
+      try {
+        await subscribe();
         const keepAudio = await recordingApi.start();
+        if (attempt !== generation.current) {
+          // Cancelled while starting: tear the native recorder back down.
+          await recordingApi.stop(clientRef.current).catch(() => undefined);
+          await releaseAiGate();
+          cleanup();
+          return;
+        }
+        live.current = true;
         patch({ phase: "recording", keepAudio });
-      } else {
-        // Browser/mock: self-drive timer + fake levels so the UI is demoable.
-        const keepAudio = await recordingApi.start();
-        patch({ phase: "recording", keepAudio });
-        const t0 = Date.now();
-        mockTimer.current = setInterval(() => {
-          patch({
-            elapsedMs: Date.now() - t0,
-            levels: {
-              mic: Math.random() < 0.2 ? 0 : 0.002 + Math.random() * 0.04,
-              system: Math.random() < 0.3 ? 0 : 0.001 + Math.random() * 0.03,
-            },
-          });
-        }, 150);
+        if (!isTauri()) startMockMeters();
+      } catch (e) {
+        cleanup();
+        live.current = false;
+        busy.current = false;
+        await releaseAiGate();
+        if (attempt === generation.current)
+          patch({ phase: "error", error: errorMessage(e) });
       }
+    };
+    starting.current = run();
+    await starting.current;
+    starting.current = null;
+  }, [cleanup, startMockMeters, subscribe]);
+
+  /**
+   * Adopt a recording that is already running in the core, so reloading the
+   * webview mid-meeting reconnects the timer, meters and banner instead of
+   * leaving an invisible recorder behind.
+   */
+  const reconcile = useCallback(async () => {
+    if (busy.current || live.current) return;
+    try {
+      if (!(await recordingApi.isRecording())) return;
+      if (busy.current || live.current) return;
+      busy.current = true;
+      live.current = true;
+      generation.current++;
+      // The core does not replay the retention flag it returned at start, so
+      // fall back to the saved preference, which is what it was read from.
+      const keepAudio = await recordingPreferencesApi
+        .get()
+        .catch(() => false);
+      setState((s) => ({
+        ...initial,
+        client: s.client,
+        phase: "recording",
+        keepAudio,
+        resumed: true,
+      }));
+      await subscribe();
+      if (!isTauri()) startMockMeters();
     } catch (e) {
-      cleanup();
-      busy.current = false;
-      patch({ phase: "error", error: errorMessage(e) });
+      console.error("could not reconnect to the running recording", e);
     }
-  }, [cleanup]);
+  }, [startMockMeters, subscribe]);
 
   const stopping = useRef(false);
   const stop = useCallback(async () => {
     if (stopping.current) return;
     stopping.current = true;
+    // (i) A stop pressed during "starting" waits for the start to settle first.
+    await starting.current?.catch(() => undefined);
+    if (!live.current) {
+      stopping.current = false;
+      return;
+    }
+    live.current = false;
     cleanup();
     let progressUnlisten: UnlistenFn | null = null;
     let savedPage: string | null = null;
     try {
-      patch({ phase: "transcribing", transcribeProgress: 0 });
+      patch({ phase: "transcribing", transcribeProgress: 0, levels: quiet });
       if (isTauri()) {
         progressUnlisten = await listen<number>("transcribe-progress", (e) =>
           patch({ transcribeProgress: e.payload }),
@@ -155,8 +262,12 @@ export function useMeetingFlow() {
         pageId,
         `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
       );
-      await qc.invalidateQueries({ queryKey: ["recording-history"] });
-      const result = await recordingHistoryApi.transcribe(pageId);
+      await qc.invalidateQueries({ queryKey: recordingHistoryKey });
+      const result = await recordingHistoryApi.transcribe(
+        pageId,
+        undefined,
+        languageRef.current,
+      );
       const segments = result.segments;
       const bodyJson = result.body_json;
       patch({ transcribeProgress: 100, phase: "saving" });
@@ -175,40 +286,67 @@ export function useMeetingFlow() {
       }
 
       if (result.applied && labeled !== segments) {
-        await documentsApi.updateIfUnchanged(
+        const applied = await documentsApi.updateIfUnchanged(
           pageId,
           bodyJson,
           JSON.stringify(buildMeetingBlocks(labeled, null, false)),
         );
+        if (!applied)
+          toast.warning(
+            "Speaker labels could not be applied because the page changed",
+          );
       }
-      qc.invalidateQueries();
       patch({ phase: "done", savedPageId: pageId });
-    } catch (e) {
-      patch({ phase: "error", error: errorMessage(e) });
-    } finally {
-      if (savedPage) {
-        try {
-          await recordingPreferencesApi.finish(savedPage);
-        } catch (error) {
-          patch({
-            phase: "error",
-            error: `Temporary audio could not be cleared: ${errorMessage(error)}`,
-          });
-        }
+      // Only now is the transcript safe, so temporary audio may be cleared.
+      // A failure here is reported without pulling the flow out of "done".
+      try {
+        await recordingPreferencesApi.finish(pageId);
+      } catch (error) {
+        toast.error(
+          `Temporary audio could not be cleared: ${errorMessage(error)}`,
+        );
       }
+    } catch (e) {
+      // Keep the saved page so the recorder can offer another transcription.
+      patch({
+        phase: "error",
+        error: errorMessage(e),
+        savedPageId: savedPage,
+        levels: quiet,
+      });
+      await releaseAiGate();
+    } finally {
       progressUnlisten?.();
       stopping.current = false;
       busy.current = false;
-      await qc.invalidateQueries();
+      invalidateMeetingQueries(qc, savedPage);
     }
   }, [cleanup, qc, diarizeEnabled]);
 
   const reset = useCallback(() => {
+    generation.current++;
     cleanup();
     busy.current = false;
+    live.current = false;
     clientRef.current = "";
     setState(initial);
   }, [cleanup]);
 
-  return { state, start, stop, reset, setClient };
+  /** Give up on a start that has not finished yet, and hand the AI gate back. */
+  const cancelStart = useCallback(async () => {
+    reset();
+    await releaseAiGate();
+  }, [reset]);
+
+  return {
+    state,
+    language,
+    setLanguage,
+    start,
+    stop,
+    reset,
+    cancelStart,
+    reconcile,
+    setClient,
+  };
 }

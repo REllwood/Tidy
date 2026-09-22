@@ -10,6 +10,8 @@ use super::pipeline::downmix_to_mono;
 use crate::error::{AppError, AppResult};
 
 pub struct MicStream {
+    /// Kept alive rather than read: dropping the stream stops the device.
+    #[allow(dead_code)]
     pub stream: cpal::Stream,
     pub sample_rate: u32,
 }
