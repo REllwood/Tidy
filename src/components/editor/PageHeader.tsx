@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { errorMessage } from "@/lib/errors";
 import { usePages, useRenamePage, useSetPageIcon } from "@/hooks/usePages";
 import {
   Popover,
@@ -67,7 +69,8 @@ export function PageHeader({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const lastId = useRef(pageId);
 
-  // sync local title when the page changes (switching pages)
+  // sync local title when the page changes (switching pages). A page-list
+  // refetch must not pull the title back while a rename is still in flight.
   useEffect(() => {
     if (lastId.current !== pageId) {
       lastId.current = pageId;
@@ -75,12 +78,27 @@ export function PageHeader({
     } else if (
       page &&
       page.title !== title &&
+      !rename.isPending &&
       document.activeElement?.tagName !== "TEXTAREA"
     ) {
       setTitle(page.title);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId, page?.title]);
+  }, [pageId, page?.title, rename.isPending]);
+
+  useEffect(() => {
+    if (rename.error)
+      toast.error(`Could not rename this page. ${errorMessage(rename.error)}`, {
+        id: "page-header-rename",
+      });
+  }, [rename.error]);
+
+  useEffect(() => {
+    if (setIcon.error)
+      toast.error(`Could not change the icon. ${errorMessage(setIcon.error)}`, {
+        id: "page-header-icon",
+      });
+  }, [setIcon.error]);
 
   if (!page) return null;
 

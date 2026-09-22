@@ -1,12 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, Database, Mic, Rows3, Sparkles, Keyboard } from "lucide-react";
+import {
+  FileText,
+  Database,
+  Mic,
+  Rows3,
+  Sparkles,
+  Keyboard,
+  Loader2,
+} from "lucide-react";
 import { searchApi, type PageType } from "@/lib/api";
 import { usePages } from "@/hooks/usePages";
 import { useUi } from "@/store/ui";
 import {
   Command,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -44,10 +51,13 @@ export function CommandPalette() {
     }
   }, [open]);
 
+  const term = query.trim();
+  const debouncedTerm = debounced.trim();
+
   const { data: results, isFetching } = useQuery({
-    queryKey: ["search", debounced],
-    queryFn: () => searchApi.query(debounced),
-    enabled: open && debounced.trim().length > 0,
+    queryKey: ["search", debouncedTerm],
+    queryFn: () => searchApi.query(debouncedTerm),
+    enabled: open && debouncedTerm.length > 0,
   });
 
   const recent = (pages ?? [])
@@ -60,33 +70,38 @@ export function CommandPalette() {
     setOpen(false);
   };
 
-  const hasQuery = debounced.trim().length > 0;
+  // Branch on what's typed right now, not on the debounced value, so the
+  // actions list doesn't linger over the first keystroke.
+  const searching = term.length > 0;
+  // While the next search is in flight the previous hits stay on screen, so the
+  // list doesn't flicker and the highlighted row doesn't jump.
+  const shown = searching ? results : undefined;
+  const pending = searching && (term !== debouncedTerm || isFetching);
+  const hits = (shown?.pages.length ?? 0) + (shown?.rows.length ?? 0);
+
+  // The search box takes focus as soon as the palette opens, so ⌘K then typing
+  // just works without a click.
+  const inputRef = useRef<HTMLInputElement>(null);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
         showCloseButton={false}
         className="overflow-hidden p-0 sm:max-w-xl"
+        initialFocus={inputRef}
       >
         <DialogHeader className="sr-only">
           <DialogTitle>Search</DialogTitle>
         </DialogHeader>
         <Command shouldFilter={false} className="bg-transparent">
           <CommandInput
+            ref={inputRef}
             value={query}
             onValueChange={setQuery}
             placeholder="Search pages and database rows…"
           />
           <CommandList>
-            <CommandEmpty>
-              {isFetching
-                ? "Searching…"
-                : hasQuery
-                  ? `No matches for "${debounced}"`
-                  : "Type to search."}
-            </CommandEmpty>
-
-            {!hasQuery && (
+            {!searching && (
               <>
                 <CommandGroup heading="Actions">
                   <CommandItem
@@ -125,9 +140,25 @@ export function CommandPalette() {
               </>
             )}
 
-            {hasQuery && results && results.pages.length > 0 && (
+            {searching && pending && hits === 0 && (
+              <div
+                role="status"
+                className="flex items-center gap-2 px-3 py-6 text-sm text-text-muted"
+              >
+                <Loader2 className="size-3.5 animate-spin" />
+                Searching…
+              </div>
+            )}
+
+            {searching && !pending && hits === 0 && (
+              <div className="px-3 py-6 text-center text-sm text-text-muted">
+                No matches for “{query}”
+              </div>
+            )}
+
+            {shown && shown.pages.length > 0 && (
               <CommandGroup heading="Pages">
-                {results.pages.map((p) => (
+                {shown.pages.map((p) => (
                   <CommandItem
                     key={p.id}
                     value={`page-${p.id}`}
@@ -140,12 +171,13 @@ export function CommandPalette() {
               </CommandGroup>
             )}
 
-            {hasQuery && results && results.rows.length > 0 && (
+            {shown && shown.rows.length > 0 && (
               <CommandGroup heading="Database rows">
-                {results.rows.map((r) => (
+                {shown.rows.map((r) => (
                   <CommandItem
                     key={r.row_id}
                     value={`row-${r.row_id}`}
+                    // Row hits open the database page that holds them.
                     onSelect={() => go(() => openPage(r.page_id))}
                   >
                     <Rows3 className="size-4 text-text-faint" />

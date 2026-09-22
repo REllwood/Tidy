@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { databasesApi, ingestApi } from "@/lib/api";
+import { errorMessage } from "@/lib/errors";
 import { useUi } from "@/store/ui";
 import {
   Dialog,
@@ -12,6 +13,15 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+
+/** The caches an ingest can change: pages, every database surface, backlinks. */
+const INVALIDATED = [
+  ["pages"],
+  ["database-by-id"],
+  ["database"],
+  ["databases"],
+  ["backlinks"],
+] as const;
 
 /**
  * "File a note", paste a blob (meeting notes, an agent dump) and let the
@@ -54,7 +64,9 @@ export function IngestDialog() {
         title: title.trim() || undefined,
         taskDbId: taskDbId || undefined,
       });
-      await qc.invalidateQueries();
+      // Only what an ingest can touch, and never awaited: the dialog closes
+      // straight away and the refetches land behind it.
+      for (const queryKey of INVALIDATED) qc.invalidateQueries({ queryKey });
       const n = res.task_row_ids.length;
       toast.success(
         `Filed the note${res.client_page_id ? ` under ${client.trim()}` : ""}` +
@@ -64,7 +76,7 @@ export function IngestDialog() {
       setOpen(false);
       openPage(res.page_id);
     } catch (e) {
-      toast.error(`Couldn't file the note: ${String(e)}`);
+      toast.error(`Couldn't file the note. ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }
@@ -151,7 +163,7 @@ export function IngestDialog() {
           <button
             disabled={!text.trim() || busy}
             onClick={submit}
-            className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white hover:bg-brand/90 disabled:opacity-40"
+            className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg hover:bg-brand/90 disabled:opacity-40"
           >
             {busy ? "Filing…" : "File it"}
           </button>

@@ -14,6 +14,7 @@ import { usePages, useCreatePage } from "@/hooks/usePages";
 import { useAgenda } from "@/hooks/useAgenda";
 import { useUi } from "@/store/ui";
 import { greeting, type AgendaTask } from "@/lib/agenda";
+import { errorMessage } from "@/lib/errors";
 import { TaskRow } from "@/components/planner/TaskRow";
 import { Button } from "@/components/ui/button";
 import type { Page } from "@/lib/api";
@@ -122,7 +123,7 @@ export function HomeDashboard() {
         </div>
         {create.error && (
           <p role="alert" className="mb-5 text-sm text-danger-c">
-            Couldn't create the page. {String(create.error)}
+            Couldn't create the page. {errorMessage(create.error)}
           </p>
         )}
         <div className="home-layout">
@@ -150,7 +151,7 @@ export function HomeDashboard() {
                     <p
                       className={`text-3xl font-light tabular-nums ${item.label === "Overdue" && item.value ? "text-danger-c" : "text-text"}`}
                     >
-                      {loading ? "—" : item.value}
+                      {loading ? "–" : item.value}
                     </p>
                     <p className="mt-1 text-xs text-text-muted">{item.label}</p>
                   </div>
