@@ -52,3 +52,8 @@ docs/ai/llama-server-reference.txt
 
 # Private update-signing keys
 *.key
+
+# Agent and planning notes never ship
+.agents/
+.planning/
+docs/

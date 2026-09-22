@@ -46,7 +46,8 @@ you choose when to download, install and restart.
 
 **Audio is off by default.** Turn on **Settings → Recording → Keep meeting audio**
 before a meeting if you want to export or re-transcribe its audio later. Existing
-saved audio is preserved. [Recording history and recovery limits](docs/MEETING-RELIABILITY.md).
+saved audio is preserved, and a temporary recording is kept until its transcript has
+been saved. [Recording history and recovery limits](docs/MEETING-RELIABILITY.md).
 
 ## From a conversation to useful notes
 
@@ -57,9 +58,15 @@ saved audio is preserved. [Recording history and recovery limits](docs/MEETING-R
 1. Open **New meeting** and choose an existing client or enter a new one.
 2. Record your microphone and system audio, with separate level meters for each source.
 3. Stop to transcribe on-device with Whisper and optional speaker labels.
-4. With local AI enabled, Tidy prepares topic sections, decisions, next steps and open questions above the original transcript.
+4. With local AI enabled, Tidy writes an overview, topic sections, decisions, next steps and open questions. Every point is checked against a quote from the transcript, and points it can't back up are left out.
 
-Your transcript is saved before AI processing. If AI is disabled, it remains available and the meeting waits in the preparation queue. Generated action items are suggestions; meeting summaries do not automatically add them to your planner.
+Your transcript is saved before AI processing. If AI is disabled, it remains available and the meeting waits in the preparation queue. Editing the page keeps the notes; they're only written again if the transcript itself changes.
+
+From the meeting notes you can:
+
+- **Name speakers**, so "Speaker 2" becomes "Priya" in the transcript, the notes and answers.
+- **Add notes to page**, to put the notes above the transcript where exports, your vault and search include them.
+- **Send next steps to planner**, to add them as dated tasks in a table you choose. Nothing is added unless you ask.
 
 ## Ask across the same client's meetings
 
@@ -67,16 +74,17 @@ Your transcript is saved before AI processing. If AI is disabled, it remains ava
   <img src="docs/screenshots/ask-meetings.gif" alt="Ask meetings with Acme selected, two ready meetings, a sample answer and transcript sources" width="1000" />
 </p>
 
-Choose a client in **Ask meetings**, optionally narrow the dates, and ask about their recordings together. Reuse the same client when recording follow-ups so they belong to the same history.
+Choose a client in **Ask meetings**, optionally narrow the dates, and ask about their recordings together. You can also name them in the question: Tidy reads dates such as "last week" or "in March", a client's name, a meeting's title and "our last meeting", and says how it read the question. Reuse the same client when recording follow-ups so they belong to the same history.
 
 Questions to try when the information is in your transcripts:
 
-- “What was discussed across these meetings?”
+- “What happened last week?”
+- “What are the next steps from our last meeting with Acme?”
 - “Who is responsible for the client handover?”
 - “What changed between the kickoff and the follow-up?”
-- “Which decisions are still unresolved?”
+- “What's still unresolved?”
 
-Specific questions search relevant transcript passages. Broad overviews draw material from across the conversation. Answers link individual claims to their sources and show the passages and meetings used. The library displays ready, queued and failed meetings, with stage and passage progress while work runs.
+Recaps and lists of decisions, next steps or open questions come from each meeting's checked notes, so they cover every meeting in range. Specific questions search transcript passages and your own pages by meaning. Answers link individual claims to their sources. When nothing can be backed up, Tidy shows the closest passages instead of guessing. The library displays ready, queued and failed meetings, with stage and passage progress while work runs.
 
 AI can still miss context or get an inference wrong. Review the original sources for names, dates and commitments. Large-library answers may use a sample of the available material; the displayed coverage makes that visible. Each question is independent. [How retrieval and verification work](docs/LOCAL-AI.md#retrieval-and-answer-limits).
 
@@ -88,7 +96,7 @@ In **Settings → Local AI**, choose **Enable local AI** to download the recomme
 | --- | --- | --- |
 | Qwen 3 · Balanced | Meeting notes and answers | 2.5 GB |
 | Qwen 3 · Lightweight | Lower-memory alternative | 639 MB |
-| Nomic meeting search | Find related transcript passages | 146 MB |
+| Nomic meeting search | Find related passages in meetings and pages | 146 MB |
 
 The app bundles the inference runtime. **Ollama is optional**, available as an advanced provider. Models load one at a time, and recording pauses background AI work. A 16 GB Mac is offered the balanced model, but speed and memory pressure depend on the meeting and other open apps; we have not benchmarked the full workflow on an M1 with 16 GB. [Setup, model licences and limits](docs/LOCAL-AI.md).
 
@@ -119,13 +127,13 @@ model. RAM guidance is an estimate, and the full range has not been benchmarked 
   <img src="docs/screenshots/graph.png" alt="Tidy's graph of connected sample pages" width="1000" />
 </p>
 
-**Notes that connect.** Use headings, lists and to-dos in the block editor. Type `[[` to link a page, follow backlinks, or explore the graph.
+**Notes that connect.** Use headings, lists and to-dos in the block editor. Type `[[` to pick a page to link (or create one), `#` to pick a tag, follow backlinks, or explore the graph. **Ask AI** on any page summarises, rewrites or answers questions about it, long pages included.
 
 ## Your files and your tools
 
-Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors page content to a folder you choose, reads external edits back in and preserves conflicting edits in a separate copy. Generated meeting summaries are currently separate from vault exports; the original page content is exported.
+Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors page content to a folder you choose, reads external edits back in and preserves conflicting edits in a separate copy. Meeting notes join the vault once you choose **Add notes to page**. **Export as Markdown** saves a page, or a table's rows, through the save dialog.
 
-The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its separate transcript-ingestion tool still uses local Ollama for summarisation. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
+The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its `ingest_note` tool files raw text at once with the original wording kept; Tidy's own local AI adds a checked summary and any tasks while Tidy is open, whichever model you've chosen. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
 
 ## Run from source
 

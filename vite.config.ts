@@ -22,6 +22,8 @@ export default defineConfig({
     hmr: host
       ? { protocol: "ws", host, port: 1421 }
       : undefined,
-    watch: { ignored: ["**/src-tauri/**", "**/.forge/**", "**/target/**", "**/release-builds/**"] },
+    // Rust sources and build output never feed the web bundle; watching them
+    // reloads the preview on every save.
+    watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/.forge/**", "**/target/**", "**/release-builds/**"] },
   },
 });
