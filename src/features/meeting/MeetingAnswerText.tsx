@@ -29,7 +29,22 @@ export function MeetingAnswerText({
   return (
     <div className="space-y-3 text-sm leading-7">
       {lines.map((line, i) =>
-        line.startsWith("- ") ? (
+        line.startsWith("## ") ? (
+          // A meeting the answer draws on: "Title · date [n]".
+          <h3
+            key={i}
+            className="pt-3 text-sm font-semibold text-text first:pt-0"
+          >
+            {render(line.slice(3))}
+          </h3>
+        ) : line.startsWith("### ") ? (
+          <h4
+            key={i}
+            className="pt-1 text-xs font-semibold uppercase tracking-wide text-text-muted"
+          >
+            {render(line.slice(4))}
+          </h4>
+        ) : line.startsWith("- ") ? (
           <div key={i} className="flex gap-3">
             <span
               aria-hidden

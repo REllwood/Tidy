@@ -12,3 +12,7 @@ pub mod installation;
 pub mod llm;
 pub mod store;
 pub mod vault;
+
+/// Dates in questions and answers are read in local time; the app shares
+/// this crate's copy rather than pinning its own.
+pub use chrono;

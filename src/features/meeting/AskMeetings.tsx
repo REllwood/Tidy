@@ -1,7 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { localAi, aiStatusKey, meetingJobsKey, dateRange } from "@/lib/localAi";
+import { useRef, useState } from "react";
+import {
+  localAi,
+  aiStatusKey,
+  meetingJobsKey,
+  dateRange,
+  isUserProgress,
+  type AiStatus,
+  type MeetingJob,
+  type MeetingSource,
+} from "@/lib/localAi";
+import { errorMessage } from "@/lib/errors";
+import { libraryInterval } from "./polling";
 import { useUi } from "@/store/ui";
 import { AiProgressView } from "@/features/settings/LocalAiSettings";
 import { MeetingLibraryProgress } from "./MeetingLibraryProgress";
@@ -14,6 +26,20 @@ import { isTauri } from "@/lib/tauri";
 
 import { MeetingAnswerText } from "./MeetingAnswerText";
 
+const SUGGESTIONS = [
+  "What happened last week?",
+  "What are the next steps?",
+  "What did we decide in the last meeting?",
+  "What's still unresolved?",
+];
+
+function sourceLabel(source: MeetingSource) {
+  const date = new Date(source.started_at).toLocaleDateString("en-AU");
+  if (source.kind === "notes") return `Meeting notes · ${date}`;
+  if (source.kind === "page") return `Your page · updated ${date}`;
+  return source.timestamp ? `${date} · ${source.timestamp}` : date;
+}
+
 export function AskMeetings() {
   const { question, from, through, clientId, result, update } =
     useMeetingQuestion();
@@ -21,15 +47,33 @@ export function AskMeetings() {
   const setFrom = (from: string) => update({ from });
   const setThrough = (through: string) => update({ through });
   const setPane = useUi((s) => s.setActivePane);
+  const qc = useQueryClient();
+  // Only tick while the library is actually preparing something; otherwise the
+  // page sits still and refreshes through invalidation.
+  const [asking, setAsking] = useState(false);
   const status = useQuery({
     queryKey: aiStatusKey,
     queryFn: localAi.status,
-    refetchInterval: 1500,
+    refetchInterval: (query) =>
+      libraryInterval(
+        qc.getQueryData<MeetingJob[]>(meetingJobsKey),
+        query.state.data?.progress,
+        !!query.state.data?.ready,
+        asking,
+      ),
   });
   const jobs = useQuery({
     queryKey: meetingJobsKey,
     queryFn: localAi.jobs,
-    refetchInterval: 2000,
+    refetchInterval: (query) => {
+      const ai = qc.getQueryData<AiStatus>(aiStatusKey);
+      return libraryInterval(
+        query.state.data as MeetingJob[] | undefined,
+        ai?.progress,
+        !!ai?.ready,
+        asking,
+      );
+    },
   });
   const clients = clientOptions(jobs.data ?? []);
   let scoped = jobs.data ?? [];
@@ -38,14 +82,17 @@ export function AskMeetings() {
     scoped = scopedMeetings(scoped, clientId, from, through);
   } catch (error) {
     scoped = [];
-    rangeError = String(error);
+    rangeError = errorMessage(error);
   }
   const scopeName =
     clients.find(([id]) => id === clientId)?.[1] ??
     (clientId ? "Unavailable client" : "All clients");
-  const qc = useQueryClient();
+  // A late reply to an abandoned question must never appear under a new one.
+  const requestId = useRef(0);
   const ask = useMutation({
     mutationFn: async () => {
+      const id = ++requestId.current;
+      setAsking(true);
       const range = dateRange(from, through);
       const answer = await localAi.ask(
         question.trim(),
@@ -53,30 +100,47 @@ export function AskMeetings() {
         range.until,
         clientId || null,
       );
+      if (id !== requestId.current) return null;
       return {
         question: question.trim(),
         scope: `${scopeName} · ${!from && !through ? "All dates" : `${from || "Any date"} – ${through || "No end date"}`}`,
         answer,
       };
     },
-    onSuccess: (result) => update({ result }),
+    onSuccess: (result) => {
+      if (result) update({ result });
+    },
+    onSettled: () => setAsking(false),
   });
+  const submit = () => {
+    // Drop the previous answer immediately and abandon any request still running.
+    update({ result: null });
+    requestId.current++;
+    if (ask.isPending) void localAi.cancel().catch(() => undefined);
+    ask.mutate();
+  };
   const retry = useMutation({
     mutationFn: localAi.retry,
     onSuccess: () => qc.invalidateQueries({ queryKey: meetingJobsKey }),
   });
   const cancel = useMutation({ mutationFn: localAi.cancel });
+  // Background meeting processing steps aside for a question, so only work
+  // the person started (a download, say) holds it up.
   const busy =
-    ask.isPending || !!status.data?.progress || !!status.data?.recording_paused;
+    ask.isPending ||
+    isUserProgress(status.data?.progress) ||
+    !!status.data?.recording_paused;
   const indexed = scoped.filter((j) => j.indexed).length;
+  const answerable = indexed > 0 || scoped.some((j) => j.summary);
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-5 sm:px-8 py-10">
         <p className="page-eyebrow">Meeting library</p>
         <h1 className="page-title">Ask your meetings</h1>
         <p className="page-description">
-          Find decisions, commitments and context across your transcripts. Each
-          answer includes the passages you can check.
+          Find decisions, next steps and context across your meetings. Ask about
+          a date (“last week”), a client or “the last meeting”. Every answer
+          shows where it came from.
         </p>
         {!isTauri() && (
           <p className="mt-2 text-xs text-text-faint">
@@ -91,7 +155,7 @@ export function AskMeetings() {
         )}
         {(status.error || jobs.error) && (
           <p role="alert" className="mt-4 text-sm text-danger-c">
-            {String(status.error || jobs.error)}
+            {errorMessage(status.error || jobs.error)}
           </p>
         )}
         {status.data && !status.data.search_ready && (
@@ -147,11 +211,11 @@ export function AskMeetings() {
             if (
               !busy &&
               status.data?.search_ready &&
-              indexed &&
+              answerable &&
               !rangeError &&
               question.trim()
             )
-              ask.mutate();
+              submit();
           }}
         >
           <label htmlFor="meeting-question" className="text-sm font-medium">
@@ -166,7 +230,29 @@ export function AskMeetings() {
             placeholder="What did we agree about the launch date?"
             className="block w-full resize-y rounded-xl border border-border bg-bg p-4 text-sm leading-relaxed outline-none focus:border-brand"
             disabled={ask.isPending}
+            onKeyDown={(e) => {
+              // Enter asks; Shift+Enter adds a line.
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
           />
+          {!question.trim() && (
+            <div className="flex flex-wrap gap-2" aria-label="Suggested questions">
+              {SUGGESTIONS.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={ask.isPending}
+                  onClick={() => setQuestion(suggestion)}
+                  className="rounded-full border border-border bg-surface px-3 py-1 text-xs text-text-muted hover:border-brand hover:text-text disabled:opacity-50"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex flex-wrap items-end gap-3">
             <label className="text-xs text-text-muted">
               From
@@ -194,7 +280,7 @@ export function AskMeetings() {
                 busy ||
                 !status.data?.search_ready ||
                 !question.trim() ||
-                !indexed ||
+                !answerable ||
                 !!rangeError
               }
             >
@@ -217,8 +303,9 @@ export function AskMeetings() {
           </div>
         </form>
         <p className="mt-3 text-xs text-text-faint">
-          {indexed} of {scoped.length} meetings indexed. Answers use indexed
-          transcripts only; review the sources before relying on them.
+          {indexed} of {scoped.length} meetings indexed. Answers come from your
+          transcripts, saved meeting notes and your own pages. Check the sources
+          before relying on them.
         </p>
         {rangeError && (
           <p role="alert" className="mt-3 text-sm text-danger-c">
@@ -241,7 +328,7 @@ export function AskMeetings() {
         )}
         {(ask.error || retry.error || cancel.error) && (
           <p role="alert" className="mt-4 text-sm text-danger-c">
-            {String(ask.error || retry.error || cancel.error)}
+            {errorMessage(ask.error || retry.error || cancel.error)}
           </p>
         )}
         {result && !ask.isPending && (
@@ -252,9 +339,20 @@ export function AskMeetings() {
             <p className="mb-3 text-xs text-text-faint">
               {result.question} · {result.scope}
             </p>
+            {!!result.answer.interpretation?.length && (
+              <ul className="mb-4 space-y-1 rounded-lg bg-bg-subtle px-3 py-2 text-xs text-text-muted">
+                {result.answer.interpretation.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
             <MeetingAnswerText
               text={result.answer.answer}
-              sourceCount={result.answer.sources.length}
+              sourceCount={
+                result.answer.grounded === false
+                  ? 0
+                  : result.answer.sources.length
+              }
             />
             {result.answer.coverage && (
               <p className="mt-4 text-xs leading-relaxed text-text-faint">
@@ -271,7 +369,9 @@ export function AskMeetings() {
             {result.answer.sources.length > 0 && (
               <div className="mt-5 space-y-3 border-t border-border pt-4">
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                  Supporting transcript passages
+                  {result.answer.grounded === false
+                    ? "Closest passages"
+                    : "Sources"}
                 </h2>
                 {result.answer.sources.map((source, index) => (
                   <div
@@ -293,8 +393,7 @@ export function AskMeetings() {
                       <ArrowUpRight className="size-3.5" />
                     </button>
                     <p className="mt-1 text-xs text-text-faint">
-                      {new Date(source.started_at).toLocaleDateString("en-AU")}
-                      {source.timestamp && ` · ${source.timestamp}`}
+                      {sourceLabel(source)}
                     </p>
                     <blockquote className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-text-muted">
                       {source.text}
