@@ -3,7 +3,7 @@
 //! backlinks are just a reverse query. Dangling links (target not yet created)
 //! resolve by title when the target page appears or is renamed.
 
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -23,7 +23,13 @@ pub struct Backlink {
     pub source_title: String,
     pub source_icon: Option<String>,
     pub context: Option<String>,
+    /// How the two pages are related: "mention", "task_of" or "meeting_ref".
+    pub kind: String,
 }
+
+/// The edge kinds that count as a backlink between two pages (a "relation" edge
+/// belongs to a database field, not to the page graph).
+const BACKLINK_KINDS: &str = "('mention','task_of','meeting_ref')";
 
 fn row_to_backlink(r: &Row) -> rusqlite::Result<Backlink> {
     Ok(Backlink {
@@ -31,6 +37,7 @@ fn row_to_backlink(r: &Row) -> rusqlite::Result<Backlink> {
         source_title: r.get(1)?,
         source_icon: r.get(2)?,
         context: r.get(3)?,
+        kind: r.get(4)?,
     })
 }
 
@@ -59,6 +66,31 @@ pub struct LinkGraph {
 pub mod core {
     use super::*;
 
+    /// Does a page row still exist? A link target id can go stale between the
+    /// editor extracting it and the save landing.
+    fn page_exists(conn: &Connection, id: &str) -> AppResult<bool> {
+        Ok(conn.query_row(
+            "SELECT count(*) FROM page WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, i64>(0),
+        )? > 0)
+    }
+
+    /// Resolve a `[[wiki link]]` by title. Oldest match wins, so the same text
+    /// always resolves to the same page.
+    fn resolve_title(conn: &Connection, title: Option<&String>) -> AppResult<Option<String>> {
+        let Some(title) = title else {
+            return Ok(None);
+        };
+        Ok(conn
+            .query_row(
+                "SELECT id FROM page WHERE title = ?1 ORDER BY created_at LIMIT 1",
+                params![title],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
     /// Replace a page's outgoing wiki-link ("mention") edges and its tags.
     pub fn set_page_links(
         conn: &Connection,
@@ -66,58 +98,63 @@ pub mod core {
         links: &[LinkInput],
         tags: &[String],
     ) -> AppResult<()> {
-        conn.execute(
-            "DELETE FROM link WHERE source_page_id = ?1 AND kind = 'mention'",
-            params![page_id],
-        )?;
-        let now = now_ms();
-        for l in links {
-            let target: Option<String> = match &l.target_page_id {
-                Some(id) => Some(id.clone()),
-                None => match &l.dst_title {
-                    Some(t) => conn
-                        .query_row(
-                            "SELECT id FROM page WHERE title = ?1 LIMIT 1",
-                            params![t],
-                            |r| r.get::<_, String>(0),
-                        )
-                        .ok(),
-                    None => None,
-                },
-            };
-            conn.execute(
-                "INSERT INTO link (id, source_page_id, target_page_id, dst_title, kind, context, created_at)
-                 VALUES (?1, ?2, ?3, ?4, 'mention', ?5, ?6)",
-                params![new_id(), page_id, target, l.dst_title, l.context, now],
+        // One transaction: a failure part-way through used to leave the page
+        // with its old links deleted and the new ones never written.
+        crate::db::in_transaction(conn, |tx| {
+            tx.execute(
+                "DELETE FROM link WHERE source_page_id = ?1 AND kind = 'mention'",
+                params![page_id],
             )?;
-        }
-
-        conn.execute("DELETE FROM page_tag WHERE page_id = ?1", params![page_id])?;
-        for name in tags {
-            let name = name.trim_start_matches('#').trim();
-            if name.is_empty() {
-                continue;
+            let now = now_ms();
+            for l in links {
+                // A target id that no longer exists would fail the foreign key
+                // and take the whole save down with it, so fall back to the
+                // title (leaving the link dangling until the page reappears).
+                let target: Option<String> = match &l.target_page_id {
+                    Some(id) if page_exists(tx, id)? => Some(id.clone()),
+                    _ => resolve_title(tx, l.dst_title.as_ref())?,
+                };
+                tx.execute(
+                    "INSERT INTO link (id, source_page_id, target_page_id, dst_title, kind, context, created_at)
+                     VALUES (?1, ?2, ?3, ?4, 'mention', ?5, ?6)",
+                    params![new_id(), page_id, target, l.dst_title, l.context, now],
+                )?;
             }
-            conn.execute("INSERT OR IGNORE INTO tag (name) VALUES (?1)", params![name])?;
-            let tag_id: i64 =
-                conn.query_row("SELECT id FROM tag WHERE name = ?1", params![name], |r| {
-                    r.get(0)
-                })?;
-            conn.execute(
-                "INSERT OR IGNORE INTO page_tag (page_id, tag_id) VALUES (?1, ?2)",
-                params![page_id, tag_id],
+
+            tx.execute("DELETE FROM page_tag WHERE page_id = ?1", params![page_id])?;
+            for name in tags {
+                let name = name.trim_start_matches('#').trim();
+                if name.is_empty() {
+                    continue;
+                }
+                tx.execute("INSERT OR IGNORE INTO tag (name) VALUES (?1)", params![name])?;
+                let tag_id: i64 =
+                    tx.query_row("SELECT id FROM tag WHERE name = ?1", params![name], |r| {
+                        r.get(0)
+                    })?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO page_tag (page_id, tag_id) VALUES (?1, ?2)",
+                    params![page_id, tag_id],
+                )?;
+            }
+            // Sweep tags nothing references any more, so removing the last
+            // #tag from the last page doesn't leave it in the tag list.
+            tx.execute(
+                "DELETE FROM tag WHERE id NOT IN (SELECT tag_id FROM page_tag)",
+                [],
             )?;
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     pub fn get_backlinks(conn: &Connection, page_id: &str) -> AppResult<Vec<Backlink>> {
-        let mut stmt = conn.prepare(
-            "SELECT l.source_page_id, p.title, p.icon, l.context
+        let mut stmt = conn.prepare(&format!(
+            "SELECT l.source_page_id, p.title, p.icon, l.context, l.kind
              FROM link l JOIN page p ON p.id = l.source_page_id
-             WHERE l.target_page_id = ?1 AND l.kind = 'mention' AND p.deleted_at IS NULL
-             ORDER BY p.updated_at DESC",
-        )?;
+             WHERE l.target_page_id = ?1 AND l.kind IN {BACKLINK_KINDS}
+               AND p.deleted_at IS NULL
+             ORDER BY p.updated_at DESC"
+        ))?;
         let rows = stmt.query_map(params![page_id], row_to_backlink)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -133,6 +170,17 @@ pub mod core {
         Ok(())
     }
 
+    /// Every tag in use on a live page, most used first.
+    pub fn all_tags(conn: &Connection) -> AppResult<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "SELECT t.name FROM tag t JOIN page_tag pt ON pt.tag_id = t.id
+             JOIN page p ON p.id = pt.page_id AND p.deleted_at IS NULL
+             GROUP BY t.id ORDER BY count(*) DESC, t.name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn tags_for_page(conn: &Connection, page_id: &str) -> AppResult<Vec<String>> {
         let mut stmt = conn.prepare(
             "SELECT t.name FROM page_tag pt JOIN tag t ON t.id = pt.tag_id
@@ -143,17 +191,18 @@ pub mod core {
     }
 
     /// The whole page-link graph: every non-deleted page is a node; every
-    /// resolved `mention` edge between two distinct non-deleted pages is an edge.
+    /// resolved mention / task_of / meeting_ref edge between two distinct
+    /// non-deleted pages is an edge.
     pub fn get_graph(conn: &Connection) -> AppResult<LinkGraph> {
-        let mut estmt = conn.prepare(
+        let mut estmt = conn.prepare(&format!(
             "SELECT DISTINCT l.source_page_id, l.target_page_id
              FROM link l
              JOIN page sp ON sp.id = l.source_page_id
              JOIN page tp ON tp.id = l.target_page_id
-             WHERE l.kind = 'mention' AND l.target_page_id IS NOT NULL
+             WHERE l.kind IN {BACKLINK_KINDS} AND l.target_page_id IS NOT NULL
                AND sp.deleted_at IS NULL AND tp.deleted_at IS NULL
-               AND l.source_page_id <> l.target_page_id",
-        )?;
+               AND l.source_page_id <> l.target_page_id"
+        ))?;
         let edges: Vec<GraphEdge> = estmt
             .query_map([], |r| {
                 Ok(GraphEdge {
@@ -326,6 +375,125 @@ mod tests {
         assert_eq!(get_backlinks(&conn, &c.id).unwrap().len(), 0);
         assert_eq!(get_backlinks(&conn, &b.id).unwrap().len(), 1);
         assert!(tags_for_page(&conn, &a.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_stale_target_id_no_longer_wipes_links_and_tags() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let a = pages::core::create(&conn, None, "Note A".into(), "doc".into()).unwrap();
+        let b = pages::core::create(&conn, None, "Note B".into(), "doc".into()).unwrap();
+        let doomed = pages::core::create(&conn, None, "Doomed".into(), "doc".into()).unwrap();
+
+        set_page_links(
+            &conn,
+            &a.id,
+            &[LinkInput {
+                target_page_id: Some(b.id.clone()),
+                dst_title: Some("Note B".into()),
+                context: None,
+            }],
+            &["client".into()],
+        )
+        .unwrap();
+
+        // The editor still holds an id for a page deleted in another window.
+        pages::core::delete(&conn, &doomed.id).unwrap();
+        set_page_links(
+            &conn,
+            &a.id,
+            &[
+                LinkInput {
+                    target_page_id: Some(doomed.id.clone()),
+                    dst_title: Some("Note B".into()),
+                    context: None,
+                },
+                LinkInput {
+                    target_page_id: Some(b.id.clone()),
+                    dst_title: None,
+                    context: None,
+                },
+            ],
+            &["client".into(), "urgent".into()],
+        )
+        .unwrap();
+
+        // The stale id fell back to the title, and nothing was wiped.
+        assert_eq!(get_backlinks(&conn, &b.id).unwrap().len(), 2);
+        let mut tags = tags_for_page(&conn, &a.id).unwrap();
+        tags.sort();
+        assert_eq!(tags, vec!["client".to_string(), "urgent".to_string()]);
+    }
+
+    #[test]
+    fn title_resolution_picks_the_oldest_match() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let first = pages::core::create(&conn, None, "Acme".into(), "doc".into()).unwrap();
+        let second = pages::core::create(&conn, None, "Acme".into(), "doc".into()).unwrap();
+        conn.execute("UPDATE page SET created_at = 100 WHERE id = ?1", [&first.id])
+            .unwrap();
+        conn.execute("UPDATE page SET created_at = 200 WHERE id = ?1", [&second.id])
+            .unwrap();
+        let note = pages::core::create(&conn, None, "Note".into(), "doc".into()).unwrap();
+
+        set_page_links(
+            &conn,
+            &note.id,
+            &[LinkInput { target_page_id: None, dst_title: Some("Acme".into()), context: None }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(get_backlinks(&conn, &first.id).unwrap().len(), 1);
+        assert!(get_backlinks(&conn, &second.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unreferenced_tags_are_swept() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let a = pages::core::create(&conn, None, "Note A".into(), "doc".into()).unwrap();
+        set_page_links(&conn, &a.id, &[], &["urgent".into(), "client".into()]).unwrap();
+        let count = |c: &rusqlite::Connection| -> i64 {
+            c.query_row("SELECT count(*) FROM tag", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&conn), 2);
+        set_page_links(&conn, &a.id, &[], &["client".into()]).unwrap();
+        assert_eq!(count(&conn), 1, "the dropped tag is gone, the kept one stays");
+        assert_eq!(tags_for_page(&conn, &a.id).unwrap(), vec!["client".to_string()]);
+    }
+
+    #[test]
+    fn backlinks_report_every_kind_of_edge() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let client = pages::core::create(&conn, None, "Acme".into(), "doc".into()).unwrap();
+        let note = pages::core::create(&conn, None, "Kickoff".into(), "doc".into()).unwrap();
+        set_page_links(
+            &conn,
+            &note.id,
+            &[LinkInput { target_page_id: Some(client.id.clone()), dst_title: None, context: None }],
+            &[],
+        )
+        .unwrap();
+        for kind in ["task_of", "meeting_ref"] {
+            conn.execute(
+                "INSERT INTO link (id, source_page_id, target_page_id, kind, created_at)
+                 VALUES (?1, ?2, ?3, ?4, 1)",
+                rusqlite::params![crate::db::new_id(), note.id, client.id, kind],
+            )
+            .unwrap();
+        }
+        let mut kinds: Vec<String> = get_backlinks(&conn, &client.id)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.kind)
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, vec!["meeting_ref", "mention", "task_of"]);
+        // the graph counts the pair once, whatever the edge kinds
+        let g = get_graph(&conn).unwrap();
+        assert_eq!(g.edges.len(), 1);
     }
 
     #[test]
