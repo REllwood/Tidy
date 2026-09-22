@@ -4,6 +4,7 @@ pub mod documents;
 pub mod ingest;
 pub mod knowledge;
 pub mod mcp;
+pub mod meeting_notes;
 pub mod pages;
 pub mod recording;
 pub mod search;

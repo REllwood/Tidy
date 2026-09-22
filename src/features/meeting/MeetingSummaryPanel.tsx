@@ -1,29 +1,116 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
-import { localAi, meetingJobsKey, aiStatusKey } from "@/lib/localAi";
+import { ChevronDown, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  localAi,
+  meetingJobsKey,
+  aiStatusKey,
+  isUserProgress,
+  type MeetingJob,
+} from "@/lib/localAi";
+import {
+  databasesApi,
+  meetingNotesApi,
+  recordingHistoryApi,
+  recordingHistoryKey,
+  type SavedRecording,
+} from "@/lib/api";
+import { flushPendingEdits } from "@/lib/pendingEdits";
+import { announceDocumentChange } from "@/hooks/useDocument";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { SpeakerNamesDialog } from "./SpeakerNames";
 import { useUi } from "@/store/ui";
 
 import { MeetingNotes } from "./MeetingNotes";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/errors";
+import { isMeetingPage, summaryPanelInterval } from "./polling";
 
 export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
-  const { data } = useQuery({
-    queryKey: meetingJobsKey,
-    queryFn: localAi.jobs,
-    refetchInterval: 2000,
-  });
   const qc = useQueryClient();
+  // Rendered on every document page: decide cheaply whether this is a meeting
+  // at all, and only then look at the AI queue.
+  const history = useQuery({
+    queryKey: recordingHistoryKey,
+    queryFn: recordingHistoryApi.list,
+    staleTime: 30_000,
+  });
+  const isMeeting = isMeetingPage(
+    history.data as SavedRecording[] | undefined,
+    pageId,
+  );
   const status = useQuery({
     queryKey: aiStatusKey,
     queryFn: localAi.status,
-    refetchInterval: 2000,
+    enabled: isMeeting,
+    staleTime: 30_000,
+  });
+  const aiReady = !!status.data?.ready;
+  const { data } = useQuery({
+    queryKey: meetingJobsKey,
+    queryFn: localAi.jobs,
+    enabled: isMeeting,
+    refetchInterval: (query) =>
+      summaryPanelInterval(
+        query.state.data as MeetingJob[] | undefined,
+        pageId,
+        aiReady,
+      ),
   });
   const regenerate = useMutation({
     mutationFn: () => localAi.retry(pageId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: meetingJobsKey }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: meetingJobsKey });
+      void qc.invalidateQueries({ queryKey: aiStatusKey });
+    },
   });
   const setPane = useUi((s) => s.setActivePane);
+  const [naming, setNaming] = useState(false);
+  const addToPage = useMutation({
+    mutationFn: async () => {
+      // Save any edit still in the editor before the page is rewritten.
+      await flushPendingEdits();
+      return meetingNotesApi.addToPage(pageId);
+    },
+    onSuccess: (replaced) => {
+      announceDocumentChange(qc, pageId);
+      toast.success(
+        replaced
+          ? "Updated the notes in the page"
+          : "Added the notes to the page",
+      );
+    },
+    onError: (error) =>
+      toast.error(`Couldn't add the notes. ${errorMessage(error)}`),
+  });
+  const databases = useQuery({
+    queryKey: ["databases"],
+    queryFn: () => databasesApi.list(),
+    enabled: isMeeting,
+  });
+  const toTasks = useMutation({
+    mutationFn: (db: { id: string; title: string }) =>
+      meetingNotesApi
+        .nextStepsToTasks(pageId, db.id)
+        .then((result) => ({ ...result, title: db.title })),
+    onSuccess: ({ added, skipped, title }) => {
+      void qc.invalidateQueries({ queryKey: ["databases"] });
+      void qc.invalidateQueries({ queryKey: ["database-by-id"] });
+      toast.success(
+        added
+          ? `Added ${added} next ${added === 1 ? "step" : "steps"} to ${title}${skipped ? ` (${skipped} already there)` : ""}`
+          : `These next steps are already in ${title}`,
+      );
+    },
+    onError: (error) =>
+      toast.error(`Couldn't add the next steps. ${errorMessage(error)}`),
+  });
   const job = data?.find((j) => j.page_id === pageId);
   if (!job) return null;
   const busy = ["summarising", "indexing"].includes(job.state);
@@ -80,7 +167,7 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
           </p>
         </div>
       )}
-      <div className="mt-5 border-t border-border pt-4">
+      <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
         <Button
           variant="secondary"
           size="sm"
@@ -89,7 +176,9 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
             busy ||
             job.state === "queued" ||
             !status.data?.ready ||
-            !!status.data.progress ||
+            // Background work can keep running; only a setup or download the
+            // person started here blocks a new request.
+            isUserProgress(status.data.progress) ||
             status.data.recording_paused
           }
           onClick={() => regenerate.mutate()}
@@ -97,7 +186,59 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
           {regenerate.isPending && <Loader2 className="size-3 animate-spin" />}
           Regenerate notes
         </Button>
+        {job.summary && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={addToPage.isPending}
+            onClick={() => addToPage.mutate()}
+          >
+            {addToPage.isPending && <Loader2 className="size-3 animate-spin" />}
+            Add notes to page
+          </Button>
+        )}
+        {!!job.summary?.action_items.length && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={toTasks.isPending}
+              render={<Button variant="secondary" size="sm" />}
+            >
+              {toTasks.isPending && <Loader2 className="size-3 animate-spin" />}
+              Send next steps to planner
+              <ChevronDown className="size-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <p className="px-2 py-1 text-xs font-medium text-text-faint">
+                Add as tasks in
+              </p>
+              {databases.data?.map((db) => (
+                <DropdownMenuItem
+                  key={db.database_id}
+                  onClick={() =>
+                    toTasks.mutate({ id: db.database_id, title: db.title })
+                  }
+                >
+                  {db.icon && <span>{db.icon}</span>}
+                  {db.title || "Untitled"}
+                </DropdownMenuItem>
+              ))}
+              {databases.data?.length === 0 && (
+                <p className="px-2 py-1.5 text-xs text-text-muted">
+                  Create a table for tasks first.
+                </p>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <Button variant="ghost" size="sm" onClick={() => setNaming(true)}>
+          Name speakers
+        </Button>
       </div>
+      <SpeakerNamesDialog
+        pageId={pageId}
+        open={naming}
+        onOpenChange={setNaming}
+      />
     </section>
   );
 }
