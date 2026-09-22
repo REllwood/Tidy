@@ -145,6 +145,9 @@ export const databasesApi = {
   deleteField: (id: string) => invoke<void>("delete_field", { id }),
   createRow: (databaseId: string) =>
     invoke<RowWithCells>("create_row", { databaseId }),
+  /** Create a row and set its cells in one transaction (no half-written row). */
+  createRowWithCells: (databaseId: string, cells: Record<string, CellValue>) =>
+    invoke<RowWithCells>("create_row_with_cells", { databaseId, cells }),
   deleteRow: (id: string) => invoke<void>("delete_row", { id }),
   moveRow: (id: string, position: number) =>
     invoke<void>("move_row", { id, position }),
@@ -161,11 +164,13 @@ export interface LinkInput {
   dst_title?: string | null;
   context?: string | null;
 }
+export type BacklinkKind = "mention" | "task_of" | "meeting_ref";
 export interface Backlink {
   source_page_id: string;
   source_title: string;
   source_icon: string | null;
   context: string | null;
+  kind: BacklinkKind;
 }
 
 export interface GraphNode {
@@ -190,6 +195,8 @@ export const knowledgeApi = {
   getBacklinks: (pageId: string) =>
     invoke<Backlink[]>("get_backlinks", { pageId }),
   getPageTags: (pageId: string) => invoke<string[]>("get_page_tags", { pageId }),
+  /** Every tag in use, most used first. */
+  listTags: () => invoke<string[]>("list_tags"),
   getGraph: () => invoke<LinkGraph>("get_graph"),
 };
 
@@ -254,23 +261,13 @@ export const recordingApi = {
   start: () => invoke<boolean>("start_recording"),
   stop: (client = "") => invoke<Recording>("stop_recording", { client }),
   isRecording: () => invoke<boolean>("is_recording"),
-  record: (
-    pageId: string,
-    durationMs: number,
-    audioPath: string | null,
-    modelUsed: string | null,
-  ) =>
-    invoke<void>("record_meeting", {
-      pageId,
-      durationMs,
-      audioPath,
-      modelUsed,
-    }),
 };
 
 export const modelsApi = {
   list: () => invoke<ModelInfo[]>("list_models"),
   download: (id: string) => invoke<void>("download_model", { id }),
+  /** Stops an in-flight download; the pending `download` rejects and the partial file is removed. */
+  cancelDownload: (id: string) => invoke<void>("cancel_model_download", { id }),
   select: (id: string) => invoke<void>("select_model", { id }),
   remove: (id: string) => invoke<void>("delete_model", { id }),
 };
@@ -294,10 +291,13 @@ export const diarizeApi = {
 
 export const ollamaApi = {
   status: () => invoke<OllamaStatus>("ollama_status"),
-  summarize: (transcript: string) =>
-    invoke<MeetingSummary>("summarize_transcript", { transcript }),
-  generate: (instruction: string, context?: string, requestId?: string) =>
-    invoke<string>("ai_generate", { instruction, context, requestId }),
+  /** `mode` lets a long page be read in parts: a rewrite keeps every part, anything else is condensed first. */
+  generate: (
+    instruction: string,
+    context?: string,
+    requestId?: string,
+    mode?: "ask" | "summarize" | "rewrite" | "continue",
+  ) => invoke<string>("ai_generate", { instruction, context, requestId, mode }),
 };
 
 // ---- Ingest (flagship: blob -> filed note + tasks) ------------------------
@@ -307,7 +307,19 @@ export interface IngestResult {
   client_page_id: string | null;
   task_row_ids: string[];
   summary: string;
+  /** Filed with its original text; the summary is added when local AI runs. */
+  summary_pending?: boolean;
 }
+/** A note an agent filed, waiting for (or stuck on) its summary. */
+export interface NoteSummaryStatus {
+  state: "queued" | "summarising" | "error";
+  error: string | null;
+}
+export const noteSummaryApi = {
+  status: (pageId: string) =>
+    invoke<NoteSummaryStatus | null>("note_summary_status", { pageId }),
+  retry: (pageId: string) => invoke<void>("note_summary_retry", { pageId }),
+};
 export interface IngestArgs {
   rawText: string;
   clientHint?: string;
@@ -383,7 +395,10 @@ export interface SavedRecording {
   started_at: number;
   duration_ms: number;
   audio_path: string | null;
+  /** True whenever the audio file still exists, including temporary audio kept for a retry. */
   audio_available: boolean;
+  /** Audio kept only because the transcript has not been saved yet; discarded after success. */
+  audio_temporary: boolean;
   model_used: string | null;
   transcript_state: string;
   transcript_error: string | null;
@@ -401,6 +416,31 @@ export interface RetranscriptionResult {
   applied: boolean;
   segments: TranscriptSegment[];
 }
+// ---- Meeting notes: speaker names, notes in the page, next steps -----------
+
+export interface MeetingSpeaker {
+  label: string;
+  /** The first thing they said, to help tell who is who. */
+  sample: string;
+  turns: number;
+}
+export interface TasksAdded {
+  added: number;
+  /** Next steps already in the table, left alone. */
+  skipped: number;
+}
+export const meetingNotesApi = {
+  speakers: (pageId: string) =>
+    invoke<MeetingSpeaker[]>("meeting_speakers", { pageId }),
+  renameSpeakers: (pageId: string, names: { from: string; to: string }[]) =>
+    invoke<boolean>("rename_meeting_speakers", { pageId, names }),
+  /** Resolves to true when an earlier copy in the page was replaced. */
+  addToPage: (pageId: string) =>
+    invoke<boolean>("add_meeting_notes_to_page", { pageId }),
+  nextStepsToTasks: (pageId: string, databaseId: string) =>
+    invoke<TasksAdded>("meeting_next_steps_to_tasks", { pageId, databaseId }),
+};
+
 export const recordingHistoryApi = {
   list: () => invoke<SavedRecording[]>("recording_history"),
   versions: (pageId: string) =>
@@ -412,11 +452,15 @@ export const recordingHistoryApi = {
       language,
     }),
   cancel: (pageId: string) => invoke<void>("cancel_transcription", { pageId }),
+  /** Deletes the audio file for a meeting, keeping every saved transcript. */
+  discardAudio: (pageId: string) =>
+    invoke<void>("discard_recording_audio", { pageId }),
 };
 
 export const recordingPreferencesApi = {
   get: () => invoke<boolean>("get_recording_preferences"),
   set: (keepAudio: boolean) => invoke<void>("set_recording_preferences", {keepAudio}),
+  /** Safe to call at any time: temporary audio is only discarded once the transcript is saved. */
   finish: (pageId: string) => invoke<void>("finish_recording", {pageId}),
 };
 

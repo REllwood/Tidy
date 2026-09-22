@@ -22,8 +22,19 @@ import type {
 let mockRecording = false;
 let mockRecordingKeepAudio = false;
 const cancelledTranscriptions = new Set<string>();
+const cancelledDownloads = new Set<string>();
+/** Mirrors `local_ai_status.progress`, including the origin that decides whether settings stay usable. */
+let previewProgress: {
+  label: string;
+  model_id: string | null;
+  completed: number;
+  total: number;
+  origin: "user" | "worker";
+} | null = null;
 let previewAiEnabled = false;
 let previewSelected = 'qwen3-4b';
+let previewProvider: 'builtin' | 'ollama' = 'builtin';
+let previewOllamaModel = '';
 const previewDownloads = new Set<string>();
 const previewMeetings = new Set<string>();
 const previewModels = catalogue.ai;
@@ -346,10 +357,13 @@ function store(): MockDb {
     db = load();
     for (const meeting of db.recordings ?? []) {
       meeting.retain_audio ??= true;
+      meeting.audio_temporary ??= false;
       if (meeting.page_id) previewMeetings.add(meeting.page_id);
       if (meeting.transcript_state === "transcribing") {
         meeting.transcript_state = "error";
         meeting.transcript_error = "Preview interrupted; saved text has been kept.";
+        // The audio survives an interrupted transcription so it can be retried.
+        meeting.audio_temporary = !meeting.retain_audio && meeting.audio_available;
       }
     }
   }
@@ -527,8 +541,16 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
           source_title: src!.title || "Untitled",
           source_icon: src!.icon ?? null,
           context: l.context,
+          kind: "mention" as const,
         }));
       return out as T;
+    }
+    case "list_tags": {
+      const counts = new Map<string, number>();
+      for (const [pageId, tags] of Object.entries(d.pageTags))
+        if (d.pages.some((p) => p.id === pageId))
+          for (const t of tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+      return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t) as T;
     }
     case "get_page_tags":
       // Mirror Rust: name-sorted.
@@ -850,6 +872,9 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         if (i >= 0) {
           mdb.fields.splice(i, 1);
           for (const r of mdb.rows) delete r.cells[args.id];
+          // Mirror the native command: strip the dangling id out of every view
+          // config so no view is left pointing at a field that has gone.
+          for (const v of mdb.views) v.config = stripFieldFromConfig(v.config, args.id);
           commit();
           return undefined as T;
         }
@@ -865,6 +890,23 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         position: maxPos(mdb.rows.map((x) => x.position)),
         created_at: now(),
         cells: {},
+      };
+      mdb.rows.push(r);
+      commit();
+      return r as T;
+    }
+    case "create_row_with_cells": {
+      const mdb = dbById(args.databaseId);
+      if (!mdb) throw err("not_found", args.databaseId);
+      const cells: RowWithCells["cells"] = {};
+      for (const [fieldId, value] of Object.entries(args.cells ?? {}))
+        if (value !== null && value !== undefined) cells[fieldId] = value;
+      const r: RowWithCells = {
+        id: uid(),
+        database_id: args.databaseId,
+        position: maxPos(mdb.rows.map((x) => x.position)),
+        created_at: now(),
+        cells,
       };
       mdb.rows.push(r);
       commit();
@@ -921,9 +963,19 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return undefined as T;
     case "get_recording_preferences": return (d.settings["recording.keep_audio"] === "true") as T;
     case "set_recording_preferences": d.settings["recording.keep_audio"] = args.keepAudio ? "true" : "false";commit();return undefined as T;
+    // Retention: temporary audio is kept until the transcript is saved, so an
+    // interrupted or failed transcription can always be retried.
     case "finish_recording": {
       const meeting=d.recordings?.find(m=>m.page_id===args.pageId);
-      if(meeting && !meeting.retain_audio){meeting.audio_path=null;meeting.audio_available=false;commit();}
+      if(meeting && !meeting.retain_audio && meeting.transcript_state === "saved"){
+        meeting.audio_path=null;meeting.audio_available=false;meeting.audio_temporary=false;commit();
+      }
+      return undefined as T;
+    }
+    case "discard_recording_audio": {
+      const meeting=d.recordings?.find(m=>m.page_id===args.pageId);
+      if(!meeting) throw err("not_found", "That recording is no longer available.");
+      meeting.audio_path=null;meeting.audio_available=false;meeting.audio_temporary=false;commit();
       return undefined as T;
     }
     case "start_recording":
@@ -953,6 +1005,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         duration_ms: 142000,
         audio_path: `mock://${note.page_id}.wav`,
         audio_available: true,
+        audio_temporary: !mockRecordingKeepAudio,
         model_used: null,
         transcript_state: "pending",
         transcript_error: null,
@@ -1026,21 +1079,37 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       m.transcript_state = "saved";
       m.transcript_error = null;
       m.model_used = args.modelId ?? "Whisper Base";
+      // Temporary audio has done its job once the transcript is saved.
+      if (m.audio_temporary && !m.retain_audio) {
+        m.audio_path = null;
+        m.audio_available = false;
+        m.audio_temporary = false;
+      }
       commit();
       return { body_json: body, segments, applied } as T;
     }
-    case "record_meeting":
-      previewMeetings.add(args.pageId);
-      return undefined as T; // mock: no-op (meeting metadata persistence)
     case "list_models":
       return mockModels() as T;
     case "download_model": {
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      cancelledDownloads.delete(args.id);
+      for (let step = 1; step <= 10; step++) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        if (cancelledDownloads.delete(args.id))
+          throw new Error("Download cancelled.");
+        window.dispatchEvent(
+          new CustomEvent("model-download-progress", {
+            detail: { id: args.id, downloaded: step, total: 10 },
+          }),
+        );
+      }
       const m = mockModelState();
       m[args.id] = { downloaded: true, selected: m[args.id]?.selected ?? false };
       saveModelState(m);
       return undefined as T;
     }
+    case "cancel_model_download":
+      cancelledDownloads.add(args.id);
+      return undefined as T;
     case "select_model": {
       const m = mockModelState();
       for (const k of Object.keys(m)) m[k].selected = false;
@@ -1074,23 +1143,40 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         { start_ms: 9000, end_ms: 20000, speaker: 1 },
       ] as T;
     case "local_ai_status":
-      return { memory_bytes: 16 * 1024 ** 3, recommended_model_id: 'qwen3-4b', config: { provider: previewAiEnabled ? 'builtin' : 'disabled', model_id: previewSelected, ollama_model: '' }, models: previewModels.map(m => ({ ...m, downloaded: previewDownloads.has(m.id) })), progress: null, recording_paused: mockRecording, runtime_available: true, ready: previewAiEnabled, search_ready: previewAiEnabled && previewDownloads.has('nomic-embed'), disk_bytes: previewModels.filter(m => previewDownloads.has(m.id)).reduce((n,m) => n+m.size,0) } as T;
+      return { memory_bytes: 16 * 1024 ** 3, recommended_model_id: 'qwen3-4b', config: { provider: previewAiEnabled ? previewProvider : 'disabled', model_id: previewSelected, ollama_model: previewOllamaModel }, models: previewModels.map(m => ({ ...m, downloaded: previewDownloads.has(m.id) })), progress: previewProgress, recording_paused: mockRecording, runtime_available: true, ready: previewAiEnabled, search_ready: previewAiEnabled && previewDownloads.has('nomic-embed'), disk_bytes: previewModels.filter(m => previewDownloads.has(m.id)).reduce((n,m) => n+m.size,0) } as T;
     case "local_ai_setup":
+      previewProgress = { label: 'Downloading local AI models', model_id: 'qwen3-4b', completed: 0, total: 100, origin: 'user' };
       await new Promise(r => setTimeout(r, 1600));
-      previewDownloads.add('qwen3-4b'); previewDownloads.add('nomic-embed'); previewAiEnabled = true;
+      previewProgress = null;
+      previewDownloads.add('qwen3-4b'); previewDownloads.add('nomic-embed');
+      previewAiEnabled = true; previewProvider = 'builtin';
       return undefined as T;
     case "local_ai_download":
-      await new Promise(r => setTimeout(r, 1000)); previewDownloads.add(args.id); return undefined as T;
+      previewProgress = { label: 'Downloading model', model_id: args.id, completed: 0, total: 100, origin: 'user' };
+      await new Promise(r => setTimeout(r, 1000));
+      previewProgress = null; previewDownloads.add(args.id); return undefined as T;
     case "local_ai_remove":
       if (!args.confirmed) throw new Error('Removal must be confirmed');
       previewDownloads.delete(args.id); if (args.id === previewSelected) previewAiEnabled = false; return undefined as T;
     case "local_ai_configure":
-      previewSelected = args.config.model_id; previewAiEnabled = args.config.provider !== 'disabled'; return undefined as T;
+      previewSelected = args.config.model_id;
+      previewProvider = args.config.provider === 'ollama' ? 'ollama' : 'builtin';
+      previewOllamaModel = args.config.ollama_model ?? '';
+      previewAiEnabled = args.config.provider !== 'disabled';
+      return undefined as T;
     case "local_ai_cancel":
+      // Background (worker) work is not cancellable from settings; user work is.
+      if (previewProgress?.origin === 'user') previewProgress = null;
+      return undefined as T;
     case "ai_end_recording": return undefined as T;
     case "meeting_ai_jobs":
       return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', sections: [{ heading: 'Recorder beta', points: ['The team agreed to ship the recorder beta by Friday.'] }, { heading: 'Scope and ownership', points: ['The team will confirm the first release scope and owners this week.'] }], open_questions: [], action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
-    case "meeting_ai_retry": return undefined as T;
+    case "meeting_ai_retry":
+      // Background meeting notes: worker-origin progress, so settings stay usable.
+      previewProgress = { label: 'Writing meeting notes in the background', model_id: previewSelected, completed: 0, total: 100, origin: 'worker' };
+      await new Promise(r => setTimeout(r, 2500));
+      previewProgress = null;
+      return undefined as T;
     case "ask_meetings": {
       await new Promise(r => setTimeout(r, 1200));
       const ids = [...previewMeetings].filter(id => {
@@ -1098,7 +1184,81 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         return (!args.clientId || d.links.some(l => l.source_page_id === id && l.kind === 'task_of' && l.target_page_id === args.clientId)) && (args.from == null || date >= args.from) && (args.until == null || date < args.until);
       });
       const id = ids[0];
-      return { answer: id ? 'Preview answer: the team agreed to ship the recorder beta by Friday.' : 'No meetings have been recorded in this preview.', sources: ids.map(id => ({ id: `preview-${id}`, page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', block_id: null, timestamp: '00:14', text: 'We agreed to ship the recorder beta by Friday.', started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now() })) } as T;
+      const question = String(args.question ?? '').toLowerCase();
+      const title = (id: string) => db?.pages.find(p => p.id === id)?.title ?? 'Meeting';
+      const date = (id: string) => d.pages.find(p => p.id === id)?.created_at ?? Date.now();
+      if (id && /action|next step|to-?do|follow/.test(question))
+        return { answer: `## ${title(id)} · ${new Date(date(id)).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} [1]\n- Wire up the model manager`, sources: [{ id: `notes:${id}`, page_id: id, title: title(id), block_id: null, timestamp: null, text: 'Preview: the team agreed to ship the recorder beta by Friday.', started_at: date(id), kind: 'notes' }], coverage: null, grounded: true, interpretation: [] } as T;
+      return { answer: id ? '- Preview answer: the team agreed to ship the recorder beta by Friday. [1]' : 'No meetings have been recorded in this preview.', sources: ids.map(id => ({ id: `preview-${id}`, page_id: id, title: title(id), block_id: null, timestamp: '00:14', text: 'We agreed to ship the recorder beta by Friday.', started_at: date(id), kind: 'transcript' })), coverage: null, grounded: true, interpretation: /last week/.test(question) ? ['Read “last week” in your local time.'] : [] } as T;
+    }
+    // ---- Meeting notes (preview): speaker names, notes in the page, tasks ----
+    case "meeting_speakers":
+    case "rename_meeting_speakers": {
+      const blocks = JSON.parse(d.documents[args.pageId] ?? "[]") as { type: string; content?: unknown; props?: { level?: number } }[];
+      const text = (b: { content?: unknown }) => typeof b.content === "string" ? b.content : Array.isArray(b.content) ? b.content.map((c: { text?: string }) => c.text ?? "").join("") : "";
+      const start = blocks.findIndex(b => b.type === "heading" && text(b).trim().toLowerCase() === "transcript");
+      const labels: number[] = [];
+      for (let i = start + 1; start >= 0 && i < blocks.length && blocks[i].type !== "heading"; i++) {
+        const t = text(blocks[i]).trim();
+        if (t && !t.startsWith("[") && t.length <= 40 && text(blocks[i + 1] ?? {}).trim().startsWith("[")) labels.push(i);
+      }
+      if (cmd === "rename_meeting_speakers") {
+        const names = args.names as { from: string; to: string }[];
+        let changed = false;
+        for (const i of labels) {
+          const name = names.find(n => n.from === text(blocks[i]).trim());
+          if (name) { blocks[i].content = name.to.trim(); changed = true; }
+        }
+        if (changed) { d.documents[args.pageId] = JSON.stringify(blocks); commit(); }
+        return changed as T;
+      }
+      const speakers: { label: string; sample: string; turns: number }[] = [];
+      for (const i of labels) {
+        const label = text(blocks[i]).trim();
+        let s = speakers.find(x => x.label === label);
+        if (!s) speakers.push(s = { label, sample: text(blocks[i + 1]).replace(/^\[[^\]]*\]\s*/, "").slice(0, 140), turns: 0 });
+        s.turns++;
+      }
+      return speakers as T;
+    }
+    case "add_meeting_notes_to_page": {
+      const blocks = JSON.parse(d.documents[args.pageId] ?? "[]") as { type: string; content?: unknown; props?: { level?: number } }[];
+      const text = (b: { content?: unknown }) => typeof b.content === "string" ? b.content : "";
+      const notes = [
+        { type: "heading", props: { level: 2 }, content: "Meeting notes" },
+        { type: "paragraph", content: "Preview: the team agreed to ship the recorder beta by Friday." },
+        { type: "heading", props: { level: 3 }, content: "Decisions" },
+        { type: "bulletListItem", content: "Ship the beta by Friday" },
+        { type: "heading", props: { level: 3 }, content: "Next steps" },
+        { type: "checkListItem", props: { checked: false }, content: "Wire up the model manager" },
+      ].map(b => ({ id: uid(), ...b }));
+      const existing = blocks.findIndex(b => b.type === "heading" && text(b) === "Meeting notes");
+      if (existing >= 0) {
+        let end = blocks.findIndex((b, i) => i > existing && b.type === "heading" && (b.props?.level ?? 1) <= 2);
+        if (end < 0) end = blocks.length;
+        blocks.splice(existing, end - existing, ...notes);
+      } else {
+        const at = blocks.findIndex(b => b.type === "heading" && text(b).toLowerCase() === "transcript");
+        blocks.splice(at < 0 ? blocks.length : at, 0, ...notes);
+      }
+      d.documents[args.pageId] = JSON.stringify(blocks.filter(b => !text(b).startsWith("Transcript saved. Local AI")));
+      commit();
+      return (existing >= 0) as T;
+    }
+    case "meeting_next_steps_to_tasks": {
+      const mdb = dbById(args.databaseId);
+      if (!mdb) throw err("not_found", args.databaseId);
+      const name = mdb.fields.find(f => f.type === "text");
+      if (!name) throw err("invalid", "That table has no text column to hold the task.");
+      const steps = ["Wire up the model manager"];
+      let added = 0;
+      for (const step of steps) {
+        if (mdb.rows.some(r => r.cells[name.id] === step)) continue;
+        const row = await mockInvoke<RowWithCells>("create_row", { databaseId: args.databaseId });
+        await mockInvoke("set_cell", { rowId: row.id, fieldId: name.id, value: step });
+        added++;
+      }
+      return { added, skipped: steps.length - added } as T;
     }
     case "ollama_status":
       return { available: true, models: ["llama3.2:3b"] } as T;
@@ -1116,17 +1276,10 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         String(args.instruction ?? "") +
         "”.") as T;
     }
-    case "summarize_transcript":
-      await new Promise((r) => setTimeout(r, 900));
-      return {
-        summary:
-          "Kickoff meeting to lock v1 scope and assign owners. The team aligned on shipping the meeting recorder beta by Friday.",
-        action_items: [
-          "Rhys to wire up the Whisper model manager UI",
-          "Finalize v1 scope and owners this week",
-        ],
-        decisions: ["Ship the recorder beta by Friday"],
-      } as T;
+    case "note_summary_status":
+      return null as T;
+    case "note_summary_retry":
+      return undefined as T;
 
     case "search": {
       const q = String(args.query ?? "").trim().toLowerCase();
@@ -1161,6 +1314,32 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
 
 function err(kind: string, message: string) {
   return { kind, message };
+}
+
+/** Remove every reference to a deleted field from a stored view config. */
+function stripFieldFromConfig(
+  config: DbView["config"],
+  fieldId: string,
+): DbView["config"] {
+  if (!config) return config;
+  const next = { ...config };
+  if (next.filters) next.filters = next.filters.filter((f) => f.fieldId !== fieldId);
+  if (next.sorts) next.sorts = next.sorts.filter((s) => s.fieldId !== fieldId);
+  if (next.columnWidths) {
+    const widths = { ...next.columnWidths };
+    delete widths[fieldId];
+    next.columnWidths = widths;
+  }
+  for (const k of [
+    "groupByFieldId",
+    "dateFieldId",
+    "startFieldId",
+    "endFieldId",
+    "dependenciesFieldId",
+  ] as const) {
+    if (next[k] === fieldId) delete next[k];
+  }
+  return next;
 }
 
 export function resetMockDb() {

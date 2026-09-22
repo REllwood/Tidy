@@ -1,6 +1,7 @@
 mod model_catalogue;
 mod audio;
 mod commands;
+mod lifecycle;
 mod local_ai;
 mod vault;
 mod whisper;
@@ -11,11 +12,59 @@ mod workspace;
 // modules keep referring to `crate::db` / `crate::error` unchanged.
 pub use tidy_core::{db, error};
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use commands::recording::RecorderState;
 use db::Db;
+use lifecycle::CloseState;
 use vault::VaultState;
+
+/// How often to look for sidecar writes. Slow enough to be free, quick enough
+/// that an agent's edit shows up while the user is still looking at the window.
+const MCP_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Poll the change counter the MCP sidecar bumps after every write and turn it
+/// into the same refresh events the app's own commands emit. The sidecar is a
+/// separate process, so this is the only way an agent's write reaches the UI.
+fn spawn_mcp_change_poller(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // Start from wherever the counter already is: writes made while Tidy
+        // was closed are already in the data the UI just loaded.
+        let mut seen = read_change_seq(&app).unwrap_or(0);
+        loop {
+            tokio::time::sleep(MCP_POLL).await;
+            // The lock is held for the read alone, never across an await or an
+            // emit, so polling cannot stall a write.
+            let changed = {
+                let db = app.state::<Db>();
+                let drained = match db.lock() {
+                    Ok(conn) => match tidy_core::db::change_seq(&conn) {
+                        Ok(seq) if seq != seen => {
+                            seen = seq;
+                            Some(tidy_core::db::take_changed_pages(&conn).unwrap_or_default())
+                        }
+                        _ => None,
+                    },
+                    Err(_) => None,
+                };
+                drained
+            };
+            let Some(pages) = changed else { continue };
+            let _ = app.emit("pages-changed", ());
+            let _ = app.emit("database-changed", ());
+            let _ = app.emit("links-changed", ());
+            for page_id in pages {
+                let _ = app.emit("document-changed", serde_json::json!({ "page_id": page_id }));
+            }
+        }
+    });
+}
+
+fn read_change_seq(app: &tauri::AppHandle) -> Option<i64> {
+    let db = app.state::<Db>();
+    let conn = db.lock().ok()?;
+    tidy_core::db::change_seq(&conn).ok()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,25 +88,67 @@ pub fn run() {
             log::info!("Tidy database: {}", db_path.display());
             let database = Db::open(&db_path).map_err(|e| {
                 log::error!("failed to open database: {e}");
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                std::io::Error::other(e.to_string())
             })?;
             app.manage(database);
             app.manage(RecorderState::default());
             app.manage(commands::updates::UpdateState::default());
             app.manage(commands::recording_history::TranscriptionState::default());
             app.manage(VaultState::default());
+            app.manage(CloseState::default());
             app.manage(local_ai::AiState::default());
             local_ai::start_worker(app.handle().clone());
 
             // One-time: backfill links/tags from existing page bodies so an
             // upgraded DB's graph/backlinks aren't empty on first v3 launch.
+            // It parses every page body, so it runs off the setup thread —
+            // otherwise a large workspace would hold the window closed.
             {
-                let db = app.state::<Db>();
-                let conn = db.conn.lock().unwrap();
-                if let Err(e) = tidy_core::store::knowledge::core::maybe_backfill(&conn) {
-                    log::warn!("links/tags backfill failed: {e}");
-                }
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let backfill = workspace::run_db(&handle, |conn| {
+                        tidy_core::store::knowledge::core::maybe_backfill(conn)
+                    })
+                    .await;
+                    match backfill {
+                        Ok(()) => {
+                            let _ = handle.emit("links-changed", ());
+                        }
+                        Err(e) => log::warn!("links/tags backfill failed: {e}"),
+                    }
+                });
             }
+
+            // Startup recovery for the recording library: complete anything a
+            // crash or a forced quit left half-written, before Recording
+            // history is asked about it. Filesystem work, so it keeps off the
+            // setup thread rather than holding the window closed.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let recovery = handle.clone();
+                    let done = tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(e) = whisper::models::sweep_partials(&recovery) {
+                            log::warn!("leftover model downloads were not swept: {e}");
+                        }
+                        commands::recording_preferences::recover(&recovery)
+                    })
+                    .await;
+                    match done {
+                        // Recovery can register a rescued recording, which
+                        // creates a page the sidebar has not seen yet.
+                        Ok(Ok(())) => {
+                            let _ = handle.emit("pages-changed", ());
+                        }
+                        Ok(Err(e)) => log::warn!("recording recovery failed: {e}"),
+                        Err(e) => log::warn!("recording recovery did not run: {e}"),
+                    }
+                });
+            }
+
+            // Watch for writes made by the MCP sidecar, which has its own
+            // connection to the same database and cannot emit our events.
+            spawn_mcp_change_poller(app.handle().clone());
 
             // If a vault was configured previously, resume watching it.
             vault::resume_if_configured(&app.handle().clone());
@@ -88,6 +179,7 @@ pub fn run() {
             commands::databases::update_field,
             commands::databases::delete_field,
             commands::databases::create_row,
+            commands::databases::create_row_with_cells,
             commands::databases::delete_row,
             commands::databases::move_row,
             commands::databases::set_cell,
@@ -98,18 +190,27 @@ pub fn run() {
             commands::recording_preferences::get_recording_preferences,
             commands::recording_preferences::set_recording_preferences,
             commands::recording_preferences::finish_recording,
+            commands::recording_preferences::discard_recording_audio,
             commands::recording::start_recording,
             commands::recording::stop_recording,
             commands::recording::is_recording,
-            commands::recording::record_meeting,
             commands::recording_history::recording_history,
             commands::recording_history::transcript_versions,
             commands::recording_history::retranscribe_meeting,
             commands::recording_history::cancel_transcription,
             commands::recording_history::export_recording_text,
+            commands::documents::save_text_file,
+            commands::ingest::note_summary_status,
+            commands::ingest::note_summary_retry,
+            commands::knowledge::list_tags,
+            commands::meeting_notes::meeting_speakers,
+            commands::meeting_notes::rename_meeting_speakers,
+            commands::meeting_notes::add_meeting_notes_to_page,
+            commands::meeting_notes::meeting_next_steps_to_tasks,
             commands::recording_history::export_recording_audio,
             whisper::models::list_models,
             whisper::models::download_model,
+            whisper::models::cancel_model_download,
             whisper::models::select_model,
             whisper::models::delete_model,
             whisper::transcribe::transcribe,
@@ -127,7 +228,6 @@ pub fn run() {
             local_ai::meeting_ai_retry,
             local_ai::ask_meetings,
             commands::ai::ollama_status,
-            commands::ai::summarize_transcript,
             commands::ai::ai_generate,
             commands::ingest::ingest_note,
             commands::mcp::mcp_get_token,
@@ -137,12 +237,30 @@ pub fn run() {
             vault::get_vault_dir,
             vault::export_vault,
             vault::flush_page,
+            lifecycle::confirm_close,
         ])
+        .on_window_event(|window, event| {
+            // Closing the window is a request, not an order: a recording may
+            // still need finalising, and the front end may need to save.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if lifecycle::intercept(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
+        .run(|app, event| match event {
+            // Quitting from the Dock or the menu bar goes through here rather
+            // than a window close, so it needs the same guard.
+            tauri::RunEvent::ExitRequested { ref api, .. } => {
+                if lifecycle::intercept(app) {
+                    api.prevent_exit();
+                }
+            }
+            tauri::RunEvent::Exit => {
                 app.state::<local_ai::AiState>().shutdown();
             }
+            _ => {}
         });
 }
