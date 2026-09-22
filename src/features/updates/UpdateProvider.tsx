@@ -45,6 +45,8 @@ type UpdateControls = {
   phase: Phase;
   message: string;
   available: Available | null;
+  /** An update check or install is running (including the automatic ones). */
+  busy: boolean;
   check: () => Promise<void>;
   show: () => void;
 };
@@ -61,6 +63,8 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const operation = useRef(false);
+  /** Mirrors `operation` for rendering, so the buttons follow it. */
+  const [working, setWorking] = useState(false);
   const dismissed = useRef<string | null>(null);
   const { state: meeting } = useSharedMeetingFlow();
   const recordingBusy = !["idle", "done", "error"].includes(meeting.phase);
@@ -93,6 +97,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
   const check = useCallback(async (automatic = false) => {
     if (operation.current || (automatic && busyRef.current)) return;
     operation.current = true;
+    setWorking(true);
     setPhase("checking");
     setMessage("");
     try {
@@ -115,6 +120,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
       setMessage(errorMessage(error));
     } finally {
       operation.current = false;
+      setWorking(false);
     }
   }, []);
   useEffect(() => {
@@ -136,6 +142,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
   const install = async () => {
     if (!available || operation.current || blocked) return;
     operation.current = true;
+    setWorking(true);
     setPhase("preparing");
     setMessage("");
     setProgress(null);
@@ -162,6 +169,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
     } finally {
       unlisten?.();
       operation.current = false;
+      setWorking(false);
     }
   };
   const label =
@@ -178,6 +186,7 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
         phase,
         message,
         available,
+        busy: working || installing,
         check: () => check(false),
         show: () => setOpen(true),
       }}
@@ -264,13 +273,17 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
 }
 export function UpdateSettings() {
   const updates = useUpdates();
-  const busy = [
-    "checking",
-    "preparing",
-    "downloading",
-    "installing",
-    "restarting",
-  ].includes(updates.phase);
+  const busy =
+    updates.busy ||
+    [
+      "checking",
+      "preparing",
+      "downloading",
+      "installing",
+      "restarting",
+    ].includes(updates.phase);
+  const checking =
+    updates.phase === "checking" || (updates.busy && updates.phase === "idle");
   return (
     <div className="space-y-3">
       <p className="text-sm text-text-muted">
@@ -286,7 +299,7 @@ export function UpdateSettings() {
           }}
         >
           {busy && <Loader2 className="size-4 animate-spin" />}
-          {updates.phase === "checking" ? "Checking…" : "Check for updates"}
+          {checking ? "Checking…" : "Check for updates"}
         </Button>
         {updates.available && (
           <Button onClick={updates.show}>View update</Button>

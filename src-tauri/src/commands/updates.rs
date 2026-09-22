@@ -119,6 +119,13 @@ pub async fn install_app_update(app: AppHandle, version: String) -> AppResult<()
             "Install updates from the Tidy app in Applications.".into(),
         ));
     }
+    // Restarting mid-meeting would lose the audio that has not been registered
+    // yet, so an update waits for the recording to be finished properly.
+    if super::recording::recording_in_flight(&app) {
+        return Err(AppError::Other(
+            "Finish recording or transcribing before installing an update.".into(),
+        ));
+    }
     app.state::<AiState>().reserve_recording().map_err(|_| {
         AppError::Other("Finish recording or transcribing before installing an update.".into())
     })?;
