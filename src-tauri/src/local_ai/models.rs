@@ -1,4 +1,5 @@
 use super::{db, AiState, Config, Progress};
+use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
@@ -29,6 +30,69 @@ pub fn installed(app: &AppHandle, m: &Model) -> bool {
         .and_then(|p| std::fs::metadata(p).ok())
         .is_some_and(|meta| meta.len() == m.size)
 }
+/// What a model file looked like when it was last verified in full.
+#[derive(Deserialize, Serialize)]
+struct Fingerprint {
+    size: u64,
+    mtime_ms: i64,
+    sha256: String,
+}
+fn fingerprint_key(id: &str) -> String {
+    format!("local_ai.verified.{id}")
+}
+fn file_stamp(path: &Path) -> AppResult<(u64, i64)> {
+    let meta = std::fs::metadata(path)?;
+    let modified = meta
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Ok((meta.len(), modified))
+}
+
+/// Remember that this exact file passed a full hash check.
+pub async fn remember_verified(app: &AppHandle, id: &str, path: &Path) -> AppResult<()> {
+    let sha256 = model(id)?.sha256.clone();
+    let (size, mtime_ms) = file_stamp(path)?;
+    let value = serde_json::to_string(&Fingerprint {
+        size,
+        mtime_ms,
+        sha256,
+    })?;
+    let key = fingerprint_key(id);
+    db(app, move |c| crate::db::set_setting(c, &key, &value)).await
+}
+
+/// Whether a stored fingerprint still describes the file on disk. The pinned
+/// hash is part of it, so a change to the catalogue forces a fresh check.
+fn fingerprint_matches(stored: Option<&str>, size: u64, mtime_ms: i64, sha256: &str) -> bool {
+    stored
+        .and_then(|raw| serde_json::from_str::<Fingerprint>(raw).ok())
+        .is_some_and(|f| f.size == size && f.mtime_ms == mtime_ms && f.sha256 == sha256)
+}
+
+/// Hash a model in full the first time it is used, then remember what the file
+/// looked like. Later starts compare only its size and timestamp, so opening
+/// the app does not re-read gigabytes from disk every time.
+pub async fn ensure_verified(
+    app: Option<&AppHandle>,
+    path: &Path,
+    m: &Model,
+    state: &AiState,
+) -> AppResult<()> {
+    let Some(app) = app else {
+        return verify(path, m, state).await;
+    };
+    let (size, mtime_ms) = file_stamp(path)?;
+    let key = fingerprint_key(&m.id);
+    let stored = db(app, move |c| crate::db::get_setting(c, &key)).await?;
+    if fingerprint_matches(stored.as_deref(), size, mtime_ms, &m.sha256) {
+        return Ok(());
+    }
+    verify(path, m, state).await?;
+    remember_verified(app, &m.id, path).await
+}
+
 pub async fn verify(path: &Path, m: &Model, state: &AiState) -> AppResult<()> {
     let mut f = tokio::fs::File::open(path).await?;
     let mut hash = Sha256::new();
@@ -56,7 +120,7 @@ pub async fn download(app: &AppHandle, id: &str, state: &AiState) -> AppResult<(
     tokio::fs::create_dir_all(dir(app)?).await?;
     state.progress(Progress::new("Checking model", Some(id)));
     if tokio::fs::try_exists(&target).await? {
-        verify(&target, m, state).await?;
+        ensure_verified(Some(app), &target, m, state).await?;
         return Ok(());
     }
     let folder = dir(app)?;
@@ -118,6 +182,7 @@ pub async fn download(app: &AppHandle, id: &str, state: &AiState) -> AppResult<(
             model_id: Some(id.into()),
             completed: bytes,
             total: m.size,
+            ..Progress::default()
         });
     }
     output.flush().await?;
@@ -126,7 +191,8 @@ pub async fn download(app: &AppHandle, id: &str, state: &AiState) -> AppResult<(
     state.progress(Progress::new("Verifying download", Some(id)));
     verify(&partial, m, state).await?;
     tokio::fs::rename(&partial, &target).await?;
-    Ok(())
+    // A freshly hashed file never needs hashing again unless it changes.
+    remember_verified(app, id, &target).await
 }
 pub async fn configure(app: &AppHandle, config: Config) -> AppResult<()> {
     if !["disabled", "builtin", "ollama"].contains(&config.provider.as_str()) {
@@ -200,6 +266,11 @@ pub async fn remove(app: &AppHandle, id: &str, confirmed: bool) -> AppResult<()>
             config.provider = "disabled".into();
             crate::db::set_setting(c, super::CONFIG_KEY, &serde_json::to_string(&config)?)?;
         }
+        // A removed model's fingerprint must not vouch for the next download.
+        c.execute(
+            "DELETE FROM setting WHERE key=?1",
+            [fingerprint_key(&id)],
+        )?;
         Ok(())
     })
     .await
@@ -225,5 +296,25 @@ mod tests {
             .to_string()
             .contains("cancelled"));
         assert!(model("../outside").is_err());
+    }
+
+    #[test]
+    fn a_remembered_model_is_not_hashed_again_unless_the_file_changed() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"a model").unwrap();
+        let (size, mtime) = file_stamp(file.path()).unwrap();
+        let stored = serde_json::to_string(&Fingerprint {
+            size,
+            mtime_ms: mtime,
+            sha256: "abc".into(),
+        })
+        .unwrap();
+        assert!(fingerprint_matches(Some(&stored), size, mtime, "abc"));
+        // A replaced file, a touched file or a re-pinned hash all fail closed.
+        assert!(!fingerprint_matches(Some(&stored), size + 1, mtime, "abc"));
+        assert!(!fingerprint_matches(Some(&stored), size, mtime + 1, "abc"));
+        assert!(!fingerprint_matches(Some(&stored), size, mtime, "def"));
+        assert!(!fingerprint_matches(None, size, mtime, "abc"));
+        assert!(!fingerprint_matches(Some("not json"), size, mtime, "abc"));
     }
 }
