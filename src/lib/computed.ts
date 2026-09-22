@@ -34,12 +34,17 @@ function evalNode(node: Node, scope: Record<string, number | string>): CellValue
     case "Identifier":
       return scope[node.name] ?? 0;
     case "UnaryExpression": {
-      const v = Number(evalNode(node.argument, scope));
+      const raw = evalNode(node.argument, scope);
+      if (raw === null) return null;
+      const v = Number(raw);
       return node.operator === "-" ? -v : node.operator === "!" ? (v ? 0 : 1) : v;
     }
     case "BinaryExpression": {
-      const a = evalNode(node.left, scope) as number;
-      const b = evalNode(node.right, scope) as number;
+      const a = evalNode(node.left, scope);
+      const b = evalNode(node.right, scope);
+      // An undefined sub-expression (e.g. a divide by zero) poisons the whole
+      // expression rather than silently becoming 0.
+      if (a === null || b === null) return null;
       switch (node.operator) {
         case "+":
           return typeof a === "string" || typeof b === "string" ? `${a}${b}` : a + b;
@@ -48,7 +53,8 @@ function evalNode(node: Node, scope: Record<string, number | string>): CellValue
         case "*":
           return Number(a) * Number(b);
         case "/":
-          return Number(b) === 0 ? 0 : Number(a) / Number(b);
+          // Divide by zero has no sensible number: report it as empty ("–").
+          return Number(b) === 0 ? null : Number(a) / Number(b);
         case "%":
           return Number(a) % Number(b);
         case ">":
@@ -86,8 +92,10 @@ function evalNode(node: Node, scope: Record<string, number | string>): CellValue
     case "CallExpression": {
       const fn = FUNCS[node.callee?.name];
       if (!fn) return 0;
-      const args = node.arguments.map((a: Node) => Number(evalNode(a, scope)));
-      return fn(...args);
+      const raw = node.arguments.map((a: Node) => evalNode(a, scope));
+      if (raw.length === 0 || raw.some((v: CellValue) => v === null)) return null;
+      const out = fn(...raw.map((v: CellValue) => Number(v)));
+      return isFinite(out) ? out : null;
     }
     default:
       return 0;
@@ -154,12 +162,16 @@ function safeArray(s: string): string[] {
   }
 }
 
-function aggregate(values: number[], fn: string): number {
+/**
+ * Aggregate a rollup's linked values. `count` and `sum` have a meaningful
+ * answer over an empty set (0); `avg`, `min` and `max` do not, so they report
+ * empty (null, rendered as "–") rather than a misleading 0.
+ */
+function aggregate(values: number[], fn: string): number | null {
   if (fn === "count") return values.length;
-  if (values.length === 0) return 0;
+  if (fn === "sum") return values.reduce((a, b) => a + b, 0);
+  if (values.length === 0) return null;
   switch (fn) {
-    case "sum":
-      return values.reduce((a, b) => a + b, 0);
     case "avg":
       return values.reduce((a, b) => a + b, 0) / values.length;
     case "min":

@@ -85,4 +85,44 @@ describe("buildGanttModel", () => {
     expect(m.tasks).toEqual([]);
     expect(m.totalDays).toBe(0);
   });
+
+  it("falls back to the first date field when the config names a deleted one", () => {
+    const m = buildGanttModel(
+      [row("a", { name: "A", start: "2026-06-10" })],
+      fields,
+      { startFieldId: "deleted-field" },
+    );
+    expect(m.tasks.map((t) => t.id)).toEqual(["a"]);
+  });
+
+  it("reads dates and names through a resolver (computed columns)", () => {
+    const computedStart = f("cstart", "formula");
+    const computedName = f("cname", "text");
+    const resolved: Record<string, string> = {
+      cstart: "2026-08-01",
+      cname: "From a formula",
+    };
+    const m = buildGanttModel(
+      [row("a", { name: "" })],
+      [computedName, computedStart],
+      { startFieldId: "cstart" },
+      (_row, field) => resolved[field.id] ?? null,
+    );
+    expect(m.tasks).toHaveLength(1);
+    expect(m.tasks[0].name).toBe("From a formula");
+    expect(dayNum(m.tasks[0].start)).toBe(dayNum(parseLocalDate("2026-08-01")!));
+  });
+
+  it("buckets the window on local calendar days", () => {
+    const m = buildGanttModel(
+      [row("a", { name: "A", start: "2026-06-10", due: "2026-06-14" })],
+      fields,
+      cfg,
+    );
+    // min is start-2 and the window covers end+2 (inclusive padding)
+    expect(dayNum(m.tasks[0].start) - dayNum(m.min)).toBe(2);
+    expect(m.totalDays).toBe(
+      dayNum(m.tasks[0].end) - dayNum(m.min) + 4,
+    );
+  });
 });

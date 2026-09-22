@@ -54,15 +54,63 @@ export function pickDueField(fields: DatabaseBundle["fields"]) {
   );
 }
 
-const DONE_RE = /done|complete|shipped|closed/i;
+/**
+ * A choice name that means "this is finished". Anchored and trimmed, so
+ * "Incomplete", "Not done" and "Reopened" are never mistaken for done.
+ */
+const DONE_NAME_RE = /^(done|completed?|finished|shipped|closed|resolved)$/i;
+/** A choice name that means "this hasn't been started". */
+const TODO_NAME_RE = /^(to ?do|not started|open|backlog|new)$/i;
+/** A field name that clearly tracks progress, so a last-choice guess is safe. */
+const STATUS_FIELD_RE = /status|state|progress/i;
+
+/** Does this select choice name mean "done"? */
+export function isDoneChoiceName(name: string): boolean {
+  return DONE_NAME_RE.test(name.trim());
+}
 
 /** Pick the select field that represents task status (not e.g. Priority). */
 export function pickStatusField(fields: DatabaseBundle["fields"]) {
   const selects = fields.filter((f) => f.type === "select");
   return (
     selects.find((f) => /status|state|stage/i.test(f.name)) ??
-    selects.find((f) => (f.options?.choices ?? []).some((c) => DONE_RE.test(c.name))) ??
+    selects.find((f) =>
+      (f.options?.choices ?? []).some((c) => isDoneChoiceName(c.name)),
+    ) ??
     selects[0]
+  );
+}
+
+/**
+ * Which choice marks a row as done. An exact name match wins. Failing that we
+ * only guess the last choice (the end of a pipeline) when the field is plainly
+ * a status field, so a non-English set like "Offen / Erledigt" still works
+ * while a "Priority" or "Size" select never marks anything done.
+ */
+export function pickDoneChoiceId(
+  field: DatabaseBundle["fields"][number] | undefined,
+  choices: { id: string; name: string }[],
+): string | null {
+  const exact = choices.find((c) => isDoneChoiceName(c.name));
+  if (exact) return exact.id;
+  if (field && choices.length > 1 && STATUS_FIELD_RE.test(field.name))
+    return choices[choices.length - 1].id;
+  return null;
+}
+
+/** Which choice returns a row to "not done". Never the done choice. */
+export function pickTodoChoiceId(
+  choices: { id: string; name: string }[],
+  doneChoiceId: string | null,
+): string | null {
+  return (
+    choices.find(
+      (c) => c.id !== doneChoiceId && TODO_NAME_RE.test(c.name.trim()),
+    )?.id ??
+    // fall back to any non-done choice (never the done choice, that makes
+    // "un-complete" a no-op)
+    choices.find((c) => c.id !== doneChoiceId)?.id ??
+    null
   );
 }
 
@@ -76,19 +124,14 @@ export function extractTasks(
   const status = pickStatusField(bundle.fields);
   if (!due) return [];
   const choices = status?.options?.choices ?? [];
-  const doneChoiceId = choices.find((c) => DONE_RE.test(c.name))?.id ?? null;
-  const todoChoiceId =
-    choices.find((c) => /to ?do|backlog|not started|open/i.test(c.name))?.id ??
-    // fall back to any non-done choice (never the done choice, that makes
-    // "un-complete" a no-op)
-    choices.find((c) => c.id !== doneChoiceId)?.id ??
-    null;
+  const doneChoiceId = pickDoneChoiceId(status, choices);
+  const todoChoiceId = pickTodoChoiceId(choices, doneChoiceId);
   return bundle.rows.flatMap((r) => {
     const d = r.cells[due.id];
     if (!d || typeof d !== "string") return [];
     const statusVal = status ? r.cells[status.id] : null;
     const choice = choices.find((c) => c.id === statusVal);
-    const done = choice ? DONE_RE.test(choice.name) : false;
+    const done = !!doneChoiceId && !!choice && choice.id === doneChoiceId;
     return [
       {
         rowId: r.id,

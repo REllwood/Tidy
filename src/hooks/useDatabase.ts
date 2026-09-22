@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import {
   useMutation,
   useQueries,
@@ -15,6 +16,7 @@ import {
   type DatabaseBundle,
 } from "@/lib/api";
 import { relationTargetIds } from "@/lib/computed";
+import { errorMessage } from "@/lib/errors";
 
 const key = (pageId: string) => ["database", pageId] as const;
 
@@ -29,11 +31,14 @@ export function useDatabase(pageId: string) {
  * Prefetch the target databases referenced by this bundle's relation fields.
  * Returns a map keyed by database id, consumed by `computeCell` to resolve
  * lookups/rollups and by the relation cell editor to render its picker.
+ *
+ * The map identity is stable while the underlying data is unchanged, so it can
+ * safely sit in the dependency list of the views' memos.
  */
 export function useRelationTargets(
   bundle: DatabaseBundle | undefined,
 ): Record<string, DatabaseBundle> {
-  const ids = bundle ? relationTargetIds(bundle) : [];
+  const ids = useMemo(() => (bundle ? relationTargetIds(bundle) : []), [bundle]);
   const results = useQueries({
     queries: ids.map((id) => ({
       queryKey: ["database-by-id", id] as const,
@@ -41,46 +46,87 @@ export function useRelationTargets(
       staleTime: 10_000,
     })),
   });
-  const map: Record<string, DatabaseBundle> = {};
-  ids.forEach((id, i) => {
-    const data = results[i]?.data;
-    if (data) map[id] = data;
-  });
-  return map;
+
+  // `useQueries` hands back a fresh array every render, so the map is rebuilt
+  // only when one of the queries actually produced new data.
+  const signature = ids
+    .map((id, i) => `${id}:${results[i]?.dataUpdatedAt ?? 0}`)
+    .join("|");
+  const cached = useRef<Record<string, DatabaseBundle>>({});
+  const lastSignature = useRef<string | null>(null);
+  if (lastSignature.current !== signature) {
+    lastSignature.current = signature;
+    const map: Record<string, DatabaseBundle> = {};
+    ids.forEach((id, i) => {
+      const data = results[i]?.data;
+      if (data) map[id] = data;
+    });
+    cached.current = map;
+  }
+  return cached.current;
 }
 
-export function useDatabaseEvents(pageId: string) {
+/**
+ * Listen for native database changes. Mounted once by the app shell: every
+ * database query is invalidated, because a change can touch a page bundle, a
+ * relation target or the database list.
+ */
+export function useDatabaseEvents() {
   const qc = useQueryClient();
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    const un = listen("database-changed", () =>
-      qc.invalidateQueries({ queryKey: key(pageId) }),
-    );
+    const un = listen("database-changed", () => {
+      qc.invalidateQueries({ queryKey: ["database"] });
+      qc.invalidateQueries({ queryKey: ["database-by-id"] });
+      qc.invalidateQueries({ queryKey: ["databases"] });
+    });
     return () => {
       un.then((f) => f());
     };
-  }, [qc, pageId]);
+  }, [qc]);
 }
 
-/** Factory: all DB mutations invalidate this page's bundle on settle. */
+/**
+ * Factory: every DB mutation invalidates the queries all surfaces read (the
+ * per-page bundle, the by-id bundles the planner and relations use, and the
+ * database list for schema changes), and reports failures with the native
+ * error's own message.
+ */
 export function useDbMutations(pageId: string) {
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: key(pageId) });
-  const opts = { onSettled: invalidate };
+  const invalidate = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ["database"] }),
+      qc.invalidateQueries({ queryKey: ["database-by-id"] }),
+    ]);
+  const invalidateSchema = () =>
+    Promise.all([invalidate(), qc.invalidateQueries({ queryKey: ["databases"] })]);
+
+  const fail = (what: string) => (error: unknown) =>
+    toast.error(what, { description: errorMessage(error) });
+
+  const rowOpts = (what: string) => ({
+    onSettled: invalidate,
+    onError: fail(what),
+  });
+  const fieldOpts = (what: string) => ({
+    onSettled: invalidateSchema,
+    onError: fail(what),
+  });
 
   return {
     createRow: useMutation({
       mutationFn: (databaseId: string) => databasesApi.createRow(databaseId),
-      ...opts,
+      ...rowOpts("Couldn't add the row"),
     }),
     deleteRow: useMutation({
       mutationFn: (id: string) => databasesApi.deleteRow(id),
-      ...opts,
+      ...rowOpts("Couldn't delete the row"),
     }),
     moveRow: useMutation({
       mutationFn: (v: { id: string; position: number }) =>
         databasesApi.moveRow(v.id, v.position),
-      ...opts,
+      ...rowOpts("Couldn't move the row"),
     }),
     setCell: useMutation({
       mutationFn: (v: { rowId: string; fieldId: string; value: CellValue }) =>
@@ -91,7 +137,9 @@ export function useDbMutations(pageId: string) {
         const prev = qc.getQueryData(key(pageId));
         qc.setQueryData(key(pageId), (old: unknown) => {
           if (!old) return old;
-          const b = old as { rows: { id: string; cells: Record<string, CellValue> }[] };
+          const b = old as {
+            rows: { id: string; cells: Record<string, CellValue> }[];
+          };
           return {
             ...b,
             rows: b.rows.map((r) =>
@@ -103,8 +151,9 @@ export function useDbMutations(pageId: string) {
         });
         return { prev };
       },
-      onError: (_e, _v, ctx) => {
+      onError: (error, _v, ctx) => {
         if (ctx?.prev) qc.setQueryData(key(pageId), ctx.prev);
+        fail("Couldn't save that change")(error);
       },
       onSettled: invalidate,
     }),
@@ -115,21 +164,21 @@ export function useDbMutations(pageId: string) {
         kind: FieldType;
         options?: FieldOptions;
       }) => databasesApi.createField(v.databaseId, v.name, v.kind, v.options),
-      ...opts,
+      ...fieldOpts("Couldn't add the field"),
     }),
     deleteField: useMutation({
       mutationFn: (id: string) => databasesApi.deleteField(id),
-      ...opts,
+      ...fieldOpts("Couldn't delete the field"),
     }),
     updateField: useMutation({
       mutationFn: (v: { id: string; name?: string; options?: FieldOptions }) =>
         databasesApi.updateField(v.id, v.name, v.options),
-      ...opts,
+      ...fieldOpts("Couldn't update the field"),
     }),
     updateView: useMutation({
       mutationFn: (v: { id: string; config: ViewConfig }) =>
         databasesApi.updateView(v.id, v.config),
-      ...opts,
+      ...rowOpts("Couldn't save the view"),
     }),
   };
 }

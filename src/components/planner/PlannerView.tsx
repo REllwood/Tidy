@@ -12,7 +12,9 @@ import {
   ChevronDown,
   X,
 } from "lucide-react";
-import { databasesApi } from "@/lib/api";
+import { toast } from "sonner";
+import { databasesApi, type CellValue } from "@/lib/api";
+import { errorMessage } from "@/lib/errors";
 import { useAgenda, type PlannerDb } from "@/hooks/useAgenda";
 import { TaskRow } from "@/components/planner/TaskRow";
 import type { AgendaTask } from "@/lib/agenda";
@@ -260,20 +262,22 @@ function QuickAdd({
   const [dbId, setDbId] = useState(databases[0]?.id ?? "");
   const qc = useQueryClient();
   const add = useMutation({
+    // One transactional call, so a task never lands without its title or date.
     mutationFn: async () => {
       const db = databases.find((d) => d.id === dbId) ?? databases[0];
       if (!db) return;
-      const row = await databasesApi.createRow(db.id);
-      if (db.nameFieldId)
-        await databasesApi.setCell(row.id, db.nameFieldId, title.trim());
-      if (db.dueFieldId)
-        await databasesApi.setCell(row.id, db.dueFieldId, today);
+      const cells: Record<string, CellValue> = {};
+      if (db.nameFieldId) cells[db.nameFieldId] = title.trim();
+      if (db.dueFieldId) cells[db.dueFieldId] = today;
+      await databasesApi.createRowWithCells(db.id, cells);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["database-by-id"] });
       qc.invalidateQueries({ queryKey: ["database"] });
       setTitle("");
     },
+    onError: (error) =>
+      toast.error(`Couldn't add the task. ${errorMessage(error)}`),
   });
 
   return (
@@ -370,7 +374,7 @@ function MiniCalendar({
               onClick={() => onSelect(selected === iso(d) ? null : iso(d))}
               className={`relative grid aspect-square place-items-center rounded-md text-xs transition-colors ${
                 iso(d) === today
-                  ? "bg-brand font-semibold text-white"
+                  ? "bg-brand font-semibold text-brand-fg"
                   : iso(d) === selected
                     ? "bg-brand-soft text-text"
                     : "text-text-muted hover:bg-surface-hover"

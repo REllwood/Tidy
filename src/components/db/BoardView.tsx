@@ -1,5 +1,7 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   KeyboardSensor,
   useSensor,
@@ -7,8 +9,10 @@ import {
   useDraggable,
   useDroppable,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
-import { Plus } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { Columns3, GripVertical, Plus } from "lucide-react";
 import type {
   DatabaseBundle,
   DbView,
@@ -17,18 +21,34 @@ import type {
   CellValue,
 } from "@/lib/api";
 import { useDbMutations } from "@/hooks/useDatabase";
+import { isComputed, computeCell } from "@/lib/computed";
 import { CellDisplay } from "./cells";
+import { EditableCell } from "./EditableCell";
+import { DbEmptyState, MissingFieldNotice } from "./EmptyState";
+import { boardGroupField, linkText, titleField } from "./viewFields";
+import {
+  NONE,
+  columnOf,
+  planDropAtEnd,
+  planDropBefore,
+  type DropPlan,
+} from "./boardOrder";
 
-const NONE = "__none__";
+const CARD_EST = 68;
 
 export function BoardView({
   bundle,
   view,
   pageId,
+  allRows,
+  targetBundles = {},
 }: {
   bundle: DatabaseBundle;
   view: DbView;
   pageId: string;
+  /** The unfiltered row set: drop positions must account for hidden rows. */
+  allRows: RowWithCells[];
+  targetBundles?: Record<string, DatabaseBundle>;
 }) {
   const m = useDbMutations(pageId);
   const sensors = useSensors(
@@ -36,13 +56,123 @@ export function BoardView({
     useSensor(KeyboardSensor),
   );
   const { fields, rows, database_id } = bundle;
-  const groupField = fields.find((f) => f.id === view.config?.groupByFieldId);
-  const nameField = fields.find((f) => f.type === "text") ?? fields[0];
+  const group = boardGroupField(fields, view.config);
+  const groupField = group.field;
+  const nameField = titleField(fields);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [focusRowId, setFocusRowId] = useState<string | null>(null);
 
-  if (!groupField || groupField.type !== "select") {
+  const rowsFor = useCallback(
+    (colId: string) =>
+      groupField
+        ? rows
+            .filter((r) => columnOf(r, groupField.id) === colId)
+            .sort((a, b) => a.position - b.position)
+        : [],
+    [rows, groupField],
+  );
+
+  const setCell = useCallback(
+    (rowId: string, fieldId: string, value: CellValue) =>
+      m.setCell.mutate({ rowId, fieldId, value }),
+    [m.setCell],
+  );
+
+  const applyPlan = useCallback(
+    (rowId: string, plan: DropPlan) => {
+      // Renumber the neighbours first when the fractional gap has collapsed.
+      for (const p of plan.renormalise ?? []) {
+        if (p.id === rowId) continue;
+        m.moveRow.mutate(p);
+      }
+      m.moveRow.mutate({ id: rowId, position: plan.position });
+    },
+    [m.moveRow],
+  );
+
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragging(null);
+    if (!e.over || !groupField) return;
+    const rowId = String(e.active.id);
+    const overId = String(e.over.id);
+
+    // Dropped onto a card → place before it (and adopt that card's column).
+    if (overId.startsWith("card:")) {
+      const targetId = overId.slice(5);
+      if (targetId === rowId) return;
+      const target = allRows.find((r) => r.id === targetId);
+      if (!target) return;
+      const colId = columnOf(target, groupField.id);
+      // Always write the column value: the card may have been dragged across
+      // columns, and a no-op write is cheaper than a wrong column.
+      m.setCell.mutate({
+        rowId,
+        fieldId: groupField.id,
+        value: (colId === NONE ? null : colId) as CellValue,
+      });
+      const plan = planDropBefore(allRows, groupField.id, rowId, targetId);
+      if (plan) applyPlan(rowId, plan);
+      return;
+    }
+
+    // Dropped onto a column → set its value and append to the end.
+    const colId = overId.replace(/^col:/, "");
+    m.setCell.mutate({
+      rowId,
+      fieldId: groupField.id,
+      value: (colId === NONE ? null : colId) as CellValue,
+    });
+    applyPlan(rowId, planDropAtEnd(allRows));
+  };
+
+  const addCardTo = (colId: string) => {
+    m.createRow.mutate(database_id, {
+      onSuccess: (row) => {
+        if (colId !== NONE && groupField)
+          m.setCell.mutate({
+            rowId: row.id,
+            fieldId: groupField.id,
+            value: colId,
+          });
+        setFocusRowId(row.id);
+      },
+    });
+  };
+
+  // Focus the new card's first editable cell once it has rendered.
+  useEffect(() => {
+    if (!focusRowId) return;
+    if (!rows.some((r) => r.id === focusRowId)) return;
+    const frame = requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-row="${focusRowId}"] [data-cell] input`)
+        ?.focus();
+      setFocusRowId(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRowId, rows]);
+
+  const secondary = useMemo(
+    () =>
+      fields.filter(
+        (f) => f.id !== nameField?.id && f.id !== groupField?.id,
+      ),
+    [fields, nameField?.id, groupField?.id],
+  );
+
+  const draggedRow = dragging
+    ? rows.find((r) => r.id === dragging) ?? null
+    : null;
+
+  if (!groupField || !nameField) {
     return (
-      <div className="p-8 text-sm text-text-faint">
-        Group this database by a <b>Select</b> field to see a board.
+      <div className="p-6">
+        {group.missing && <MissingFieldNotice className="mb-4" />}
+        <DbEmptyState
+          icon={<Columns3 className="size-5" />}
+          title="No board columns yet"
+          hint="A board groups rows by a Select field. Add one, then choose it in View settings."
+        />
       </div>
     );
   }
@@ -52,71 +182,54 @@ export function BoardView({
     ...choices.map((c) => ({ id: c.id, name: c.name })),
     { id: NONE, name: "No status" },
   ];
-  const rowsFor = (colId: string) =>
-    rows.filter((r) =>
-      colId === NONE ? r.cells[groupField.id] == null : r.cells[groupField.id] === colId,
-    );
-
-  const onDragEnd = (e: DragEndEvent) => {
-    if (!e.over) return;
-    const rowId = String(e.active.id);
-    const overId = String(e.over.id);
-
-    // Dropped onto a card → place before it (and adopt that card's column).
-    if (overId.startsWith("card:")) {
-      const targetId = overId.slice(5);
-      if (targetId === rowId) return;
-      const target = rows.find((r) => r.id === targetId);
-      if (!target) return;
-      const colId = (target.cells[groupField.id] ?? NONE) as string;
-      const colRows = rowsFor(colId).filter((r) => r.id !== rowId);
-      const idx = colRows.findIndex((r) => r.id === targetId);
-      const prev = colRows[idx - 1];
-      const position = prev
-        ? (prev.position + target.position) / 2
-        : target.position - 1;
-      const value: CellValue = colId === NONE ? null : colId;
-      if ((rows.find((r) => r.id === rowId)?.cells[groupField.id] ?? NONE) !== colId)
-        m.setCell.mutate({ rowId, fieldId: groupField.id, value });
-      m.moveRow.mutate({ id: rowId, position });
-      return;
-    }
-
-    // Dropped onto a column → set status + append to its end.
-    const colId = overId.replace(/^col:/, "");
-    const value: CellValue = colId === NONE ? null : colId;
-    const colRows = rowsFor(colId).filter((r) => r.id !== rowId);
-    const position =
-      (colRows.length ? Math.max(...colRows.map((r) => r.position)) : 0) + 1;
-    m.setCell.mutate({ rowId, fieldId: groupField.id, value });
-    m.moveRow.mutate({ id: rowId, position });
-  };
-
-  const addCardTo = (colId: string) => {
-    m.createRow.mutate(database_id, {
-      onSuccess: (row) => {
-        if (colId !== NONE)
-          m.setCell.mutate({ rowId: row.id, fieldId: groupField.id, value: colId });
-      },
-    });
-  };
 
   return (
-    <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-      <div className="flex h-full items-start gap-4 overflow-x-auto p-5">
-        {columns.map((col) => (
-          <Column
-            key={col.id}
-            id={col.id}
-            name={col.name}
-            rows={rowsFor(col.id)}
-            fields={fields}
-            nameField={nameField}
-            groupFieldId={groupField.id}
-            onAdd={() => addCardTo(col.id)}
-          />
-        ))}
+    <DndContext
+      sensors={sensors}
+      onDragStart={(e: DragStartEvent) => setDragging(String(e.active.id))}
+      onDragCancel={() => setDragging(null)}
+      onDragEnd={onDragEnd}
+    >
+      <div className="flex h-full flex-col">
+        {group.missing && (
+          <div className="px-5 pt-4">
+            <MissingFieldNotice />
+          </div>
+        )}
+        {rows.length === 0 && (
+          <div className="px-5 pt-4">
+            <DbEmptyState
+              icon={<Columns3 className="size-5" />}
+              title="Nothing on the board"
+              hint="Add a card to a column below, or clear the filters to see more."
+            />
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1 items-stretch gap-4 overflow-x-auto p-5">
+          {columns.map((col) => (
+            <Column
+              key={col.id}
+              id={col.id}
+              name={col.name}
+              rows={rowsFor(col.id)}
+              nameField={nameField}
+              secondary={secondary}
+              fields={fields}
+              targetBundles={targetBundles}
+              onSetCell={setCell}
+              onAdd={() => addCardTo(col.id)}
+            />
+          ))}
+        </div>
       </div>
+
+      <DragOverlay dropAnimation={null}>
+        {draggedRow ? (
+          <div className="w-64 rounded-md border border-brand bg-surface p-2.5 text-sm font-medium shadow-md">
+            {String(draggedRow.cells[nameField.id] ?? "") || "Untitled"}
+          </div>
+        ) : null}
+      </DragOverlay>
     </DndContext>
   );
 }
@@ -125,24 +238,41 @@ function Column({
   id,
   name,
   rows,
-  fields,
   nameField,
-  groupFieldId,
+  secondary,
+  fields,
+  targetBundles,
+  onSetCell,
   onAdd,
 }: {
   id: string;
   name: string;
   rows: RowWithCells[];
-  fields: Field[];
   nameField: Field;
-  groupFieldId: string;
+  secondary: Field[];
+  fields: Field[];
+  targetBundles: Record<string, DatabaseBundle>;
+  onSetCell: (rowId: string, fieldId: string, value: CellValue) => void;
   onAdd: () => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}` });
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => bodyRef.current,
+    estimateSize: () => CARD_EST,
+    overscan: 8,
+  });
+
+  const setRefs = (el: HTMLDivElement | null) => {
+    bodyRef.current = el;
+    setNodeRef(el);
+  };
+
   return (
     <section
       aria-label={name}
-      className="flex w-72 shrink-0 flex-col gap-2 rounded-lg border border-border bg-bg-subtle p-2"
+      className="flex h-full w-72 shrink-0 flex-col gap-2 rounded-lg border border-border bg-bg-subtle p-2"
     >
       <div className="flex items-center gap-2 px-1.5 pt-1">
         <span className="text-note font-semibold">{name}</span>
@@ -156,21 +286,39 @@ function Column({
         </button>
       </div>
       <div
-        ref={setNodeRef}
-        className={`flex min-h-16 flex-col gap-2 rounded-md p-0.5 ${
+        ref={setRefs}
+        className={`min-h-16 flex-1 overflow-y-auto rounded-md p-0.5 ${
           isOver ? "ring-2 ring-brand ring-inset" : ""
         }`}
       >
-        {rows.map((r) => (
-          <Card
-            key={r.id}
-            row={r}
-            nameField={nameField}
-            secondary={fields.filter(
-              (f) => f.id !== nameField.id && f.id !== groupFieldId,
-            )}
-          />
-        ))}
+        {rows.length === 0 ? (
+          <p className="px-2 py-4 text-center text-note text-text-faint">
+            Drop a card here
+          </p>
+        ) : (
+          <div
+            style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+          >
+            {virtualizer.getVirtualItems().map((vi) => (
+              <div
+                key={rows[vi.index].id}
+                data-index={vi.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 w-full pb-2"
+                style={{ transform: `translateY(${vi.start}px)` }}
+              >
+                <Card
+                  row={rows[vi.index]}
+                  nameField={nameField}
+                  secondary={secondary}
+                  fields={fields}
+                  targetBundles={targetBundles}
+                  onSetCell={onSetCell}
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -180,10 +328,16 @@ function Card({
   row,
   nameField,
   secondary,
+  fields,
+  targetBundles,
+  onSetCell,
 }: {
   row: RowWithCells;
   nameField: Field;
   secondary: Field[];
+  fields: Field[];
+  targetBundles: Record<string, DatabaseBundle>;
+  onSetCell: (rowId: string, fieldId: string, value: CellValue) => void;
 }) {
   const drag = useDraggable({ id: row.id });
   const drop = useDroppable({ id: `card:${row.id}` });
@@ -191,26 +345,51 @@ function Card({
     drag.setNodeRef(el);
     drop.setNodeRef(el);
   };
+
   return (
     <div
       ref={setRef}
-      {...drag.attributes}
-      {...drag.listeners}
+      data-row={row.id}
       style={{ opacity: drag.isDragging ? 0.4 : 1 }}
-      className={`cursor-grab rounded-md border bg-surface p-2.5 shadow-sm hover:border-border-strong ${
+      className={`rounded-md border bg-surface p-2.5 shadow-sm transition-colors hover:border-border-strong ${
         drop.isOver && !drag.isDragging ? "border-brand" : "border-border"
       }`}
     >
-      <div className="text-sm font-medium">
-        {row.cells[nameField.id] || "Untitled"}
+      <div className="flex items-start gap-1.5">
+        <button
+          {...drag.attributes}
+          {...drag.listeners}
+          aria-label={`Move ${String(row.cells[nameField.id] ?? "") || "Untitled"}`}
+          className="mt-0.5 cursor-grab touch-none rounded text-text-faint hover:text-text focus-visible:ring-2 focus-visible:ring-brand/50"
+        >
+          <GripVertical className="size-3.5" />
+        </button>
+        <div data-cell={nameField.id} className="min-w-0 flex-1 text-sm font-medium">
+          <EditableCell
+            field={nameField}
+            value={row.cells[nameField.id]}
+            onChange={(value: CellValue) =>
+              onSetCell(row.id, nameField.id, value)
+            }
+          />
+        </div>
       </div>
       {secondary.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          {secondary.map((f) =>
-            row.cells[f.id] != null && row.cells[f.id] !== "" ? (
-              <CellDisplay key={f.id} field={f} value={row.cells[f.id]} />
-            ) : null,
-          )}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-5">
+          {secondary.map((f) => {
+            const value =
+              f.type === "relation" || f.type === "dependencies"
+                ? linkText(row, f, targetBundles)
+                : isComputed(f.type)
+                  ? computeCell(f, row, fields, targetBundles)
+                  : row.cells[f.id];
+            if (value == null || value === "") return null;
+            return (
+              <span key={f.id} title={f.name} className="max-w-full truncate">
+                <CellDisplay field={f} value={value} />
+              </span>
+            );
+          })}
         </div>
       )}
     </div>

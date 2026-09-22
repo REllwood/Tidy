@@ -1,4 +1,5 @@
 import type { Field, SelectChoice, CellValue } from "@/lib/api";
+import { parseLocalDate } from "@/lib/dates";
 
 const CHIP_COLORS: Record<string, string> = {
   grey: "color-mix(in srgb, var(--text-muted) 16%, transparent)",
@@ -15,6 +16,15 @@ const CHIP_TEXT: Record<string, string> = {
   red: "var(--danger-c)",
 };
 
+/** The colours a select choice can take, in picker order. */
+export const CHIP_PALETTE = ["grey", "blue", "green", "amber", "red"] as const;
+export type ChipColor = (typeof CHIP_PALETTE)[number];
+
+export const chipColours = (color: string) => ({
+  background: CHIP_COLORS[color] ?? CHIP_COLORS.grey,
+  color: CHIP_TEXT[color] ?? CHIP_TEXT.grey,
+});
+
 export function choiceById(
   field: Field,
   id: CellValue,
@@ -23,12 +33,11 @@ export function choiceById(
 }
 
 export function SelectChip({ choice }: { choice: SelectChoice }) {
-  const bg = CHIP_COLORS[choice.color] ?? CHIP_COLORS.grey;
-  const fg = CHIP_TEXT[choice.color] ?? CHIP_TEXT.grey;
+  const { background, color } = chipColours(choice.color);
   return (
     <span
       className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold"
-      style={{ background: bg, color: fg }}
+      style={{ background, color }}
     >
       {choice.name}
     </span>
@@ -42,6 +51,7 @@ function formatComputed(value: CellValue): string {
     if (!isFinite(value)) return "–";
     return Number.isInteger(value) ? String(value) : value.toFixed(2);
   }
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "–";
   return String(value);
 }
 
@@ -57,6 +67,13 @@ export function ComputedCell({ value }: { field: Field; value: CellValue }) {
       {text}
     </span>
   );
+}
+
+/** Short local-calendar label for a date cell ("20 Jun"-style, locale aware). */
+export function formatDayLabel(value: CellValue): string {
+  const d = parseLocalDate(value);
+  if (!d) return "–";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** Read-only rendering of a cell value, used on board cards. */
@@ -77,15 +94,14 @@ export function CellDisplay({
       return c ? <SelectChip choice={c} /> : <span>–</span>;
     }
     case "date":
-      return (
-        <span className="text-text-muted">
-          {new Date(value).toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-          })}
-        </span>
-      );
+      // Date cells are plain "YYYY-MM-DD" strings: parse them as a LOCAL day so
+      // cards don't read a day early west of UTC.
+      return <span className="text-text-muted">{formatDayLabel(value)}</span>;
+    case "lookup":
+    case "rollup":
+    case "formula":
+      return <ComputedCell field={field} value={value} />;
     default:
-      return <span>{String(value)}</span>;
+      return <span className="truncate">{formatComputed(value)}</span>;
   }
 }

@@ -180,3 +180,112 @@ describe("greeting / toISODate", () => {
     expect(toISODate(new Date("2026-07-12T23:30:00"))).toBe("2026-07-12");
   });
 });
+
+describe("done detection", () => {
+  const withChoices = (
+    fieldName: string,
+    choices: { id: string; name: string }[],
+    selected: string,
+  ): DatabaseBundle => ({
+    database_id: "d",
+    fields: [
+      f("name", "text", "Name"),
+      f("st", "select", fieldName, {
+        options: { choices: choices.map((c) => ({ ...c, color: "grey" })) },
+      }),
+      f("due", "date", "Due"),
+    ],
+    rows: [row("r", { name: "X", due: "2026-07-12", st: selected })],
+    views: [],
+  });
+
+  it('treats "Complete" as done and "Incomplete" as open', () => {
+    const choices = [
+      { id: "i", name: "Incomplete" },
+      { id: "c", name: "Complete" },
+    ];
+    const open = extractTasks(withChoices("Status", choices, "i"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(open.doneChoiceId).toBe("c");
+    expect(open.done).toBe(false);
+    expect(open.todoChoiceId).toBe("i");
+
+    const finished = extractTasks(withChoices("Status", choices, "c"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(finished.done).toBe(true);
+  });
+
+  it('treats "Not done" as open and "Done" as done', () => {
+    const choices = [
+      { id: "n", name: "Not done" },
+      { id: "d", name: " Done " },
+    ];
+    const open = extractTasks(withChoices("Status", choices, "n"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(open.doneChoiceId).toBe("d"); // trimmed, anchored match
+    expect(open.done).toBe(false);
+
+    const finished = extractTasks(withChoices("Status", choices, "d"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(finished.done).toBe(true);
+  });
+
+  it("falls back to the last choice for a non-English status field", () => {
+    const choices = [
+      { id: "o", name: "Offen" },
+      { id: "b", name: "In Bearbeitung" },
+      { id: "e", name: "Erledigt" },
+    ];
+    const t = extractTasks(withChoices("Status", choices, "e"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(t.doneChoiceId).toBe("e");
+    expect(t.done).toBe(true);
+    expect(t.todoChoiceId).toBe("o");
+  });
+
+  it("marks nothing done when the field isn't clearly a status field", () => {
+    const choices = [
+      { id: "p", name: "Petit" },
+      { id: "g", name: "Grand" },
+    ];
+    const t = extractTasks(withChoices("Taille", choices, "g"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(t.doneChoiceId).toBeNull();
+    expect(t.done).toBe(false);
+    expect(t.todoChoiceId).toBe("p");
+  });
+
+  it("never guesses done from a single-choice status field", () => {
+    const t = extractTasks(
+      withChoices("Status", [{ id: "only", name: "Bezig" }], "only"),
+      { pageId: "p", title: "t" },
+    )[0];
+    expect(t.doneChoiceId).toBeNull();
+    expect(t.done).toBe(false);
+  });
+
+  it('prefers an exact match over a later "done-ish" name', () => {
+    const choices = [
+      { id: "d", name: "Done" },
+      { id: "a", name: "Archived" },
+    ];
+    const t = extractTasks(withChoices("Progress", choices, "d"), {
+      pageId: "p",
+      title: "t",
+    })[0];
+    expect(t.doneChoiceId).toBe("d"); // not the last choice
+    expect(t.done).toBe(true);
+  });
+});

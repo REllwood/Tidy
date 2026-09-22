@@ -1,12 +1,8 @@
+import { useCallback, useMemo } from "react";
 import { Table2, Columns3, CalendarDays, GanttChartSquare } from "lucide-react";
-import {
-  useDatabase,
-  useDatabaseEvents,
-  useDbMutations,
-  useRelationTargets,
-} from "@/hooks/useDatabase";
+import { useDatabase, useDbMutations, useRelationTargets } from "@/hooks/useDatabase";
 import { useUi } from "@/store/ui";
-import type { DbView, ViewConfig } from "@/lib/api";
+import type { CellValue, DbView, Field, RowWithCells, ViewConfig } from "@/lib/api";
 import { applyView, type Filter, type Sort } from "@/lib/dbFilters";
 import { Skeleton } from "@/components/ui/skeleton";
 import { GridView } from "./GridView";
@@ -14,6 +10,7 @@ import { BoardView } from "./BoardView";
 import { CalendarView } from "./CalendarView";
 import { GanttView } from "./GanttView";
 import { DbToolbar } from "./DbToolbar";
+import { pruneViewConfig, resolveCellValue } from "./viewFields";
 
 const VIEW_META: Record<
   DbView["kind"],
@@ -26,7 +23,6 @@ const VIEW_META: Record<
 };
 
 export function DatabaseView({ pageId }: { pageId: string }) {
-  useDatabaseEvents(pageId);
   const { data: bundle, isLoading, isError } = useDatabase(pageId);
   const m = useDbMutations(pageId);
   const targetBundles = useRelationTargets(bundle);
@@ -34,6 +30,46 @@ export function DatabaseView({ pageId }: { pageId: string }) {
     bundle ? s.dbActiveView[bundle.database_id] : undefined,
   );
   const setActive = useUi((s) => s.setDbActiveView);
+
+  const views = bundle?.views ?? [];
+  const activeView = views.find((v) => v.id === active) ?? views[0] ?? null;
+  const fields = bundle?.fields;
+  const rows = bundle?.rows;
+  const filters = activeView?.config?.filters;
+  const sorts = activeView?.config?.sorts;
+
+  /**
+   * Filters and sorts run against what the user sees: computed columns are
+   * evaluated here, and relations read as their row labels.
+   */
+  const resolve = useCallback(
+    (row: RowWithCells, field: Field): CellValue =>
+      fields
+        ? resolveCellValue(row, field, fields, targetBundles)
+        : row.cells[field.id],
+    [fields, targetBundles],
+  );
+
+  // Filtering + sorting every row is the expensive part of a render, so it only
+  // re-runs when the rows, the view's filters/sorts or the relation data change.
+  const viewRows = useMemo(
+    () =>
+      rows && fields
+        ? applyView(
+            rows,
+            fields,
+            (filters ?? []) as Filter[],
+            (sorts ?? []) as Sort[],
+            resolve,
+          )
+        : [],
+    [rows, fields, filters, sorts, resolve],
+  );
+
+  const viewBundle = useMemo(
+    () => (bundle ? { ...bundle, rows: viewRows } : bundle),
+    [bundle, viewRows],
+  );
 
   if (isLoading) {
     return (
@@ -43,29 +79,17 @@ export function DatabaseView({ pageId }: { pageId: string }) {
       </div>
     );
   }
-  if (isError || !bundle) {
+  if (isError || !bundle || !viewBundle) {
     return <div className="p-6 text-danger-c">Couldn't load this database.</div>;
   }
 
-  const views = bundle.views;
-  const activeView =
-    views.find((v) => v.id === active) ?? views[0] ?? null;
-
-  // Apply the active view's filters + sorts to the rows handed to each view.
-  const viewBundle = activeView
-    ? {
-        ...bundle,
-        rows: applyView(
-          bundle.rows,
-          bundle.fields,
-          (activeView.config?.filters ?? []) as Filter[],
-          (activeView.config?.sorts ?? []) as Sort[],
-        ),
-      }
-    : bundle;
-
   const updateConfig = (config: ViewConfig) => {
-    if (activeView) m.updateView.mutate({ id: activeView.id, config });
+    // Drop anything still pointing at a deleted field before it is written back.
+    if (activeView)
+      m.updateView.mutate({
+        id: activeView.id,
+        config: pruneViewConfig(config, bundle.fields),
+      });
   };
 
   return (
@@ -106,13 +130,27 @@ export function DatabaseView({ pageId }: { pageId: string }) {
           />
         )}
         {activeView?.kind === "board" && (
-          <BoardView bundle={viewBundle} view={activeView} pageId={pageId} />
+          <BoardView
+            bundle={viewBundle}
+            view={activeView}
+            pageId={pageId}
+            allRows={bundle.rows}
+            targetBundles={targetBundles}
+          />
         )}
         {activeView?.kind === "calendar" && (
-          <CalendarView bundle={viewBundle} view={activeView} />
+          <CalendarView
+            bundle={viewBundle}
+            view={activeView}
+            targetBundles={targetBundles}
+          />
         )}
         {activeView?.kind === "gantt" && (
-          <GanttView bundle={viewBundle} view={activeView} />
+          <GanttView
+            bundle={viewBundle}
+            view={activeView}
+            targetBundles={targetBundles}
+          />
         )}
       </div>
     </div>

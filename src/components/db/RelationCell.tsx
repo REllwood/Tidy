@@ -1,38 +1,30 @@
-import { useState } from "react";
-import { Check } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Loader2 } from "lucide-react";
 import type { DatabaseBundle, Field, CellValue, RowWithCells } from "@/lib/api";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { asIds, rowLabel } from "./viewFields";
 
-/** Human label for a target row: its primary (first) field's value. */
-export function rowLabel(
-  target: DatabaseBundle | undefined,
-  row: RowWithCells,
-): string {
-  const primary = target?.fields[0];
-  const v = primary ? row.cells[primary.id] : undefined;
-  return v == null || v === "" ? "Untitled" : String(v);
-}
-
-function asIds(value: CellValue): string[] {
-  if (Array.isArray(value)) return value as string[];
-  if (typeof value === "string" && value) {
-    try {
-      const p = JSON.parse(value);
-      return Array.isArray(p) ? p : [];
-    } catch {
-      return [];
+/** True once `active` has stayed true for `ms`, so waiting states can give up. */
+function useStalled(active: boolean, ms: number): boolean {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setStalled(false);
+      return;
     }
-  }
-  return [];
+    const t = setTimeout(() => setStalled(true), ms);
+    return () => clearTimeout(t);
+  }, [active, ms]);
+  return stalled;
 }
 
 /**
  * Editable relation cell. `value` is an array of target row ids; `target` is
- * the prefetched bundle of the related database (may be undefined while loading).
+ * the prefetched bundle of the related database (undefined while it loads).
  */
 export function RelationCell({
   field,
@@ -48,6 +40,9 @@ export function RelationCell({
   const [open, setOpen] = useState(false);
   const ids = asIds(value);
   const multi = field.options?.multi !== false; // default to multi-select
+  const configured = !!field.options?.targetDatabaseId;
+  const loading = configured && !target;
+  const stalled = useStalled(loading, 6000);
   const selected = ids
     .map((id) => target?.rows.find((r) => r.id === id))
     .filter(Boolean) as RowWithCells[];
@@ -64,8 +59,13 @@ export function RelationCell({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="flex w-full flex-wrap items-center gap-1 overflow-hidden text-left outline-none">
-        {selected.length ? (
+      <PopoverTrigger
+        aria-label={field.name}
+        className="flex w-full flex-wrap items-center gap-1 overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+      >
+        {!configured ? (
+          <span className="text-sm text-text-faint">Not linked</span>
+        ) : selected.length ? (
           selected.map((r) => (
             <span
               key={r.id}
@@ -81,13 +81,27 @@ export function RelationCell({
         )}
       </PopoverTrigger>
       <PopoverContent className="w-60 p-1">
-        {!target ? (
-          <div className="px-2 py-1.5 text-sm text-text-faint">Loading…</div>
-        ) : target.rows.length === 0 ? (
-          <div className="px-2 py-1.5 text-sm text-text-faint">No records</div>
+        {!configured ? (
+          <p className="px-2 py-1.5 text-sm text-text-muted">
+            This field isn't pointed at a database yet. Pick one with Edit
+            options in the column menu.
+          </p>
+        ) : loading ? (
+          stalled ? (
+            <p className="px-2 py-1.5 text-sm text-text-muted">
+              The related records are taking a while. Close this and try again.
+            </p>
+          ) : (
+            <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-text-faint">
+              <Loader2 className="size-3.5 animate-spin" />
+              Loading…
+            </div>
+          )
+        ) : target!.rows.length === 0 ? (
+          <p className="px-2 py-1.5 text-sm text-text-faint">No records</p>
         ) : (
           <div className="max-h-64 overflow-auto">
-            {target.rows.map((r) => {
+            {target!.rows.map((r) => {
               const on = ids.includes(r.id);
               return (
                 <button
@@ -97,9 +111,7 @@ export function RelationCell({
                 >
                   <span
                     className={`grid size-4 shrink-0 place-items-center rounded border ${
-                      on
-                        ? "border-brand bg-brand text-white"
-                        : "border-border"
+                      on ? "border-brand bg-brand text-white" : "border-border"
                     }`}
                   >
                     {on && <Check className="size-3" />}

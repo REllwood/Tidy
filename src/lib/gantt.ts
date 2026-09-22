@@ -1,5 +1,10 @@
-import type { Field, RowWithCells, ViewConfig } from "@/lib/api";
+import type { Field, RowWithCells, ViewConfig, CellValue } from "@/lib/api";
 import { choiceById } from "@/components/db/cells";
+import { addDays, dayNum, parseLocalDate } from "@/lib/dates";
+
+// The date helpers live in `@/lib/dates` now (shared with the cell renderers),
+// but they are re-exported here so existing gantt callers keep working.
+export { addDays, dayNum, parseLocalDate };
 
 export interface GanttTask {
   id: string;
@@ -16,23 +21,10 @@ export interface GanttModel {
   totalDays: number;
 }
 
-/** Parse "YYYY-MM-DD" (or any date string) in LOCAL time. */
-export function parseLocalDate(v: unknown): Date | null {
-  if (v == null || v === "") return null;
-  const s = String(v);
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
-}
+/** Read a cell, optionally through a resolver (so computed fields work). */
+export type ValueResolver = (row: RowWithCells, field: Field) => CellValue;
 
-export const dayNum = (d: Date) => Math.floor(d.getTime() / 86_400_000);
-
-export function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
+const rawValue: ValueResolver = (row, field) => row.cells[field.id];
 
 export function colorFor(color?: string): string {
   switch (color) {
@@ -68,32 +60,37 @@ export function buildGanttModel(
   rows: RowWithCells[],
   fields: Field[],
   cfg: ViewConfig,
+  resolve: ValueResolver = rawValue,
 ): GanttModel {
+  const byId = (id: string | undefined) =>
+    id ? fields.find((f) => f.id === id) : undefined;
   const nameField = fields.find((f) => f.type === "text") ?? fields[0];
+  // A config can point at a field that has since been deleted, so every lookup
+  // falls back to the first field of the right type.
   const startField =
-    fields.find((f) => f.id === cfg.startFieldId) ??
-    fields.find((f) => f.type === "date");
-  const endField = fields.find((f) => f.id === cfg.endFieldId);
+    byId(cfg.startFieldId) ?? fields.find((f) => f.type === "date");
+  const endField = byId(cfg.endFieldId);
   const statusField = fields.find((f) => f.type === "select");
   const depsField =
-    fields.find((f) => f.id === cfg.dependenciesFieldId) ??
+    byId(cfg.dependenciesFieldId) ??
     fields.find((f) => f.type === "dependencies");
 
   if (!startField) return { tasks: [], min: new Date(0), totalDays: 0 };
 
   const tasks: GanttTask[] = [];
   for (const r of rows) {
-    const start = parseLocalDate(r.cells[startField.id]);
+    const start = parseLocalDate(resolve(r, startField));
     if (!start) continue;
-    const rawEnd = endField ? parseLocalDate(r.cells[endField.id]) : null;
+    const rawEnd = endField ? parseLocalDate(resolve(r, endField)) : null;
     const end = rawEnd && rawEnd >= start ? rawEnd : start;
     const choice = statusField
       ? choiceById(statusField, r.cells[statusField.id])
       : undefined;
     const deps = depsField ? (asArray(r.cells[depsField.id]) as string[]) : [];
+    const name = nameField ? resolve(r, nameField) : null;
     tasks.push({
       id: r.id,
-      name: String(r.cells[nameField.id] ?? "Untitled"),
+      name: name == null || name === "" ? "Untitled" : String(name),
       start,
       end,
       color: colorFor(choice?.color),

@@ -101,6 +101,19 @@ describe("evalFormula", () => {
   it("returns null on a malformed expression", () => {
     expect(evalFormula("{Budget} * ", roadmapFields, { budget: 1 })).toBeNull();
   });
+  it("reports a divide by zero as empty, not 0", () => {
+    expect(evalFormula("{Budget} / 0", roadmapFields, { budget: 10 })).toBeNull();
+    // an empty field reads as 0, so dividing by it is empty too
+    expect(evalFormula("{Budget} / {Missing}", roadmapFields, { budget: 10 })).toBeNull();
+  });
+  it("propagates an empty sub-expression through the rest of the formula", () => {
+    expect(evalFormula("1 + {Budget} / 0", roadmapFields, { budget: 10 })).toBeNull();
+    expect(evalFormula("round({Budget} / 0)", roadmapFields, { budget: 10 })).toBeNull();
+    expect(evalFormula("-({Budget} / 0)", roadmapFields, { budget: 10 })).toBeNull();
+  });
+  it("still divides normally by a non-zero value", () => {
+    expect(evalFormula("{Budget} / 4", roadmapFields, { budget: 10 })).toBe(2.5);
+  });
 });
 
 describe("computeCell", () => {
@@ -152,6 +165,20 @@ describe("computeCell", () => {
   it("yields empty/zero when nothing is linked", () => {
     expect(computeCell(industryLookup, unlinked, roadmapFields, targets)).toBeNull();
     expect(computeCell(retainerRollup, unlinked, roadmapFields, targets)).toBe(0);
+  });
+  it("min/max/avg over an empty set are empty, while sum/count stay 0", () => {
+    const rollup = (fn: "avg" | "min" | "max" | "sum" | "count") =>
+      f("agg", "rollup", "Agg", {
+        options: { relationFieldId: "client", targetFieldId: "c_retainer", fn },
+      });
+    for (const fn of ["avg", "min", "max"] as const)
+      expect(computeCell(rollup(fn), unlinked, roadmapFields, targets)).toBeNull();
+    expect(computeCell(rollup("sum"), unlinked, roadmapFields, targets)).toBe(0);
+    expect(computeCell(rollup("count"), unlinked, roadmapFields, targets)).toBe(0);
+    // with linked rows they still aggregate normally
+    expect(computeCell(rollup("avg"), twoLinked, roadmapFields, targets)).toBe(2750);
+    expect(computeCell(rollup("min"), twoLinked, roadmapFields, targets)).toBe(2000);
+    expect(computeCell(rollup("max"), twoLinked, roadmapFields, targets)).toBe(3500);
   });
   it("degrades gracefully when the target bundle is absent", () => {
     expect(computeCell(retainerRollup, linked, roadmapFields, {})).toBe(0);

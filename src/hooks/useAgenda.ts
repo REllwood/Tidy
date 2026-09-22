@@ -34,10 +34,13 @@ export interface AgendaResult {
  * it works in the browser mock too.
  */
 export function useAgenda(): AgendaResult {
+  // The core pushes `database-changed`, which AppShell turns into a global
+  // invalidation, so these can stay fresh for a minute without refetching every
+  // bundle each time you switch between Home and Planner.
   const { data: dbs = [], isPending: databasesPending } = useQuery({
     queryKey: ["databases"],
     queryFn: () => databasesApi.list(),
-    staleTime: 10_000,
+    staleTime: 60_000,
   });
   const dated = dbs.filter((d) => d.fields.some((f) => f.type === "date"));
 
@@ -45,7 +48,7 @@ export function useAgenda(): AgendaResult {
     queries: dated.map((d) => ({
       queryKey: ["database-by-id", d.database_id] as const,
       queryFn: () => databasesApi.getById(d.database_id),
-      staleTime: 10_000,
+      staleTime: 60_000,
     })),
   });
 
