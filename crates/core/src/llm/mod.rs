@@ -1,5 +1,5 @@
-//! Local LLM summarization. v1 talks to a locally-running Ollama; the trait
-//! keeps the door open for an embedded runtime later.
+//! The shapes local AI works with (meeting notes, model status) and Ollama
+//! detection. Summaries themselves run in the app's local AI runtime.
 
 pub mod ollama;
 
