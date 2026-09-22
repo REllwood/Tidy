@@ -16,7 +16,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { useUi } from "@/store/ui";
-import { resolveTheme } from "@/lib/theme";
+import { useResolvedTheme } from "@/lib/theme";
+import { errorMessage } from "@/lib/errors";
 import { usePagesTree, useCreatePage } from "@/hooks/usePages";
 import { PageTree } from "@/components/sidebar/PageTree";
 import { pickAndImportMarkdown } from "@/features/export/pageExport";
@@ -75,9 +76,8 @@ export function Sidebar() {
   const setPaletteOpen = useUi((s) => s.setPaletteOpen);
   const setIngestOpen = useUi((s) => s.setIngestOpen);
   const pane = useUi((s) => s.activePane);
-  const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
-  const isDark = resolveTheme(theme) === "dark";
+  const isDark = useResolvedTheme() === "dark";
   const { tree, data: pages, isPending, error } = usePagesTree();
   const favourites = (pages ?? []).filter((p) => p.is_favorite);
   const create = useCreatePage();
@@ -115,7 +115,7 @@ export function Sidebar() {
           <kbd className="text-2xs text-text-faint">⌘K</kbd>
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 pb-4">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4">
         <SectionLabel>Your space</SectionLabel>
         <nav aria-label="Main navigation" className="space-y-1">
           <NavButton
@@ -187,7 +187,7 @@ export function Sidebar() {
         )}
         {error && (
           <p role="alert" className="px-3 text-xs text-danger-c">
-            Couldn't load pages. {String(error)}
+            Couldn't load pages. {errorMessage(error)}
           </p>
         )}
         <NavButton
@@ -203,7 +203,7 @@ export function Sidebar() {
         />
         {create.error && (
           <p role="alert" className="px-3 text-xs text-danger-c">
-            {String(create.error)}
+            Couldn't create the page. {errorMessage(create.error)}
           </p>
         )}
       </div>
@@ -216,7 +216,7 @@ export function Sidebar() {
         />
         {importNote.error && (
           <p role="alert" className="px-3 text-xs text-danger-c">
-            {String(importNote.error)}
+            Couldn't import that file. {errorMessage(importNote.error)}
           </p>
         )}
         <div className="flex items-center gap-1">

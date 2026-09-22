@@ -5,6 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/tidy-icon.svg" />
     <title>Tidy</title>
+    <style>
+      /* Painted before the app stylesheet loads, so the window never flashes
+         white on a dark desktop. Values mirror --bg in src/index.css. */
+      html {
+        background-color: #f9f8f5;
+      }
+      html.dark {
+        background-color: #14201a;
+      }
+      body {
+        margin: 0;
+        background-color: inherit;
+      }
+    </style>
+    <script>
+      // Resolve the saved theme before first paint (no flash of the wrong one).
+      (function () {
+        try {
+          var raw =
+            localStorage.getItem("tidy-ui") ||
+            localStorage.getItem("appflower-ui");
+          var theme = raw ? (JSON.parse(raw).state || {}).theme : null;
+          var dark =
+            theme === "dark" ||
+            (theme !== "light" &&
+              !!window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          if (dark) root.classList.add("dark");
+          root.style.colorScheme = dark ? "dark" : "light";
+        } catch (e) {
+          /* private mode or corrupt value: fall back to the light default */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,6 +1,9 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, TriangleAlert } from "lucide-react";
 import { lazy, Suspense } from "react";
 import { useUi } from "@/store/ui";
+import { errorMessage } from "@/lib/errors";
+import { Button } from "@/components/ui/button";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 
 // Lazy-load heavy panes so the initial bundle stays small.
 const PageRouter = lazy(() =>
@@ -70,21 +73,57 @@ export function ContentPane() {
     default:
       body = <HomeDashboard />;
   }
+  // Keyed on what's open, so navigating away always clears a failed view.
+  const paneKey = pane.kind === "page" ? `page:${pane.pageId}` : pane.kind;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Suspense
-        fallback={
-          <div
-            role="status"
-            className="flex items-center gap-2 p-12 text-sm text-text-muted"
-          >
-            <Loader2 className="size-4 animate-spin" />
-            Opening your workspace…
-          </div>
-        }
+      <ErrorBoundary
+        key={paneKey}
+        fallback={(error, reset) => <PaneError error={error} reset={reset} />}
       >
-        {body}
-      </Suspense>
+        <Suspense
+          fallback={
+            <div
+              role="status"
+              className="flex items-center gap-2 p-12 text-sm text-text-muted"
+            >
+              <Loader2 className="size-4 animate-spin" />
+              Opening your workspace…
+            </div>
+          }
+        >
+          {body}
+        </Suspense>
+      </ErrorBoundary>
+    </div>
+  );
+}
+
+/** Shown when a view throws while rendering, instead of a blank window. */
+function PaneError({ error, reset }: { error: Error; reset: () => void }) {
+  const setActivePane = useUi((s) => s.setActivePane);
+  return (
+    <div role="alert" className="grid h-full place-items-center p-6 text-center">
+      <div className="max-w-sm">
+        <TriangleAlert className="mx-auto mb-3 size-8 text-text-faint" />
+        <h2 className="text-lg font-semibold">
+          Something went wrong showing this view
+        </h2>
+        <p className="mt-1 text-sm text-text-muted">{errorMessage(error)}</p>
+        <div className="mt-4 flex items-center justify-center gap-2">
+          <Button onClick={reset}>Try again</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setActivePane({ kind: "home" });
+              reset();
+            }}
+          >
+            Go to home
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

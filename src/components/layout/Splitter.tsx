@@ -1,35 +1,57 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useUi, SIDEBAR_BOUNDS } from "@/store/ui";
 
-/** Thin draggable divider that resizes the sidebar (pointer + keyboard). */
-export function Splitter() {
+const clamp = (w: number) =>
+  Math.min(SIDEBAR_BOUNDS.max, Math.max(SIDEBAR_BOUNDS.min, Math.round(w)));
+
+/**
+ * Thin draggable divider that resizes the sidebar (pointer + keyboard).
+ * The drag is previewed straight onto the layout and only committed to the
+ * store on release, so one drag writes to storage once.
+ */
+export function Splitter({
+  onPreview,
+}: {
+  /** Live width during a drag; the store is left alone until pointer-up. */
+  onPreview?: (width: number) => void;
+}) {
   const setSidebarWidth = useUi((s) => s.setSidebarWidth);
-  const widthRef = useRef(useUi.getState().sidebarWidth);
+  const storedWidth = useUi((s) => s.sidebarWidth);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const liveRef = useRef(storedWidth);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault();
       const startX = e.clientX;
       const startW = useUi.getState().sidebarWidth;
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      const handle = e.currentTarget;
+      handle.setPointerCapture(e.pointerId);
+      liveRef.current = startW;
 
       const onMove = (ev: PointerEvent) => {
-        widthRef.current = startW + (ev.clientX - startX);
-        setSidebarWidth(widthRef.current);
+        const width = clamp(startW + (ev.clientX - startX));
+        liveRef.current = width;
+        setDragWidth(width);
+        onPreview?.(width);
       };
       const onUp = (ev: PointerEvent) => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
         try {
-          (e.target as HTMLElement).releasePointerCapture(ev.pointerId);
+          handle.releasePointerCapture(ev.pointerId);
         } catch {
           /* capture may already be released */
         }
+        setDragWidth(null);
+        setSidebarWidth(liveRef.current); // the one persisted write
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
     },
-    [setSidebarWidth],
+    [setSidebarWidth, onPreview],
   );
 
   const onKeyDown = useCallback(
@@ -48,7 +70,7 @@ export function Splitter() {
       aria-label="Resize sidebar"
       aria-valuemin={SIDEBAR_BOUNDS.min}
       aria-valuemax={SIDEBAR_BOUNDS.max}
-      aria-valuenow={useUi((s) => s.sidebarWidth)}
+      aria-valuenow={dragWidth ?? storedWidth}
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}

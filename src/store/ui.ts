@@ -3,7 +3,6 @@ import { readStoredValue } from "@/lib/storage";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export type Theme = "light" | "dark" | "system";
-export type DbViewKind = "grid" | "board" | "calendar";
 
 /** What's open in the main content pane. */
 export type ActivePane =
@@ -57,6 +56,10 @@ interface UiState {
   dbActiveView: Record<string, string>;
   setDbActiveView: (databaseId: string, viewId: string) => void;
 
+  /** Drop persisted map entries whose page/database is gone (post-hydration). */
+  pruneExpanded: (pageIds: string[]) => void;
+  pruneDbActiveView: (databaseIds: string[]) => void;
+
   // meeting: speaker diarization preference
   diarizeEnabled: boolean;
   setDiarizeEnabled: (v: boolean) => void;
@@ -68,6 +71,17 @@ const clampWidth = (w: number) =>
   Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w)));
 
 export const SIDEBAR_BOUNDS = { min: SIDEBAR_MIN, max: SIDEBAR_MAX };
+
+/** Keep only the entries whose key still exists; null when nothing changed. */
+function pruneMap<V>(
+  map: Record<string, V>,
+  validIds: string[],
+): Record<string, V> | null {
+  const keep = new Set(validIds);
+  const entries = Object.entries(map).filter(([id]) => keep.has(id));
+  if (entries.length === Object.keys(map).length) return null;
+  return Object.fromEntries(entries) as Record<string, V>;
+}
 
 export const useUi = create<UiState>()(
   persist(
@@ -116,6 +130,17 @@ export const useUi = create<UiState>()(
         set((s) => ({
           dbActiveView: { ...s.dbActiveView, [databaseId]: viewId },
         })),
+
+      pruneExpanded: (pageIds) =>
+        set((s) => {
+          const next = pruneMap(s.expanded, pageIds);
+          return next ? { expanded: next } : s;
+        }),
+      pruneDbActiveView: (databaseIds) =>
+        set((s) => {
+          const next = pruneMap(s.dbActiveView, databaseIds);
+          return next ? { dbActiveView: next } : s;
+        }),
 
       diarizeEnabled: true,
       setDiarizeEnabled: (diarizeEnabled) => set({ diarizeEnabled }),

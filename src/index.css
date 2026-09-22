@@ -103,6 +103,7 @@
   --rec-text: #e0796d;
 
   --destructive-foreground: #14201a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.5);
 }
 
@@ -266,6 +267,12 @@
 ::selection {
   background: var(--brand-soft);
   color: var(--text);
+}
+/* Scrollbars follow the theme in both appearances (color-scheme handles the
+   macOS overlay bars, this handles the classic ones). */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {
