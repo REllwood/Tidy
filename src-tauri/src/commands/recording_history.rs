@@ -1,14 +1,22 @@
 use crate::{
+    db::Db,
     error::{AppError, AppResult},
     local_ai::{db, AiState},
 };
 use serde::Serialize;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use tidy_core::store::{documents, recordings};
+
+/// A recording written in the last half-minute belongs to the Stop that is
+/// still registering it, not to the orphan sweep.
+const SETTLE: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub struct TranscriptionState {
@@ -32,7 +40,11 @@ impl Drop for Release {
 pub struct Entry {
     #[serde(flatten)]
     meeting: recordings::SavedMeeting,
+    /// The audio file is still there, wherever in the library it sits, so this
+    /// meeting can be transcribed again.
     audio_available: bool,
+    /// The audio is temporary: it is kept only until a transcript is saved.
+    audio_temporary: bool,
 }
 fn checked_audio(app: &AppHandle, path: &str) -> AppResult<std::path::PathBuf> {
     let dir = crate::audio::recorder::app_recordings_dir(app)?.canonicalize()?;
@@ -45,70 +57,132 @@ fn checked_audio(app: &AppHandle, path: &str) -> AppResult<std::path::PathBuf> {
     Ok(audio)
 }
 
-#[tauri::command]
-pub async fn recording_history(app: AppHandle) -> AppResult<Vec<Entry>> {
-    let h = app.clone();
-    db(&app, move |c| {
-        // Recover completed WAVs left by an interrupted transcription or registration.
-        let dir = crate::audio::recorder::app_recordings_dir(&h)?;
-        let known: std::collections::HashSet<_> = recordings::list(c)?
+/// Register recordings on disk that the database never heard about, because a
+/// crash or a failed registration left them behind. Runs at startup and once
+/// after a successful Stop — never on a list, which must stay cheap.
+pub fn register_orphans(app: &AppHandle) -> AppResult<()> {
+    let recordings_dir = crate::audio::recorder::app_recordings_dir(app)?;
+    if !recordings_dir.is_dir() {
+        return Ok(());
+    }
+    let root = recordings_dir.canonicalize()?;
+    let temporary = recordings_dir.join("temporary");
+
+    // Look at the filesystem first, with no database lock held.
+    let mut candidates: Vec<(PathBuf, i64, bool)> = Vec::new();
+    for (dir, retain) in [(recordings_dir.clone(), true), (temporary, false)] {
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("wav") {
+                continue;
+            }
+            let modified = entry.metadata()?.modified()?;
+            if modified.elapsed().map(|age| age < SETTLE).unwrap_or(true) {
+                continue;
+            }
+            let Ok(path) = path.canonicalize() else {
+                continue;
+            };
+            if !path.starts_with(&root) {
+                continue;
+            }
+            let fallback = modified
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let started = entry
+                .file_name()
+                .to_str()
+                .and_then(super::recording_preferences::recording_start)
+                .unwrap_or(fallback);
+            candidates.push((path, started, retain));
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let known: HashSet<PathBuf> = {
+        let database = app.state::<Db>();
+        let conn = database.lock()?;
+        recordings::list(&conn)?
             .into_iter()
             .filter_map(|m| m.audio_path)
-            .filter_map(|path| std::path::Path::new(&path).canonicalize().ok())
-            .collect();
-        if dir.exists() {
-            for file in std::fs::read_dir(&dir)? {
-                let path = file?.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("wav") {
-                    continue;
-                }
-                let path = match checked_audio(&h, &path.to_string_lossy()) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        log::warn!("A recording could not be inspected: {error}");
-                        continue;
-                    }
-                };
-                if !known.contains(&path) {
-                    match hound::WavReader::open(&path) {
-                        Ok(reader) if reader.duration() > 0 => {
-                            let started = std::fs::metadata(&path)?
-                                .modified()?
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as i64)
-                                .unwrap_or(0);
-                            recordings::register(
-                                c,
-                                &path.to_string_lossy(),
-                                reader.duration() as i64 * 1000
-                                    / reader.spec().sample_rate.max(1) as i64,
-                                started,
-                                "",
-                            )?;
-                        }
-                        Ok(_) => {}
-                        Err(e) => log::warn!("An incomplete recording could not be recovered: {e}"),
-                    }
-                }
-            }
+            .filter_map(|path| Path::new(&path).canonicalize().ok())
+            .collect()
+    };
+
+    // Reading WAV headers is filesystem work, so it happens unlocked too.
+    let mut fresh = Vec::new();
+    for (path, started, retain) in candidates {
+        if known.contains(&path) {
+            continue;
         }
-        Ok(recordings::list(c)?
+        match hound::WavReader::open(&path) {
+            Ok(reader) if reader.duration() > 0 => {
+                let duration =
+                    reader.duration() as i64 * 1000 / reader.spec().sample_rate.max(1) as i64;
+                fresh.push((path, duration, started, retain));
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("An incomplete recording could not be recovered: {e}"),
+        }
+    }
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    let database = app.state::<Db>();
+    let conn = database.lock()?;
+    for (path, duration, started, retain) in fresh {
+        recordings::register_with_retention(
+            &conn,
+            &path.to_string_lossy(),
+            duration,
+            started,
+            "",
+            retain,
+        )?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn recording_history(app: AppHandle) -> AppResult<Vec<Entry>> {
+    let meetings = db(&app, |c| recordings::list(c)).await?;
+    let recordings_dir = crate::audio::recorder::app_recordings_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = recordings_dir.canonicalize().ok();
+        let temporary = root.as_ref().map(|r| r.join("temporary"));
+        meetings
             .into_iter()
             .map(|meeting| {
-                let audio_available = meeting.retain_audio
-                    && meeting
-                        .audio_path
-                        .as_deref()
-                        .map(|p| checked_audio(&h, p).is_ok())
-                        .unwrap_or(false);
+                let audio = meeting
+                    .audio_path
+                    .as_deref()
+                    .and_then(|path| Path::new(path).canonicalize().ok())
+                    .filter(|path| {
+                        path.is_file() && root.as_ref().is_some_and(|r| path.starts_with(r))
+                    });
+                let audio_temporary = audio.as_ref().is_some_and(|path| {
+                    temporary.as_ref().is_some_and(|t| path.starts_with(t))
+                });
                 Entry {
+                    audio_available: audio.is_some(),
+                    audio_temporary,
                     meeting,
-                    audio_available,
                 }
             })
-            .collect())
+            .collect()
     })
     .await
+    .map_err(|e| AppError::Other(e.to_string()))
 }
 #[tauri::command]
 pub async fn transcript_versions(
@@ -164,12 +238,13 @@ pub async fn retranscribe_meeting(
     app.state::<AiState>().wait_until_idle().await;
     let h = app.clone();
     let id = page_id.clone();
+    let temporary = crate::audio::recorder::app_recordings_dir(&app)?.join("temporary");
     let result=tauri::async_runtime::spawn_blocking(move|| {
   let _release=release; // Keep the processing lock until Whisper really exits, even if its caller disappears.
-  let state=h.state::<crate::db::Db>();
+  let state=h.state::<Db>();
   let outcome: AppResult<ResultTranscript> = (|| {
   let (audio,model,model_name,expected)={
-   let c=state.conn.lock().map_err(|_|AppError::Other("Database unavailable".into()))?;
+   let c=state.lock()?;
    let audio=checked_audio(&h,&recordings::source(&c,&id)?)?;
    let model=match model_id {Some(ref id)=>crate::whisper::models::core::path_for(&h,id)?,None=>crate::whisper::models::core::selected_path(&c,&h)?};
    let name=model.file_stem().and_then(|s|s.to_str()).unwrap_or("Whisper").to_owned();
@@ -182,13 +257,16 @@ pub async fn retranscribe_meeting(
   let mut blocks=vec![serde_json::json!({"type":"heading","props":{"level":2},"content":"Transcript"})];
   for s in &segments {let seconds=s.start_ms.max(0)/1000; blocks.push(serde_json::json!({"type":"paragraph","content":format!("[{:02}:{:02}:{:02}] {}",seconds/3600,(seconds/60)%60,seconds%60,s.text)}));}
   let body_json=serde_json::to_string(&blocks)?;
-  let c=state.conn.lock().map_err(|_|AppError::Other("Database unavailable".into()))?;
+  let c=state.lock()?;
   let applied=recordings::save_result(&c,&id,&expected,&body_json,&model_name,&lang)?;
   if applied { use tauri::Emitter; let _=h.emit("meeting-transcript-updated",serde_json::json!({"page_id":id,"body_json":body_json})); }
+  // Keep-audio-off meetings hand their temporary file back now that a
+  // transcript exists. A failure above keeps the audio for another attempt.
+  if let Err(error)=super::recording_preferences::discard(&c,&temporary,&id) { log::warn!("Temporary audio could not be discarded: {error}"); }
   Ok(ResultTranscript{body_json,applied,segments})
   })();
   if let Err(ref error)=outcome {
-    let c=state.conn.lock().map_err(|_|AppError::Other("Database unavailable".into()))?;
+    let c=state.lock()?;
     c.execute("UPDATE meeting SET transcript_state='error',transcript_error=?2 WHERE page_id=?1",rusqlite::params![id,error.to_string()])?;
   }
   outcome
@@ -267,7 +345,8 @@ pub async fn export_recording_text(
                 .into_path()
                 .map_err(|e| AppError::Other(e.to_string()))?;
             let mut f = std::fs::OpenOptions::new()
-                .create_new(true)
+                .create(true)
+                .truncate(true)
                 .write(true)
                 .open(path)?;
             f.write_all(text.as_bytes())?;
@@ -295,7 +374,8 @@ pub async fn export_recording_audio(app: AppHandle, page_id: String) -> AppResul
                 .into_path()
                 .map_err(|e| AppError::Other(e.to_string()))?;
             let mut destination = std::fs::OpenOptions::new()
-                .create_new(true)
+                .create(true)
+                .truncate(true)
                 .write(true)
                 .open(path)?;
             std::io::copy(&mut std::fs::File::open(source)?, &mut destination)?;

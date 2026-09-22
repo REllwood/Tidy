@@ -4,12 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, Circle, RefreshCw, Lock } from "lucide-react";
 import { useUi, type Theme } from "@/store/ui";
-import {
-  diarizeApi,
-  vaultApi,
-  mcpApi,
-  type McpInfo,
-} from "@/lib/api";
+import { diarizeApi, vaultApi, mcpApi } from "@/lib/api";
+import { errorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TranscriptionModels } from "./TranscriptionModels";
@@ -120,23 +116,15 @@ export function SettingsView() {
 function DiarizationSettings() {
   const enabled = useUi((s) => s.diarizeEnabled);
   const setEnabled = useUi((s) => s.setDiarizeEnabled);
-  const { data: available, refetch } = useQuery({
+  const { data: available, error, refetch } = useQuery({
     queryKey: ["diarization-available"],
     queryFn: diarizeApi.available,
   });
-  const [downloading, setDownloading] = useState(false);
-
-  const download = async () => {
-    setDownloading(true);
-    try {
-      await diarizeApi.download();
-      await refetch();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setDownloading(false);
-    }
-  };
+  const download = useMutation({
+    mutationFn: () => diarizeApi.download(),
+    onSuccess: () => refetch(),
+  });
+  const downloading = download.isPending;
 
   return (
     <div className="space-y-3">
@@ -161,7 +149,7 @@ function DiarizationSettings() {
           <Button
             size="sm"
             variant="secondary"
-            onClick={download}
+            onClick={() => download.mutate()}
             disabled={downloading}
           >
             <Download className="size-3.5" />{" "}
@@ -169,6 +157,11 @@ function DiarizationSettings() {
           </Button>
         )}
       </div>
+      {(download.error || error) && (
+        <p role="alert" className="text-sm text-danger-c">
+          {errorMessage(download.error || error)}
+        </p>
+      )}
     </div>
   );
 }
@@ -188,14 +181,13 @@ function VaultSettings() {
       setMsg(`Vault linked · exported ${count} page${count === 1 ? "" : "s"}`);
       qc.invalidateQueries({ queryKey: ["vault-dir"] });
     },
-    onError: (e: unknown) =>
-      setMsg(String((e as { message?: string })?.message ?? e)),
   });
   const exportAll = useMutation({
     mutationFn: () => vaultApi.exportAll(),
     onSuccess: (count) =>
       setMsg(`Re-exported ${count} page${count === 1 ? "" : "s"}`),
   });
+  const vaultError = setDir.error || exportAll.error;
 
   return (
     <div className="space-y-3">
@@ -234,7 +226,16 @@ function VaultSettings() {
           {dir ? "Change" : "Link vault"}
         </Button>
       </div>
-      {msg && <p className="text-note text-text-muted">{msg}</p>}
+      {vaultError && (
+        <p role="alert" className="text-note text-danger-c">
+          {errorMessage(vaultError)}
+        </p>
+      )}
+      {msg && !vaultError && (
+        <p role="status" className="text-note text-text-muted">
+          {msg}
+        </p>
+      )}
     </div>
   );
 }
@@ -245,26 +246,44 @@ function McpSettings() {
     queryKey: ["mcp-token"],
     queryFn: () => mcpApi.getToken(),
   });
-  const [info, setInfo] = useState<McpInfo | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // While write access is on, ask the core for the connector details so the
+  // registration command is always on screen, not only in the session that
+  // switched it on. `mcp_enable` is idempotent and reuses the saved token.
+  const info = useQuery({
+    queryKey: ["mcp-info"],
+    queryFn: () => mcpApi.enable(),
+    enabled: !!token,
+    staleTime: Infinity,
+  });
   const enable = useMutation({
     mutationFn: () => mcpApi.enable(),
     onSuccess: (i) => {
-      setInfo(i);
+      disable.reset();
+      qc.setQueryData(["mcp-info"], i);
       qc.invalidateQueries({ queryKey: ["mcp-token"] });
     },
   });
   const disable = useMutation({
     mutationFn: () => mcpApi.disable(),
     onSuccess: () => {
-      setInfo(null);
+      // Forget the earlier "enabled" result too, or the screen keeps saying
+      // writes are on and keeps showing the revoked command.
+      enable.reset();
+      qc.setQueryData(["mcp-token"], null);
+      qc.removeQueries({ queryKey: ["mcp-info"] });
       qc.invalidateQueries({ queryKey: ["mcp-token"] });
     },
   });
 
-  const enabled = !!token || !!info;
-  const cmd = info?.claude_command;
+  // The saved token is the truth; a just-finished enable covers the moment
+  // before it is fetched again.
+  const enabled = !!token || enable.isSuccess;
+  const cmd = enabled
+    ? (info.data?.claude_command ?? enable.data?.claude_command)
+    : undefined;
+  const error = enable.error || disable.error || info.error;
 
   return (
     <div className="space-y-3">
@@ -300,6 +319,16 @@ function McpSettings() {
           </Button>
         )}
       </div>
+      {error && (
+        <p role="alert" className="text-note text-danger-c">
+          {errorMessage(error)}
+        </p>
+      )}
+      {enabled && info.isPending && !cmd && (
+        <p role="status" className="text-note text-text-muted">
+          Loading the connector command…
+        </p>
+      )}
       {cmd && (
         <div className="space-y-1.5">
           <p className="text-note text-text-muted">

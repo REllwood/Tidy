@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Check, CalendarClock, Loader2 } from "lucide-react";
 import {
   dueLabel,
@@ -42,6 +43,8 @@ export function TaskRow({
 }) {
   const openPage = useUi((s) => s.openPage);
   const { complete, reschedule, canComplete, pending } = useTaskMutations();
+  // Closed as soon as a new date is picked, rather than when the task moves.
+  const [rescheduling, setRescheduling] = useState(false);
   const dot = STATUS_DOT[task.statusColor ?? "grey"] ?? STATUS_DOT.grey;
   const completable = canComplete(task);
 
@@ -90,7 +93,7 @@ export function TaskRow({
       )}
 
       {/* due chip → snooze/reschedule menu */}
-      <Popover>
+      <Popover open={rescheduling} onOpenChange={setRescheduling}>
         <PopoverTrigger
           disabled={pending}
           className={`shrink-0 rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-surface-hover ${
@@ -106,7 +109,10 @@ export function TaskRow({
           {SNOOZE.map((s) => (
             <button
               key={s.key}
-              onClick={() => reschedule(task, snoozeDate(s.key))}
+              onClick={() => {
+                setRescheduling(false);
+                reschedule(task, snoozeDate(s.key));
+              }}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-surface-hover"
             >
               <CalendarClock className="size-3.5 text-text-faint" />
@@ -118,9 +124,11 @@ export function TaskRow({
             <input
               type="date"
               defaultValue={task.due}
-              onChange={(e) =>
-                e.target.value && reschedule(task, e.target.value)
-              }
+              onChange={(e) => {
+                if (!e.target.value) return;
+                setRescheduling(false);
+                reschedule(task, e.target.value);
+              }}
               className="min-w-0 flex-1 bg-transparent text-sm outline-none"
             />
           </label>

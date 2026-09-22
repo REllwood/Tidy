@@ -10,6 +10,7 @@ import {
   LockKeyhole,
 } from "lucide-react";
 import { useUi } from "@/store/ui";
+import { errorMessage } from "@/lib/errors";
 import { usePages } from "@/hooks/usePages";
 import type { Page } from "@/lib/api";
 import {
@@ -44,9 +45,16 @@ export function TopBar() {
 
   const exportNote = useMutation({
     mutationFn: exportPageMarkdown,
+    onSuccess: (saved) => {
+      if (saved) toast.success("Exported as Markdown");
+    },
     onError: (error) =>
-      toast.error(`Could not export the note: ${String(error)}`),
+      toast.error(`Couldn't export the note. ${errorMessage(error)}`),
   });
+  const printPage = () =>
+    exportPagePdf().catch((error) =>
+      toast.error(`Couldn't open the print dialog. ${errorMessage(error)}`),
+    );
 
   let crumbs: { id?: string; label: string }[];
   if (pane.kind === "page" && pages) {
@@ -129,10 +137,11 @@ export function TopBar() {
             )}
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onSelect={() => exportNote.mutate(pane.pageId)}>
+            {/* Base UI menu items activate through onClick, not onSelect. */}
+            <DropdownMenuItem onClick={() => exportNote.mutate(pane.pageId)}>
               <FileDown className="size-4" /> Export as Markdown
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => exportPagePdf()}>
+            <DropdownMenuItem onClick={() => void printPage()}>
               <Printer className="size-4" /> Export as PDF
             </DropdownMenuItem>
           </DropdownMenuContent>
