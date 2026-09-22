@@ -1,13 +1,12 @@
 //! Tauri command wrapper over `tidy_core::store::search`.
 
-use tauri::State;
+use tauri::AppHandle;
 
-use crate::db::Db;
 use crate::error::AppResult;
+use crate::workspace::run_db;
 use tidy_core::store::search::{core, SearchResults};
 
 #[tauri::command]
-pub fn search(db: State<Db>, query: String) -> AppResult<SearchResults> {
-    let conn = db.conn.lock().unwrap();
-    core::search(&conn, &query)
+pub async fn search(app: AppHandle, query: String) -> AppResult<SearchResults> {
+    run_db(&app, move |conn| core::search(conn, &query)).await
 }

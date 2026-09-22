@@ -1,9 +1,11 @@
 //! DB-aware bridge between the store and the pure vault serializer: turn a page
 //! row into a `notes/<slug>-<id8>.md` file (frontmatter + Markdown body).
 
+use std::path::{Path, PathBuf};
+
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::store::knowledge;
 
 use super::{blocks_to_markdown, render_page, slug, PageMeta};
@@ -128,18 +130,110 @@ pub fn apply_external_markdown(conn: &Connection, file_text: &str) -> AppResult<
     // The DB now matches the file, so dirty stays 0.
     let now = crate::db::now_ms();
     let content = super::markdown_to_blocks(&body);
+    // Index the prose, not the Markdown markers the file happens to use.
+    let text = super::blocks_to_plaintext(&content);
     if let Some(title) = front.get("title") {
         conn.execute(
             "UPDATE page SET title = ?2, content = ?3, body_text = ?4, updated_at = ?5, dirty = 0 WHERE id = ?1",
-            params![id, title, content, body, now],
+            params![id, title, content, text, now],
         )?;
     } else {
         conn.execute(
             "UPDATE page SET content = ?2, body_text = ?3, updated_at = ?4, dirty = 0 WHERE id = ?1",
-            params![id, content, body, now],
+            params![id, content, text, now],
         )?;
     }
     Ok(ApplyResult::Updated(id))
+}
+
+// ---- writing files (app -> vault) ------------------------------------------
+
+/// The configured vault directory, if the user has linked one.
+pub fn vault_root(conn: &Connection) -> AppResult<Option<PathBuf>> {
+    Ok(crate::db::get_setting(conn, "vault_dir")?.map(PathBuf::from))
+}
+
+fn blake3_hex(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
+/// Atomic write: write a temp sibling, then rename over the target, so a reader
+/// (or a crash) never sees a half-written note.
+fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Write one page's Markdown file into the vault, journaling the hash first so
+/// the watcher recognises (and skips) the resulting change event. Clears the
+/// page's `dirty` flag and removes the previous file when the title (and so the
+/// filename) changed. Returns whether a file was written.
+pub fn write_page_file(conn: &Connection, vault: &Path, page_id: &str) -> AppResult<bool> {
+    let Some(file) = render_page_file(conn, page_id)? else {
+        return Ok(false);
+    };
+    // Prior path — so a title change (new slug) doesn't orphan the old file.
+    let old_path: Option<String> = conn
+        .query_row(
+            "SELECT vault_path FROM page WHERE id = ?1",
+            params![page_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+
+    let hash = blake3_hex(file.content.as_bytes());
+    crate::db::journal_sync(conn, &file.rel_path, &hash, "app_write")?;
+    atomic_write(&vault.join(&file.rel_path), &file.content).map_err(AppError::Io)?;
+    conn.execute(
+        "UPDATE page SET vault_path = ?2, body_hash = ?3, dirty = 0 WHERE id = ?1",
+        params![page_id, file.rel_path, hash],
+    )?;
+
+    if let Some(old) = old_path {
+        if old != file.rel_path {
+            let _ = std::fs::remove_file(vault.join(&old));
+        }
+    }
+    Ok(true)
+}
+
+/// Remove a page's vault file (best-effort) — called when a page is deleted,
+/// while its `vault_path` is still readable.
+pub fn remove_page_file(conn: &Connection, page_id: &str) {
+    let Ok(Some(vault)) = vault_root(conn) else {
+        return;
+    };
+    let rel: Option<String> = conn
+        .query_row(
+            "SELECT vault_path FROM page WHERE id = ?1",
+            params![page_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten();
+    if let Some(rel) = rel {
+        let _ = crate::db::journal_sync(conn, &rel, "", "app_delete");
+        let _ = std::fs::remove_file(vault.join(&rel));
+    }
+}
+
+/// Mirror a page to the vault when one is configured — best-effort, a no-op
+/// otherwise. Call while already holding the connection.
+pub fn flush_if_configured(conn: &Connection, page_id: &str) {
+    let Ok(Some(vault)) = vault_root(conn) else {
+        return;
+    };
+    if let Err(e) = write_page_file(conn, &vault, page_id) {
+        log::warn!("vault flush failed for {page_id}: {e}");
+    }
 }
 
 #[cfg(test)]

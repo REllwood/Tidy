@@ -13,10 +13,11 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebouncedEvent, Debouncer, FileIdMap};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
+use crate::workspace::run_db;
 use tidy_core::vault::export;
 
 /// Holds the live filesystem watcher (dropped/replaced when the vault changes).
@@ -38,62 +39,10 @@ fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write one page's Markdown file into the vault, journaling the hash first so
-/// the watcher recognizes (and skips) the resulting change event.
-fn write_page_file(conn: &rusqlite::Connection, vault: &Path, page_id: &str) -> AppResult<()> {
-    use rusqlite::OptionalExtension;
-    if let Some(file) = export::render_page_file(conn, page_id)? {
-        // Prior path — so a title change (new slug) doesn't orphan the old file.
-        let old_path: Option<String> = conn
-            .query_row(
-                "SELECT vault_path FROM page WHERE id = ?1",
-                rusqlite::params![page_id],
-                |r| r.get(0),
-            )
-            .optional()?
-            .flatten();
-
-        let hash = blake3_hex(file.content.as_bytes());
-        db::journal_sync(conn, &file.rel_path, &hash, "app_write")?;
-        let abs = vault.join(&file.rel_path);
-        atomic_write(&abs, &file.content).map_err(AppError::Io)?;
-        conn.execute(
-            "UPDATE page SET vault_path = ?2, body_hash = ?3, dirty = 0 WHERE id = ?1",
-            rusqlite::params![page_id, file.rel_path, hash],
-        )?;
-
-        if let Some(old) = old_path {
-            if old != file.rel_path {
-                let _ = fs::remove_file(vault.join(&old));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Remove a page's vault file (best-effort) — called when a page is deleted.
-pub fn remove_page_file(app: &AppHandle, page_id: &str) {
-    let db = app.state::<Db>();
-    let conn = db.conn.lock().unwrap();
-    let vault = match vault_root(&conn) {
-        Ok(Some(v)) => v,
-        _ => return,
-    };
-    use rusqlite::OptionalExtension;
-    let rel: Option<String> = conn
-        .query_row(
-            "SELECT vault_path FROM page WHERE id = ?1",
-            rusqlite::params![page_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .flatten();
-    if let Some(rel) = rel {
-        let _ = db::journal_sync(&conn, &rel, "", "app_delete");
-        let _ = fs::remove_file(vault.join(&rel));
-    }
+/// Remove a page's vault file (best-effort) — called when a page is deleted,
+/// while its `vault_path` is still readable.
+pub fn remove_page_file(conn: &rusqlite::Connection, page_id: &str) {
+    export::remove_page_file(conn, page_id);
 }
 
 /// Export every note-type page to the vault (one-way, full).
@@ -101,7 +50,7 @@ fn export_all(conn: &rusqlite::Connection, vault: &Path) -> AppResult<usize> {
     let ids = export::exportable_page_ids(conn)?;
     let mut n = 0;
     for id in &ids {
-        write_page_file(conn, vault, id)?;
+        export::write_page_file(conn, vault, id)?;
         n += 1;
     }
     Ok(n)
@@ -111,6 +60,9 @@ fn export_all(conn: &rusqlite::Connection, vault: &Path) -> AppResult<usize> {
 fn handle_events(app: &AppHandle, vault: &Path, events: Vec<DebouncedEvent>) {
     let db = app.state::<Db>();
     let mut touched = false;
+    // Pages whose body this batch rewrote underneath the editor. The open
+    // document has to reload or the next in-app save would clobber the file.
+    let mut rewritten: Vec<String> = Vec::new();
     for ev in events {
         for path in ev.event.paths.iter() {
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -127,7 +79,15 @@ fn handle_events(app: &AppHandle, vault: &Path, events: Vec<DebouncedEvent>) {
             };
             // Hold the DB lock across read+hash+echo-check+apply so a concurrent
             // app write can't slip a new journal hash in between (echo race).
-            let conn = db.conn.lock().unwrap();
+            let conn = match db.lock() {
+                Ok(conn) => conn,
+                Err(e) => {
+                    // Skip this file, but still report whatever the batch has
+                    // already applied.
+                    log::warn!("vault import skipped, database unavailable: {e}");
+                    continue;
+                }
+            };
             let text = match fs::read_to_string(path) {
                 Ok(t) => t,
                 Err(_) => continue, // deleted/unreadable — soft-ignore for now
@@ -140,12 +100,13 @@ fn handle_events(app: &AppHandle, vault: &Path, events: Vec<DebouncedEvent>) {
                 }
             }
             match export::apply_external_markdown(&conn, &text) {
-                Ok(export::ApplyResult::Updated(_id)) => {
+                Ok(export::ApplyResult::Updated(id)) => {
                     // record the new external hash so the next app write is diffable
                     let _ = db::journal_sync(&conn, &rel, &hash, "file_write");
                     touched = true;
+                    rewritten.push(id);
                 }
-                Ok(export::ApplyResult::Conflict(_id)) => {
+                Ok(export::ApplyResult::Conflict(id)) => {
                     // The app has unflushed changes to this page. Write the
                     // external version to a sidecar (never lose either side) and
                     // leave the DB untouched.
@@ -166,6 +127,9 @@ fn handle_events(app: &AppHandle, vault: &Path, events: Vec<DebouncedEvent>) {
                         );
                         log::warn!("vault conflict on {rel}: wrote {conflict_rel}");
                     }
+                    // The editor still needs to know the file diverged, so it
+                    // can offer the sidecar rather than silently winning.
+                    rewritten.push(id);
                 }
                 Ok(export::ApplyResult::Unmatched) | Err(_) => {}
             }
@@ -173,6 +137,9 @@ fn handle_events(app: &AppHandle, vault: &Path, events: Vec<DebouncedEvent>) {
     }
     if touched {
         let _ = app.emit("pages-changed", ());
+    }
+    for page_id in rewritten {
+        let _ = app.emit("document-changed", serde_json::json!({ "page_id": page_id }));
     }
 }
 
@@ -204,7 +171,10 @@ fn start_watcher(app: &AppHandle, vault: &Path) -> AppResult<()> {
     debouncer.cache().add_root(&notes, RecursiveMode::Recursive);
 
     let state = app.state::<VaultState>();
-    *state.0.lock().unwrap() = Some(debouncer);
+    match state.0.lock() {
+        Ok(mut slot) => *slot = Some(debouncer),
+        Err(poisoned) => *poisoned.into_inner() = Some(debouncer),
+    }
     Ok(())
 }
 
@@ -217,65 +187,76 @@ fn vault_root(conn: &rusqlite::Connection) -> AppResult<Option<PathBuf>> {
 /// Choose (or change) the vault directory: persist it, export everything once,
 /// and start watching for external edits.
 #[tauri::command]
-pub fn set_vault_dir(app: AppHandle, db: State<Db>, path: String) -> AppResult<usize> {
+pub async fn set_vault_dir(app: AppHandle, path: String) -> AppResult<usize> {
     let vault = PathBuf::from(&path);
     if !vault.is_dir() {
         return Err(AppError::Invalid(format!("not a directory: {path}")));
     }
-    let n = {
-        let conn = db.conn.lock().unwrap();
-        db::set_setting(&conn, "vault_dir", &path)?;
-        export_all(&conn, &vault)?
+    // Exporting a whole workspace writes a file per page, so it has to happen
+    // off the UI thread.
+    let exported = {
+        let path = path.clone();
+        let vault = vault.clone();
+        run_db(&app, move |conn| {
+            db::set_setting(conn, "vault_dir", &path)?;
+            export_all(conn, &vault)
+        })
+        .await?
     };
     start_watcher(&app, &vault)?;
     let _ = app.emit("vault-changed", &path);
-    Ok(n)
+    Ok(exported)
 }
 
 /// The configured vault directory, if any.
 #[tauri::command]
-pub fn get_vault_dir(db: State<Db>) -> AppResult<Option<String>> {
-    let conn = db.conn.lock().unwrap();
-    Ok(db::get_setting(&conn, "vault_dir")?)
+pub async fn get_vault_dir(app: AppHandle) -> AppResult<Option<String>> {
+    run_db(&app, |conn| db::get_setting(conn, "vault_dir")).await
 }
 
 /// Re-export every page to the vault (manual full sync).
 #[tauri::command]
-pub fn export_vault(db: State<Db>) -> AppResult<usize> {
-    let conn = db.conn.lock().unwrap();
-    let vault =
-        vault_root(&conn)?.ok_or_else(|| AppError::Invalid("no vault configured".into()))?;
-    export_all(&conn, &vault)
+pub async fn export_vault(app: AppHandle) -> AppResult<usize> {
+    run_db(&app, |conn| {
+        let vault =
+            vault_root(conn)?.ok_or_else(|| AppError::Invalid("no vault configured".into()))?;
+        export_all(conn, &vault)
+    })
+    .await
 }
 
 /// Flush a single page to its vault file (called after edits when a vault is set).
 #[tauri::command]
-pub fn flush_page(db: State<Db>, page_id: String) -> AppResult<()> {
-    let conn = db.conn.lock().unwrap();
-    if let Some(vault) = vault_root(&conn)? {
-        write_page_file(&conn, &vault, &page_id)?;
-    }
-    Ok(())
+pub async fn flush_page(app: AppHandle, page_id: String) -> AppResult<()> {
+    run_db(&app, move |conn| {
+        if let Some(vault) = vault_root(conn)? {
+            export::write_page_file(conn, &vault, &page_id)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Auto-flush a page to the vault after an in-app edit — best-effort, no-op when
-/// no vault is configured. Also clears the page's `dirty` flag (write_page_file
-/// does), keeping the file in sync so the vault is truly two-way in real time.
-/// Call while already holding the connection.
+/// no vault is configured. Also clears the page's `dirty` flag, keeping the file
+/// in sync so the vault is truly two-way in real time. Call while already
+/// holding the connection. Shared with the MCP sidecar through the core crate.
 pub fn flush_if_configured(conn: &rusqlite::Connection, page_id: &str) {
-    if let Ok(Some(vault)) = vault_root(conn) {
-        if let Err(e) = write_page_file(conn, &vault, page_id) {
-            log::warn!("vault auto-flush failed for {page_id}: {e}");
-        }
-    }
+    export::flush_if_configured(conn, page_id);
 }
 
 /// Called at startup: if a vault is already configured, resume watching it.
 pub fn resume_if_configured(app: &AppHandle) {
     let vault = {
         let db = app.state::<Db>();
-        let conn = db.conn.lock().unwrap();
-        vault_root(&conn).ok().flatten()
+        let root = match db.lock() {
+            Ok(conn) => vault_root(&conn).ok().flatten(),
+            Err(e) => {
+                log::warn!("vault watcher could not resume: {e}");
+                None
+            }
+        };
+        root
     };
     if let Some(vault) = vault {
         if vault.is_dir() {

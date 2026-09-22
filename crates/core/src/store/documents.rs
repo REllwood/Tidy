@@ -25,17 +25,22 @@ pub mod core {
         content: &str,
     ) -> AppResult<bool> {
         serde_json::from_str::<serde_json::Value>(content)?;
-        Ok(conn.execute("UPDATE page SET content=?3,updated_at=?4,dirty=1 WHERE id=?1 AND content=?2 AND deleted_at IS NULL", params![id,expected,content,now_ms()])? == 1)
+        let text = crate::vault::blocks_to_plaintext(content);
+        Ok(conn.execute("UPDATE page SET content=?3,body_text=?4,updated_at=?5,dirty=1 WHERE id=?1 AND content=?2 AND deleted_at IS NULL", params![id,expected,content,text,now_ms()])? == 1)
     }
 
     pub fn update(conn: &Connection, id: &str, content: &str) -> AppResult<()> {
         // validate it's JSON before persisting
         serde_json::from_str::<serde_json::Value>(content)?;
+        // body_text is the plain-text projection the full-text index is built
+        // from, so it has to move with the body.
+        let text = crate::vault::blocks_to_plaintext(content);
         // dirty = 1: content changed, the vault file is now out of sync until
         // the next flush (which clears it). Used for vault conflict detection.
         let n = conn.execute(
-            "UPDATE page SET content = ?2, updated_at = ?3, dirty = 1 WHERE id = ?1",
-            params![id, content, now_ms()],
+            "UPDATE page SET content = ?2, body_text = ?3, updated_at = ?4, dirty = 1
+             WHERE id = ?1 AND deleted_at IS NULL",
+            params![id, content, text, now_ms()],
         )?;
         if n == 0 {
             return Err(AppError::NotFound(format!("page {id}")));
@@ -72,6 +77,29 @@ mod tests {
             !update_if_unchanged(&c, &p.id, "[]", r#"[{"content":"speaker labels"}]"#).unwrap()
         );
         assert_eq!(get(&c, &p.id).unwrap(), r#"[{"content":"edited"}]"#);
+    }
+
+    #[test]
+    fn update_projects_plain_text_and_skips_deleted_pages() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let p = pages::core::create(&conn, None, "Doc".into(), "doc".into()).unwrap();
+        update(
+            &conn,
+            &p.id,
+            r#"[{"type":"heading","props":{"level":2},"content":"Launch plan"},{"type":"paragraph","content":"apollo sequence"}]"#,
+        )
+        .unwrap();
+        let text: String = conn
+            .query_row("SELECT body_text FROM page WHERE id = ?1", [&p.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(text, "Launch plan\napollo sequence");
+
+        // a soft-deleted page is not updatable through either path
+        conn.execute("UPDATE page SET deleted_at = 1 WHERE id = ?1", [&p.id])
+            .unwrap();
+        assert!(update(&conn, &p.id, "[]").is_err());
+        assert!(!update_if_unchanged(&conn, &p.id, "[]", "[]").unwrap());
     }
 
     #[test]

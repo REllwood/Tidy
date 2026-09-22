@@ -201,15 +201,20 @@ pub mod core {
         name: Option<&str>,
         options: Option<Value>,
     ) -> AppResult<Field> {
-        if let Some(n) = name {
-            conn.execute("UPDATE field SET name = ?2 WHERE id = ?1", params![id, n])?;
-        }
-        if let Some(o) = options {
-            conn.execute(
-                "UPDATE field SET options = ?2 WHERE id = ?1",
-                params![id, o.to_string()],
-            )?;
-        }
+        // Name and options are one edit: never leave a renamed field with its
+        // old choices (or the reverse).
+        crate::db::in_transaction(conn, |tx| {
+            if let Some(n) = name {
+                tx.execute("UPDATE field SET name = ?2 WHERE id = ?1", params![id, n])?;
+            }
+            if let Some(o) = options {
+                tx.execute(
+                    "UPDATE field SET options = ?2 WHERE id = ?1",
+                    params![id, o.to_string()],
+                )?;
+            }
+            Ok(())
+        })?;
         conn.query_row(
             "SELECT id, database_id, name, type, options, position FROM field WHERE id = ?1",
             params![id],
@@ -219,51 +224,131 @@ pub mod core {
         .ok_or_else(|| AppError::NotFound(format!("field {id}")))
     }
 
+    /// Remove every reference to `field_id` from one view's config, returning
+    /// whether anything changed. A view left pointing at a deleted field renders
+    /// as an empty board/calendar/gantt, so the config is cleaned up with it.
+    fn strip_field_from_config(config: &mut Value, field_id: &str) -> bool {
+        let Some(map) = config.as_object_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        for key in [
+            "groupByFieldId",
+            "dateFieldId",
+            "startFieldId",
+            "endFieldId",
+            "dependenciesFieldId",
+        ] {
+            if map.get(key).and_then(|v| v.as_str()) == Some(field_id) {
+                map.remove(key);
+                changed = true;
+            }
+        }
+        for key in ["filters", "sorts"] {
+            if let Some(entries) = map.get_mut(key).and_then(|v| v.as_array_mut()) {
+                let before = entries.len();
+                entries.retain(|e| e.get("fieldId").and_then(|f| f.as_str()) != Some(field_id));
+                changed |= entries.len() != before;
+            }
+        }
+        if let Some(widths) = map.get_mut("columnWidths").and_then(|v| v.as_object_mut()) {
+            changed |= widths.remove(field_id).is_some();
+        }
+        changed
+    }
+
     pub fn delete_field(conn: &Connection, id: &str) -> AppResult<()> {
-        conn.execute("DELETE FROM field WHERE id = ?1", params![id])?;
-        Ok(())
+        crate::db::in_transaction(conn, |tx| {
+            let database_id: String = tx
+                .query_row(
+                    "SELECT database_id FROM field WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| AppError::NotFound(format!("field {id}")))?;
+            tx.execute("DELETE FROM field WHERE id = ?1", params![id])?;
+
+            let views: Vec<(String, String)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT id, config FROM db_view WHERE database_id = ?1 AND config IS NOT NULL",
+                )?;
+                let rows = stmt.query_map(params![database_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (view_id, raw) in views {
+                let Ok(mut config) = serde_json::from_str::<Value>(&raw) else {
+                    continue;
+                };
+                if strip_field_from_config(&mut config, id) {
+                    tx.execute(
+                        "UPDATE db_view SET config = ?2 WHERE id = ?1",
+                        params![view_id, config.to_string()],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Every cell of a database in one query, bucketed by row id — one round
+    /// trip for the whole table instead of one per row.
+    fn cells_by_row(
+        conn: &Connection,
+        database_id: &str,
+    ) -> AppResult<HashMap<String, HashMap<String, Value>>> {
+        let mut stmt = conn.prepare(
+            "SELECT cell.row_id, cell.field_id, cell.value
+             FROM cell JOIN db_row ON db_row.id = cell.row_id
+             WHERE db_row.database_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![database_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out: HashMap<String, HashMap<String, Value>> = HashMap::new();
+        for row in rows {
+            let (row_id, field_id, value) = row?;
+            if let Some(raw) = value {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+                    out.entry(row_id).or_default().insert(field_id, parsed);
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub fn list_rows(conn: &Connection, database_id: &str) -> AppResult<Vec<RowWithCells>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, database_id, position, created_at FROM db_row WHERE database_id = ?1 ORDER BY position",
-        )?;
-        let base = stmt
-            .query_map(params![database_id], |r| {
+        let base = {
+            let mut stmt = conn.prepare(
+                "SELECT id, database_id, position, created_at FROM db_row WHERE database_id = ?1 ORDER BY position",
+            )?;
+            let rows = stmt.query_map(params![database_id], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, f64>(2)?,
                     r.get::<_, i64>(3)?,
                 ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        let mut out = Vec::with_capacity(base.len());
-        for (id, db_id, position, created_at) in base {
-            let mut cells = HashMap::new();
-            let mut cs = conn
-                .prepare("SELECT field_id, value FROM cell WHERE row_id = ?1")?;
-            let it = cs.query_map(params![id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
             })?;
-            for pair in it {
-                let (fid, v) = pair?;
-                if let Some(s) = v {
-                    if let Ok(val) = serde_json::from_str::<Value>(&s) {
-                        cells.insert(fid, val);
-                    }
-                }
-            }
-            out.push(RowWithCells {
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut cells = cells_by_row(conn, database_id)?;
+        Ok(base
+            .into_iter()
+            .map(|(id, db_id, position, created_at)| RowWithCells {
+                cells: cells.remove(&id).unwrap_or_default(),
                 id,
                 database_id: db_id,
                 position,
                 created_at,
-                cells,
-            });
-        }
-        Ok(out)
+            })
+            .collect())
     }
 
     pub fn create_row(conn: &Connection, database_id: &str) -> AppResult<RowWithCells> {
@@ -291,16 +376,41 @@ pub mod core {
         })
     }
 
+    /// Create a row and fill it in one transaction, so a half-populated row can
+    /// never reach a view. Null values are skipped (a cleared cell is no cell).
+    pub fn create_row_with_cells(
+        conn: &Connection,
+        database_id: &str,
+        cells: HashMap<String, Value>,
+    ) -> AppResult<RowWithCells> {
+        crate::db::in_transaction(conn, |tx| {
+            let mut row = create_row(tx, database_id)?;
+            for (field_id, value) in cells {
+                if value.is_null() {
+                    continue;
+                }
+                set_cell(tx, &row.id, &field_id, &value)?;
+                row.cells.insert(field_id, value);
+            }
+            Ok(row)
+        })
+    }
+
     pub fn delete_row(conn: &Connection, id: &str) -> AppResult<()> {
-        conn.execute("DELETE FROM db_row WHERE id = ?1", params![id])?;
+        if conn.execute("DELETE FROM db_row WHERE id = ?1", params![id])? == 0 {
+            return Err(AppError::NotFound(format!("row {id}")));
+        }
         Ok(())
     }
 
     pub fn move_row(conn: &Connection, id: &str, position: f64) -> AppResult<()> {
-        conn.execute(
+        let n = conn.execute(
             "UPDATE db_row SET position = ?2 WHERE id = ?1",
             params![id, position],
         )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("row {id}")));
+        }
         Ok(())
     }
 
@@ -407,19 +517,35 @@ pub mod core {
                 r.get::<_, Option<String>>(3)?,
             ))
         })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (database_id, page_id, title, icon) = row?;
-            let fields = list_fields(conn, &database_id)?;
-            out.push(DatabaseSummary {
+        let summaries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Every field in one query, bucketed by database, rather than a fresh
+        // prepare + query per database.
+        let mut by_database: HashMap<String, Vec<Field>> = HashMap::new();
+        {
+            let mut fstmt = conn.prepare(
+                "SELECT id, database_id, name, type, options, position FROM field ORDER BY position",
+            )?;
+            let fields = fstmt.query_map([], row_to_field)?;
+            for field in fields {
+                let field = field?;
+                by_database
+                    .entry(field.database_id.clone())
+                    .or_default()
+                    .push(field);
+            }
+        }
+
+        Ok(summaries
+            .into_iter()
+            .map(|(database_id, page_id, title, icon)| DatabaseSummary {
+                fields: by_database.remove(&database_id).unwrap_or_default(),
                 database_id,
                 page_id,
                 title,
                 icon,
-                fields,
-            });
-        }
-        Ok(out)
+            })
+            .collect())
     }
 
     /// Promote a row into a full `record` page (the additive "row = page").
@@ -529,6 +655,102 @@ mod tests {
             .unwrap()
             .iter()
             .any(|x| x.id == f.id));
+    }
+
+    #[test]
+    fn deleting_a_field_strips_it_from_every_view_config() {
+        let (db, page_id) = db_with_database();
+        let conn = db.conn.lock().unwrap();
+        let database_id = database_id_for_page(&conn, &page_id).unwrap();
+        let fields = list_fields(&conn, &database_id).unwrap();
+        let status = fields.iter().find(|f| f.kind == "select").unwrap().clone();
+        let start = fields.iter().find(|f| f.name == "Start").unwrap().clone();
+
+        // a grid view that filters, sorts and sizes by the doomed field
+        let grid = list_views(&conn, &database_id)
+            .unwrap()
+            .into_iter()
+            .find(|v| v.kind == "grid")
+            .unwrap();
+        update_view(
+            &conn,
+            &grid.id,
+            json!({
+                "filters": [
+                    {"fieldId": status.id, "op": "is", "value": "x"},
+                    {"fieldId": start.id, "op": "is", "value": "y"}
+                ],
+                "sorts": [{"fieldId": status.id, "dir": "asc"}],
+                "columnWidths": {status.id.clone(): 220, start.id.clone(): 120}
+            }),
+        )
+        .unwrap();
+
+        delete_field(&conn, &status.id).unwrap();
+
+        let views = list_views(&conn, &database_id).unwrap();
+        let board = views.iter().find(|v| v.kind == "board").unwrap();
+        assert!(
+            board.config.as_ref().unwrap().get("groupByFieldId").is_none(),
+            "the board must not group by a field that is gone"
+        );
+        let grid = views.iter().find(|v| v.kind == "grid").unwrap();
+        let cfg = grid.config.as_ref().unwrap();
+        let filters = cfg.get("filters").unwrap().as_array().unwrap();
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].get("fieldId").unwrap(), &json!(start.id));
+        assert!(cfg.get("sorts").unwrap().as_array().unwrap().is_empty());
+        let widths = cfg.get("columnWidths").unwrap().as_object().unwrap();
+        assert!(!widths.contains_key(&status.id));
+        assert!(widths.contains_key(&start.id));
+        // views that never mentioned the field keep their config
+        let calendar = views.iter().find(|v| v.kind == "calendar").unwrap();
+        assert_eq!(
+            calendar.config.as_ref().unwrap().get("dateFieldId").unwrap(),
+            &json!(start.id)
+        );
+
+        // a second delete reports the field is gone rather than silently passing
+        assert!(delete_field(&conn, &status.id).is_err());
+    }
+
+    #[test]
+    fn row_writes_report_a_missing_row() {
+        let (db, page_id) = db_with_database();
+        let conn = db.conn.lock().unwrap();
+        let database_id = database_id_for_page(&conn, &page_id).unwrap();
+        let row = create_row(&conn, &database_id).unwrap();
+        assert!(move_row(&conn, &row.id, 5.0).is_ok());
+        assert!(move_row(&conn, "no-such-row", 5.0).is_err());
+        assert!(delete_row(&conn, &row.id).is_ok());
+        assert!(delete_row(&conn, &row.id).is_err());
+    }
+
+    #[test]
+    fn create_row_with_cells_fills_the_row_in_one_go() {
+        let (db, page_id) = db_with_database();
+        let conn = db.conn.lock().unwrap();
+        let database_id = database_id_for_page(&conn, &page_id).unwrap();
+        let fields = list_fields(&conn, &database_id).unwrap();
+        let name = fields.iter().find(|f| f.kind == "text").unwrap();
+        let start = fields.iter().find(|f| f.name == "Start").unwrap();
+
+        let mut cells = std::collections::HashMap::new();
+        cells.insert(name.id.clone(), json!("Write tests"));
+        cells.insert(start.id.clone(), json!(null));
+        let row = create_row_with_cells(&conn, &database_id, cells).unwrap();
+
+        assert_eq!(row.cells.get(&name.id), Some(&json!("Write tests")));
+        assert!(!row.cells.contains_key(&start.id), "nulls are skipped");
+        let stored = list_rows(&conn, &database_id).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].cells, row.cells);
+
+        // an unknown field aborts the whole row rather than leaving a blank one
+        let mut bad = std::collections::HashMap::new();
+        bad.insert("no-such-field".to_string(), json!("x"));
+        assert!(create_row_with_cells(&conn, &database_id, bad).is_err());
+        assert_eq!(list_rows(&conn, &database_id).unwrap().len(), 1);
     }
 
     #[test]

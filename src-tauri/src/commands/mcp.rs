@@ -2,10 +2,11 @@
 //! bundled sidecar path, so Settings can show a one-click registration command.
 
 use serde::Serialize;
-use tauri::State;
+use tauri::AppHandle;
 
-use crate::db::{self, Db};
+use crate::db;
 use crate::error::AppResult;
+use crate::workspace::run_db;
 
 #[derive(Serialize)]
 pub struct McpInfo {
@@ -29,23 +30,22 @@ fn sidecar_path() -> String {
 
 /// The existing token, or `None` if the user hasn't enabled writes yet.
 #[tauri::command]
-pub fn mcp_get_token(db: State<Db>) -> AppResult<Option<String>> {
-    let conn = db.conn.lock().unwrap();
-    db::get_setting(&conn, "mcp_token")
+pub async fn mcp_get_token(app: AppHandle) -> AppResult<Option<String>> {
+    run_db(&app, |conn| db::get_setting(conn, "mcp_token")).await
 }
 
 /// Mint (or return the existing) write token and hand back registration details.
 #[tauri::command]
-pub fn mcp_enable(db: State<Db>) -> AppResult<McpInfo> {
-    let conn = db.conn.lock().unwrap();
-    let token = match db::get_setting(&conn, "mcp_token")? {
-        Some(t) => t,
+pub async fn mcp_enable(app: AppHandle) -> AppResult<McpInfo> {
+    let token = run_db(&app, |conn| match db::get_setting(conn, "mcp_token")? {
+        Some(t) => Ok(t),
         None => {
             let t = db::new_id();
-            db::set_setting(&conn, "mcp_token", &t)?;
-            t
+            db::set_setting(conn, "mcp_token", &t)?;
+            Ok(t)
         }
-    };
+    })
+    .await?;
     let sidecar = sidecar_path();
     let claude_command = format!(
         "claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN={token} tidy -- \"{sidecar}\""
@@ -57,10 +57,14 @@ pub fn mcp_enable(db: State<Db>) -> AppResult<McpInfo> {
     })
 }
 
-/// Revoke write access (removes the token; read tools keep working).
+/// Revoke write access (removes the token; read tools keep working). A sidecar
+/// that is already running re-reads the token on every write, so this takes
+/// effect straight away.
 #[tauri::command]
-pub fn mcp_disable(db: State<Db>) -> AppResult<()> {
-    let conn = db.conn.lock().unwrap();
-    conn.execute("DELETE FROM setting WHERE key = 'mcp_token'", [])?;
-    Ok(())
+pub async fn mcp_disable(app: AppHandle) -> AppResult<()> {
+    run_db(&app, |conn| {
+        conn.execute("DELETE FROM setting WHERE key = 'mcp_token'", [])?;
+        Ok(())
+    })
+    .await
 }

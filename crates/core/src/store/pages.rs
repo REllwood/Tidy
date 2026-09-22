@@ -89,20 +89,25 @@ pub mod core {
         let now = now_ms();
         let position = next_position(conn, &parent_id)?;
         let content = if kind == "doc" { Some("[]") } else { None };
-        conn.execute(
-            "INSERT INTO page (id, parent_id, title, icon, type, position, is_favorite, content, created_at, updated_at)
-             VALUES (?1, ?2, ?3, NULL, ?4, ?5, 0, ?6, ?7, ?7)",
-            params![id, parent_id, title, kind, position, content, now],
-        )?;
-        if kind == "database" {
-            crate::store::databases::core::create_for_page(conn, &id)?;
-        }
+        // A database page is only useful with its database (schema + views), so
+        // both land together or not at all.
+        crate::db::in_transaction(conn, |tx| {
+            tx.execute(
+                "INSERT INTO page (id, parent_id, title, icon, type, position, is_favorite, content, body_text, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, 0, ?6, '', ?7, ?7)",
+                params![id, parent_id, title, kind, position, content, now],
+            )?;
+            if kind == "database" {
+                crate::store::databases::core::create_for_page(tx, &id)?;
+            }
+            Ok(())
+        })?;
         read_page(conn, &id)
     }
 
     pub fn list(conn: &Connection) -> AppResult<Vec<Page>> {
         let mut stmt = conn.prepare(&format!(
-            "SELECT {PAGE_COLS} FROM page ORDER BY position ASC"
+            "SELECT {PAGE_COLS} FROM page WHERE deleted_at IS NULL ORDER BY position ASC"
         ))?;
         let rows = stmt.query_map([], row_to_page)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -148,8 +153,22 @@ pub mod core {
         position: f64,
     ) -> AppResult<Page> {
         if let Some(ref p) = parent_id {
-            if p == id {
-                return Err(AppError::Invalid("page cannot be its own parent".into()));
+            // Walk up from the proposed parent. Meeting the page itself means
+            // the new parent is the page or one of its descendants, which would
+            // cut the subtree loose into a cycle.
+            let cycles: i64 = conn.query_row(
+                "WITH RECURSIVE ancestor(id) AS (
+                     SELECT ?1
+                     UNION
+                     SELECT p.parent_id FROM page p JOIN ancestor a ON p.id = a.id
+                      WHERE p.parent_id IS NOT NULL
+                 )
+                 SELECT count(*) FROM ancestor WHERE id = ?2",
+                params![p, id],
+                |r| r.get(0),
+            )?;
+            if cycles > 0 {
+                return Err(AppError::Invalid("A page cannot be moved inside itself.".into()));
             }
         }
         let n = conn.execute(
@@ -160,6 +179,22 @@ pub mod core {
             return Err(AppError::NotFound(format!("page {id}")));
         }
         read_page(conn, id)
+    }
+
+    /// `id` and every page beneath it, deepest last. Deleting a page cascades
+    /// to its whole subtree, so callers that have per-page cleanup to do (vault
+    /// files, caches) need the full list *before* the delete.
+    pub fn subtree_ids(conn: &Connection, id: &str) -> AppResult<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "WITH RECURSIVE subtree(id) AS (
+                 SELECT id FROM page WHERE id = ?1
+                 UNION
+                 SELECT p.id FROM page p JOIN subtree s ON p.parent_id = s.id
+             )
+             SELECT id FROM subtree",
+        )?;
+        let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
@@ -221,6 +256,48 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn a_page_cannot_be_moved_into_its_own_subtree() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let root = create(&conn, None, "Root".into(), "doc".into()).unwrap();
+        let child = create(&conn, Some(root.id.clone()), "Child".into(), "doc".into()).unwrap();
+        let grand =
+            create(&conn, Some(child.id.clone()), "Grand".into(), "doc".into()).unwrap();
+        let other = create(&conn, None, "Other".into(), "doc".into()).unwrap();
+
+        // into itself
+        assert!(move_page(&conn, &root.id, Some(root.id.clone()), 1.0).is_err());
+        // into a direct child
+        assert!(move_page(&conn, &root.id, Some(child.id.clone()), 1.0).is_err());
+        // into a deeper descendant
+        assert!(move_page(&conn, &root.id, Some(grand.id.clone()), 1.0).is_err());
+        // the tree is untouched
+        assert_eq!(read(&conn, &root.id).unwrap().parent_id, None);
+        // an unrelated parent still works, and so does moving a descendant out
+        assert!(move_page(&conn, &root.id, Some(other.id.clone()), 1.0).is_ok());
+        assert!(move_page(&conn, &grand.id, None, 1.0).is_ok());
+    }
+
+    #[test]
+    fn subtree_ids_lists_the_page_and_everything_under_it() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let root = create(&conn, None, "Root".into(), "doc".into()).unwrap();
+        let child = create(&conn, Some(root.id.clone()), "Child".into(), "doc".into()).unwrap();
+        let grand =
+            create(&conn, Some(child.id.clone()), "Grand".into(), "doc".into()).unwrap();
+        let other = create(&conn, None, "Other".into(), "doc".into()).unwrap();
+
+        let mut ids = subtree_ids(&conn, &root.id).unwrap();
+        ids.sort();
+        let mut want = vec![root.id.clone(), child.id, grand.id];
+        want.sort();
+        assert_eq!(ids, want);
+        assert!(!ids.contains(&other.id));
+        assert_eq!(subtree_ids(&conn, "missing").unwrap(), Vec::<String>::new());
     }
 
     #[test]

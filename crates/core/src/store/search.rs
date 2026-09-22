@@ -46,11 +46,13 @@ pub mod core {
             .join(" ");
         let mut pages: Vec<PageHit> = Vec::new();
         if !fts_query.is_empty() {
+            // bm25 weights: the page id column carries no signal, a title hit
+            // beats a body hit by a wide margin.
             let mut ps = conn.prepare(
                 "SELECT p.id, p.title, p.icon, p.type
                  FROM page_fts f JOIN page p ON p.id = f.page_id
-                 WHERE page_fts MATCH ?1
-                 ORDER BY rank LIMIT 25",
+                 WHERE page_fts MATCH ?1 AND p.deleted_at IS NULL
+                 ORDER BY bm25(page_fts, 0.0, 10.0, 1.0) LIMIT 25",
             )?;
             let it = ps.query_map(params![fts_query], |r| {
                 Ok(PageHit {
@@ -65,14 +67,18 @@ pub mod core {
             }
         }
 
+        // GROUP BY the row: a row matching in several text cells is still one
+        // hit, not one per column.
         let mut rs = conn.prepare(
-            "SELECT db_row.id, page.id, cell.value
+            "SELECT db_row.id, page.id, min(cell.value)
              FROM cell
              JOIN field ON field.id = cell.field_id
              JOIN db_row ON db_row.id = cell.row_id
              JOIN database ON database.id = db_row.database_id
              JOIN page ON page.id = database.page_id
              WHERE field.type = 'text' AND cell.value LIKE ?1 ESCAPE '\\'
+               AND page.deleted_at IS NULL
+             GROUP BY db_row.id
              LIMIT 25",
         )?;
         let rows = rs
@@ -142,5 +148,53 @@ mod tests {
         databases::core::set_cell(&conn, &row.id, &status.id, &json!("opt-abc123")).unwrap();
         let r3 = search(&conn, "opt-abc123").unwrap();
         assert!(r3.rows.is_empty(), "select-option UUIDs should not be searchable");
+    }
+
+    #[test]
+    fn a_row_matching_several_text_fields_appears_once() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let dbp = pages::core::create(&conn, None, "Tasks".into(), "database".into()).unwrap();
+        let did = databases::core::database_id_for_page(&conn, &dbp.id).unwrap();
+        let name = databases::core::list_fields(&conn, &did)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.kind == "text")
+            .unwrap();
+        let notes = databases::core::create_field(&conn, &did, "Notes", "text", None).unwrap();
+        let row = databases::core::create_row(&conn, &did).unwrap();
+        databases::core::set_cell(&conn, &row.id, &name.id, &json!("Apollo retro")).unwrap();
+        databases::core::set_cell(&conn, &row.id, &notes.id, &json!("Apollo follow-up")).unwrap();
+
+        let hits = search(&conn, "Apollo").unwrap().rows;
+        assert_eq!(hits.len(), 1, "one row, one hit");
+        assert_eq!(hits[0].row_id, row.id);
+    }
+
+    #[test]
+    fn page_bodies_are_searchable_as_prose_and_titles_rank_first() {
+        let db = Db::open_in_memory().unwrap();
+        let conn = db.conn.lock().unwrap();
+        let body = pages::core::create(&conn, None, "Notes".into(), "doc".into()).unwrap();
+        documents::core::update(
+            &conn,
+            &body.id,
+            r#"[{"type":"paragraph","content":"the orbit calculations"}]"#,
+        )
+        .unwrap();
+        let titled = pages::core::create(&conn, None, "Orbit".into(), "doc".into()).unwrap();
+
+        let hits = search(&conn, "orbit").unwrap().pages;
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, titled.id, "a title match outranks a body match");
+        // the BlockNote scaffolding is not prose, so it is not searchable
+        assert!(search(&conn, "paragraph").unwrap().pages.is_empty());
+
+        // a soft-deleted page drops out of results
+        conn.execute("UPDATE page SET deleted_at = 1 WHERE id = ?1", [&titled.id])
+            .unwrap();
+        let hits = search(&conn, "orbit").unwrap().pages;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, body.id);
     }
 }

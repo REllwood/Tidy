@@ -15,6 +15,14 @@ pub struct Db {
 }
 
 impl Db {
+    /// Lock the connection without panicking on a poisoned mutex. A panic on
+    /// one thread must not take the whole app down with it, so a poisoned lock
+    /// is recovered (SQLite state is transactional and stays consistent) and the
+    /// caller gets a usable guard.
+    pub fn lock(&self) -> AppResult<std::sync::MutexGuard<'_, Connection>> {
+        Ok(self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
     /// Open (creating if needed) the database at `path`, set pragmas, and run
     /// migrations.
     pub fn open(path: &Path) -> AppResult<Self> {
@@ -43,6 +51,24 @@ impl Db {
     }
 }
 
+/// Run `f` inside a transaction, committing on success and rolling back on
+/// error. When the connection is already inside a transaction (a caller higher
+/// up opened one) `f` runs directly — SQLite has no nested transactions, so
+/// re-opening one here would fail and the outer transaction already gives the
+/// same all-or-nothing guarantee.
+pub fn in_transaction<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> AppResult<T>,
+) -> AppResult<T> {
+    if !conn.is_autocommit() {
+        return f(conn);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let out = f(&tx)?;
+    tx.commit()?;
+    Ok(out)
+}
+
 /// Read a value from the `setting` key/value table.
 pub fn get_setting(conn: &Connection, key: &str) -> AppResult<Option<String>> {
     use rusqlite::OptionalExtension;
@@ -64,6 +90,52 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
         rusqlite::params![key, value],
     )?;
     Ok(())
+}
+
+/// Setting keys the MCP sidecar bumps after a write so the running app can
+/// notice and refresh. The app polls `CHANGE_SEQ` and drains `CHANGED_PAGES`.
+pub const CHANGE_SEQ_KEY: &str = "mcp_change_seq";
+pub const CHANGED_PAGES_KEY: &str = "mcp_changed_pages";
+
+/// Signal that a sidecar write touched `page_ids` (ids may be empty for writes
+/// that only changed database rows). Bumps the change sequence so a running app
+/// refreshes, and appends the ids (deduped) for per-document refreshes.
+pub fn record_change(conn: &Connection, page_ids: &[String]) -> AppResult<()> {
+    let seq = change_seq(conn)?;
+    set_setting(conn, CHANGE_SEQ_KEY, &(seq + 1).to_string())?;
+    if page_ids.is_empty() {
+        return Ok(());
+    }
+    let mut pages = changed_pages(conn)?;
+    for id in page_ids {
+        if !id.is_empty() && !pages.iter().any(|p| p == id) {
+            pages.push(id.clone());
+        }
+    }
+    set_setting(conn, CHANGED_PAGES_KEY, &serde_json::to_string(&pages)?)?;
+    Ok(())
+}
+
+/// The current sidecar change sequence (0 when nothing has been written yet).
+pub fn change_seq(conn: &Connection) -> AppResult<i64> {
+    Ok(get_setting(conn, CHANGE_SEQ_KEY)?
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0))
+}
+
+fn changed_pages(conn: &Connection) -> AppResult<Vec<String>> {
+    Ok(get_setting(conn, CHANGED_PAGES_KEY)?
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default())
+}
+
+/// Read and clear the list of page ids the sidecar has touched.
+pub fn take_changed_pages(conn: &Connection) -> AppResult<Vec<String>> {
+    let pages = changed_pages(conn)?;
+    if !pages.is_empty() {
+        set_setting(conn, CHANGED_PAGES_KEY, "[]")?;
+    }
+    Ok(pages)
 }
 
 /// Record that the app just wrote `path` with content hash `expected_hash`.

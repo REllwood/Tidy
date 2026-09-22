@@ -4860,6 +4860,7 @@ name = "tidy-mcp"
 version = "0.1.0"
 dependencies = [
  "rmcp",
+ "rusqlite",
  "schemars 1.2.1",
  "serde",
  "serde_json",
