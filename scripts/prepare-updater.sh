@@ -23,8 +23,9 @@ app_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a
 COPYFILE_DISABLE=1 tar -czf "$attempt/Tidy.app.tar.gz" -C "$attempt" Tidy.app
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
   npx tauri signer sign --private-key-path "$key" "$attempt/Tidy.app.tar.gz" > "$attempt/updater-signing.log"
-notes_file="$build/source/docs/releases/v$version.md"
-[[ -f "$notes_file" ]] || { echo "Release notes are missing: $notes_file" >&2; exit 1; }
+# TIDY_RELEASE_NOTES points at notes kept outside the repository.
+notes_file="${TIDY_RELEASE_NOTES:-$build/source/docs/releases/v$version.md}"
+[[ -f "$notes_file" ]] || { echo "Release notes are missing: $notes_file (set TIDY_RELEASE_NOTES)" >&2; exit 1; }
 node scripts/write-update-manifest.mjs "$attempt" "$version" "$notes_file"
 (
   cd "$build/source"
