@@ -291,3 +291,10 @@ button:not(:disabled),
     grid-template-columns: minmax(0, 1fr) 290px;
   }
 }
+
+/* A transcript line someone jumped to from the notes. */
+.transcript-line-found {
+  background: var(--brand-soft);
+  border-radius: 4px;
+  transition: background 0.4s;
+}

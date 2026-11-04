@@ -1251,6 +1251,67 @@ fn words(text: &str) -> Vec<Word> {
 /// quote's words appear in order within a span barely longer than the quote.
 /// A paraphrase does not, and neither does a quote with a name or number
 /// the transcript doesn't have.
+/// The last "[hh:mm:ss]" or "[mm:ss]" stamp in some text.
+fn last_stamp(text: &str) -> Option<String> {
+    let mut rest = text;
+    let mut found = None;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        match after.find(']') {
+            Some(close)
+                if close >= 4
+                    && after[..close].contains(':')
+                    && after[..close].chars().all(|c| c.is_ascii_digit() || c == ':') =>
+            {
+                found = Some(after[..close].to_string());
+                rest = &after[close + 1..];
+            }
+            _ => rest = after,
+        }
+    }
+    found
+}
+
+/// When a quote was said: the stamp of the transcript line it is found in.
+pub fn time_of_quote(transcript: &str, quote: &str) -> Option<String> {
+    let found = locate_quote(transcript, quote)?;
+    let start = found.as_ptr() as usize - transcript.as_ptr() as usize;
+    // The line's own stamp comes before the quote on the same line.
+    last_stamp(&transcript[..start])
+}
+
+/// When each point of the notes was said, from the quotes that support them.
+/// `quotes` pairs each checked point's text with its quote; a next step split
+/// into several points shares its quote.
+pub fn point_times(
+    summary: &MeetingSummary,
+    quotes: &[(String, String)],
+    transcript: &str,
+) -> std::collections::BTreeMap<String, String> {
+    let points = summary
+        .sections
+        .iter()
+        .flat_map(|s| s.points.iter())
+        .chain(&summary.decisions)
+        .chain(&summary.action_items)
+        .chain(&summary.open_questions);
+    let mut times = std::collections::BTreeMap::new();
+    for point in points {
+        let quote = quotes
+            .iter()
+            .find(|(text, _)| text == point)
+            .or_else(|| {
+                let bare = point.trim_end_matches('.');
+                quotes.iter().find(|(text, _)| text.contains(bare))
+            })
+            .map(|(_, quote)| quote);
+        if let Some(time) = quote.and_then(|q| time_of_quote(transcript, q)) {
+            times.insert(point.clone(), time);
+        }
+    }
+    times
+}
+
 pub fn locate_quote<'a>(evidence: &'a str, quote: &str) -> Option<&'a str> {
     let quote = quote.replace("...", " ").replace('…', " ");
     let quote_words = words(&quote);
@@ -1745,5 +1806,28 @@ mod tests {
             .is_empty());
         assert!(validate_vector(&[1.0]).is_err());
         assert!(validate_vector(&vec![f32::NAN; 768]).is_err());
+    }
+
+    #[test]
+    fn each_point_is_timed_by_the_line_its_quote_came_from() {
+        let transcript = "Speaker 1: [00:00:04] Welcome everyone, let's go through the relaunch.\nSpeaker 2: [00:01:12] We moved the launch date to the twenty eighth of October.\nYou: [00:02:30] I will send the revised timeline to Dr Chen by Friday. Also the photos.";
+        let summary = MeetingSummary {
+            decisions: vec!["The launch moved to 28 October.".into()],
+            action_items: vec!["You will send the revised timeline by Friday.".into(), "You will send the photos.".into()],
+            ..Default::default()
+        };
+        let quotes = vec![
+            ("The launch moved to 28 October.".to_string(), "We moved the launch date to the twenty eighth of October".to_string()),
+            (
+                "You will send the revised timeline by Friday. You will send the photos.".to_string(),
+                "I will send the revised timeline to Dr Chen by Friday".to_string(),
+            ),
+        ];
+        let times = point_times(&summary, &quotes, transcript);
+        assert_eq!(times.get("The launch moved to 28 October.").map(String::as_str), Some("00:01:12"));
+        assert_eq!(times.get("You will send the revised timeline by Friday.").map(String::as_str), Some("00:02:30"));
+        assert_eq!(times.get("You will send the photos.").map(String::as_str), Some("00:02:30"));
+        assert!(time_of_quote(transcript, "nothing like this was ever said here").is_none());
+        assert_eq!(last_stamp("[12:05] a [x] b [3:04:59] c"), Some("3:04:59".into()));
     }
 }

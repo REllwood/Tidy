@@ -261,6 +261,8 @@ export interface MeetingSummary {
   open_questions?: string[];
   /** Moments marked while recording, each with what was being said then. */
   moments?: string[];
+  /** When each point was said ("00:12:34"), keyed by the point's text. */
+  times?: Record<string, string>;
 }
 
 export const recordingApi = {

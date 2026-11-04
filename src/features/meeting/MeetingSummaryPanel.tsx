@@ -26,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SpeakerNamesDialog } from "./SpeakerNames";
+import { MeetingAudioPlayer } from "./MeetingAudioPlayer";
+import { revealLine, stampSeconds, usePlayback } from "./playback";
 import { useUi } from "@/store/ui";
 
 import { MeetingNotes } from "./MeetingNotes";
@@ -127,9 +129,19 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
     onError: (error) =>
       toast.error(`Couldn't rewrite the notes. ${errorMessage(error)}`),
   });
+  const play = usePlayback((s) => s.play);
+  const recording = (history.data as SavedRecording[] | undefined)?.find(
+    (r) => r.page_id === pageId,
+  );
+  const audioAvailable = !!recording?.audio_available;
   const job = data?.find((j) => j.page_id === pageId);
   if (!job) return null;
   const layout = layouts.data?.find((l) => l.id === job.template);
+  const jump = (stamp: string) => {
+    revealLine(stamp);
+    const seconds = stampSeconds(stamp);
+    if (audioAvailable && seconds !== null) play(pageId, seconds);
+  };
   const busy = ["summarising", "indexing"].includes(job.state);
   return (
     <section
@@ -152,6 +164,7 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
           Meeting library
         </button>
       </div>
+      {audioAvailable && <MeetingAudioPlayer pageId={pageId} />}
       {busy && (
         <p
           role="status"
@@ -184,7 +197,7 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
       )}
       {job.summary && (
         <div className="mt-3 space-y-3 text-sm leading-relaxed">
-          <MeetingNotes summary={job.summary} />
+          <MeetingNotes summary={job.summary} onTime={jump} />
           <p className="text-xs text-text-faint">
             Generated locally. Check names, dates and commitments against the
             original transcript.

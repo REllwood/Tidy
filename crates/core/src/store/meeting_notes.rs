@@ -182,6 +182,14 @@ fn rename_in_summary(summary: &mut MeetingSummary, names: &[SpeakerName]) {
         apply(&mut section.heading);
         section.points.iter_mut().for_each(apply);
     }
+    // Times are keyed by each point's text, so they follow the new names.
+    summary.times = std::mem::take(&mut summary.times)
+        .into_iter()
+        .map(|(mut point, time)| {
+            apply(&mut point);
+            (point, time)
+        })
+        .collect();
 }
 
 /// Give speakers real names throughout the transcript. Saved notes that
