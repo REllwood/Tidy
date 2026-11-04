@@ -1,6 +1,8 @@
-//! System (output) audio capture via ScreenCaptureKit. We capture a display's
-//! audio only (no meaningful video) and downmix to mono. The returned `SCStream`
-//! must be kept alive on the capturing thread.
+//! System (output) audio capture. A Core Audio tap is used when it can be,
+//! since it needs only permission to record system audio. ScreenCaptureKit,
+//! which needs Screen Recording permission, is kept for people who already
+//! granted it and as the fallback. The capture must be kept alive on the
+//! capturing thread.
 
 use std::sync::{Arc, Mutex};
 
@@ -92,8 +94,57 @@ impl SCStreamOutputTrait for AudioHandler {
     }
 }
 
-/// Start system-audio capture, appending mono f32 samples (at `SYSTEM_RATE`) to `buf`.
-pub fn start_system(buf: Arc<Mutex<Vec<f32>>>) -> AppResult<SCStream> {
+/// A running system audio capture. Dropping it stops capture.
+pub enum SystemCapture {
+    /// Held only so capture runs until it is dropped.
+    Screen { _stream: SCStream },
+    Tap(super::tap::TapCapture),
+}
+
+impl SystemCapture {
+    pub fn sample_rate(&self) -> u32 {
+        match self {
+            SystemCapture::Screen { .. } => SYSTEM_RATE,
+            SystemCapture::Tap(tap) => tap.sample_rate,
+        }
+    }
+
+    /// A tap that is not allowed to record delivers silence rather than an
+    /// error, so silence from a tap is worth a hint.
+    pub fn is_tap(&self) -> bool {
+        matches!(self, SystemCapture::Tap(_))
+    }
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+}
+
+/// Whether Screen Recording is already allowed, checked without asking.
+fn screen_capture_allowed() -> bool {
+    // SAFETY: a side-effect-free query.
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+/// Start system-audio capture, appending mono f32 samples (at the capture's
+/// `sample_rate`) to `buf`.
+pub fn start_system(buf: Arc<Mutex<Vec<f32>>>) -> AppResult<SystemCapture> {
+    // Already allowed to record the screen: keep the capture that works.
+    if screen_capture_allowed() {
+        return start_screen(buf).map(|_stream| SystemCapture::Screen { _stream });
+    }
+    match super::tap::start_tap(buf.clone()) {
+        Ok(tap) => Ok(SystemCapture::Tap(tap)),
+        Err(error) => {
+            log::warn!("Core Audio tap unavailable, using ScreenCaptureKit: {error}");
+            start_screen(buf).map(|_stream| SystemCapture::Screen { _stream })
+        }
+    }
+}
+
+/// ScreenCaptureKit capture of a display's audio, as mono at `SYSTEM_RATE`.
+fn start_screen(buf: Arc<Mutex<Vec<f32>>>) -> AppResult<SCStream> {
     let content = SCShareableContent::get()
         .map_err(|e| AppError::Other(format!("shareable content: {e}")))?;
     let display = content

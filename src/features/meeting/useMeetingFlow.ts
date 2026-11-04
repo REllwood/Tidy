@@ -52,6 +52,8 @@ export interface MeetingState {
   stopReason: string | null;
   /** An automatic stop counting down, which "Keep recording" cancels. */
   countdown: { reason: string; deadline_ms: number } | null;
+  /** System audio has been completely silent, which can mean it is not allowed. */
+  systemSilent: boolean;
 }
 
 const initial: MeetingState = {
@@ -70,6 +72,7 @@ const initial: MeetingState = {
   marks: 0,
   stopReason: null,
   countdown: null,
+  systemSilent: false,
 };
 
 const quiet = { mic: 0, system: 0 };
@@ -150,6 +153,9 @@ export function useMeetingFlow() {
       await listen<string>("live-transcript", (e) =>
         patch({ liveTranscript: e.payload }),
       ),
+    );
+    unlisten.current.push(
+      await listen("system-audio-silent", () => patch({ systemSilent: true })),
     );
     unlisten.current.push(
       await listen<{ count: number }>("moment-marked", (e) =>

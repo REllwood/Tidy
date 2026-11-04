@@ -193,7 +193,7 @@ export function MeetingRecorder() {
             <p className="mt-3 flex items-start gap-2 text-xs text-text-faint">
               <Lock className="mt-0.5 size-3.5 shrink-0" />
               Everything runs on your Mac. macOS will ask for microphone and
-              screen-recording permission the first time.
+              system audio permission the first time.
             </p>
           </div>
         )}
@@ -238,6 +238,17 @@ export function MeetingRecorder() {
                 />
               }
             />
+            {state.systemSilent && (
+              <p
+                role="status"
+                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
+              >
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                No system audio yet. If others are speaking, allow Tidy under
+                System Settings, Privacy and Security, Screen and System Audio
+                Recording.
+              </p>
+            )}
             <SourceRow
               icon={<Volume2 className="size-4" />}
               name="System audio"

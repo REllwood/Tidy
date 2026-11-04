@@ -44,7 +44,12 @@ tauri-plugin-global-shortcut = "2"
 # Core Audio: which apps hold the microphone, and process taps for system audio.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+objc2 = "0.6"
+block2 = "0.6"
 objc2-core-audio = "0.3.2"
+objc2-core-audio-types = "0.3.2"
+objc2-core-foundation = { version = "0.3.2", features = ["CFDictionary"] }
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSDictionary", "NSString", "NSUUID", "NSValue"] }
 
 # Whisper: Metal acceleration on Apple Silicon, CPU on Intel.
 [target.'cfg(target_arch = "aarch64")'.dependencies]

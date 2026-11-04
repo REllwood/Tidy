@@ -20,7 +20,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::pipeline::{mix_mono, rms, ChunkedPair, WHISPER_RATE};
-use super::system::SYSTEM_RATE;
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 
@@ -30,6 +29,9 @@ const CHUNK: Duration = Duration::from_secs(5);
 const PREVIEW_SAMPLES: usize = WHISPER_RATE as usize * 15;
 /// How long `start` waits for both capture sources to be attempted.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a tap may deliver nothing but silence before the recorder hints
+/// that system audio recording may not be allowed.
+const SILENT_TAP_HINT: Duration = Duration::from_secs(45);
 /// A level this loud on either side counts as someone speaking (about -42 dBFS).
 const VOICE_LEVEL: f32 = 0.008;
 
@@ -238,9 +240,12 @@ impl Capture {
         let mut pair = ChunkedPair::new(
             self.mic_rate.load(Ordering::Relaxed),
             mic.is_some(),
-            SYSTEM_RATE,
+            system.as_ref().map_or(48_000, |s| s.sample_rate()),
             system.is_some(),
         );
+        // A tap without permission records silence rather than failing.
+        let watch_tap = system.as_ref().is_some_and(|s| s.is_tap());
+        let mut system_heard = false;
         let start = Instant::now();
         let mut last_mic = 0usize;
         let mut last_sys = 0usize;
@@ -275,6 +280,13 @@ impl Capture {
             last_mic = 0;
             last_sys = 0;
             let (mic_raw, sys_raw) = self.drain();
+            if watch_tap && !system_heard {
+                system_heard = sys_raw.iter().any(|s| *s != 0.0);
+                if !system_heard && start.elapsed() >= SILENT_TAP_HINT {
+                    system_heard = true; // say it once
+                    let _ = self.app.emit("system-audio-silent", ());
+                }
+            }
             let (mic16, sys16) = pair.push(&mic_raw, &sys_raw);
             if let Err(e) = append(&mut writer, &mic16, &sys16) {
                 error = Some(e.to_string());
