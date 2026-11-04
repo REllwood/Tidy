@@ -17,9 +17,10 @@ grep -Fq "\"$identity\"" <<< "$identities" || {
 }
 version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release version.' >&2; exit 1; }
-mkdir -p "$root/release-builds"
-run_dir=$(mktemp -d "$root/release-builds/Tidy-$version.XXXXXX")
-mkdir "$run_dir/source"
+# One reused build folder, replaced on every run, so builds never pile up.
+run_dir="$root/release-builds/current"
+rm -rf "$run_dir"
+mkdir -p "$run_dir/source"
 echo "Build directory: $run_dir"
 # Build a fresh source snapshot so npm ci and Vite cannot remove workspace files.
 # git supplies only tracked/non-ignored paths, excluding signing material and caches.

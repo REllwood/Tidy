@@ -217,6 +217,7 @@ pub async fn configure(app: &AppHandle, config: Config) -> AppResult<()> {
         let response = client
             .post("http://127.0.0.1:11434/api/show")
             .json(&serde_json::json!({"model":name}))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
             .map_err(|e| AppError::Other(e.to_string()))?

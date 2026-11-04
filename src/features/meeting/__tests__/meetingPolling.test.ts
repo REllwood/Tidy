@@ -37,6 +37,7 @@ const recording = (
 const job = (pageId: string, state: string): MeetingJob => ({
   page_id: pageId,
   title: "Meeting",
+  template: "general",
   state,
   error: null,
   summary: null,

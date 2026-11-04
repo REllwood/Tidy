@@ -22,3 +22,20 @@ describe("notesOverview", () => {
     expect(notesOverview({ ...notes, summary: "  " })).toBeNull();
   });
 });
+
+import { namedMessage } from "../useMeetingFlow";
+
+describe("namedMessage", () => {
+  it("lists the speakers named from the conversation", () => {
+    expect(namedMessage([{ label: "Speaker 2", name: "Tom" }])).toBe(
+      "Named Speaker 2 as Tom from the conversation.",
+    );
+    expect(
+      namedMessage([
+        { label: "Speaker 1", name: "Priya" },
+        { label: "Speaker 2", name: "Tom" },
+        { label: "Speaker 3", name: "Mia" },
+      ]),
+    ).toBe("Named Speaker 1 as Priya, Speaker 2 as Tom and Speaker 3 as Mia from the conversation.");
+  });
+});

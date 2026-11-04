@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, Play, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { meetingNotesApi } from "@/lib/api";
+import { meetingBriefApi, meetingNotesApi } from "@/lib/api";
 import { meetingJobsKey } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
 import { flushPendingEdits } from "@/lib/pendingEdits";
 import { announceDocumentChange } from "@/hooks/useDocument";
 import { Button } from "@/components/ui/button";
+import { shortStamp, usePlayback } from "./playback";
 import {
   Dialog,
   DialogContent,
@@ -17,26 +18,57 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-/** Put names to "Speaker 1", "Speaker 2"… across the transcript and notes. */
+function stamp(ms: number) {
+  const s = Math.floor(ms / 1000);
+  return shortStamp(`${Math.floor(s / 3600)}:${Math.floor(s / 60) % 60}:${s % 60}`);
+}
+
+/**
+ * Put names to "Speaker 1", "Speaker 2"… across the transcript and notes.
+ * Names the conversation points to are filled in, with the line that points
+ * to them, and each speaker's lines can be played when the audio was kept.
+ */
 export function SpeakerNamesDialog({
   pageId,
   open,
   onOpenChange,
+  audioAvailable = false,
 }: {
   pageId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  audioAvailable?: boolean;
 }) {
+  const play = usePlayback((s) => s.play);
   const qc = useQueryClient();
   const speakers = useQuery({
     queryKey: ["meeting-speakers", pageId],
     queryFn: () => meetingNotesApi.speakers(pageId),
     enabled: open,
   });
+  // People invited to the meeting, offered as names to pick from.
+  const event = useQuery({
+    queryKey: ["meeting-event", pageId],
+    queryFn: () => meetingBriefApi.event(pageId),
+    enabled: open,
+  });
+  const invited = (event.data?.attendees ?? []).filter((a) => !a.includes("@"));
   const [names, setNames] = useState<Record<string, string>>({});
   useEffect(() => {
     if (open) setNames({});
   }, [open]);
+  // Fill in what the conversation suggests, once, without overwriting typing.
+  const suggested = (speakers.data ?? []).filter((s) => s.suggestion);
+  useEffect(() => {
+    if (!open || !suggested.length) return;
+    setNames((current) => {
+      const next = { ...current };
+      for (const s of suggested)
+        if (next[s.label] === undefined && s.suggestion) next[s.label] = s.suggestion.name;
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, speakers.data]);
   const changes = Object.entries(names)
     .map(([from, to]) => ({ from, to: to.trim() }))
     .filter(({ from, to }) => to && to !== from);
@@ -62,7 +94,9 @@ export function SpeakerNamesDialog({
           <DialogTitle>Name the speakers</DialogTitle>
           <DialogDescription>
             Names replace the speaker labels throughout the transcript and in
-            the notes, so answers can say who said what.
+            the notes, so answers can say who said what. Names the conversation
+            points to, such as someone asked a question by name who then
+            answered, are filled in for you to check.
           </DialogDescription>
         </DialogHeader>
         {speakers.isPending && (
@@ -84,12 +118,34 @@ export function SpeakerNamesDialog({
                   {speaker.turns} {speaker.turns === 1 ? "turn" : "turns"}
                 </span>
               </span>
-              {speaker.sample && (
-                <span className="block text-xs italic text-text-muted">
-                  “{speaker.sample}”
-                </span>
-              )}
+              <span className="block space-y-0.5">
+                {(speaker.samples?.length
+                  ? speaker.samples
+                  : speaker.sample
+                    ? [{ at_ms: -1, text: speaker.sample }]
+                    : []
+                ).map((line, i) => (
+                  <span key={i} className="flex items-start gap-1.5 text-xs text-text-muted">
+                    {audioAvailable && line.at_ms >= 0 ? (
+                      <button
+                        type="button"
+                        className="mt-0.5 shrink-0 rounded text-brand hover:bg-brand-soft"
+                        onClick={() => play(pageId, line.at_ms / 1000)}
+                        aria-label={`Play what ${speaker.label} said at ${stamp(line.at_ms)}`}
+                        title="Listen"
+                      >
+                        <Play className="size-3" />
+                      </button>
+                    ) : null}
+                    {line.at_ms >= 0 && (
+                      <span className="shrink-0 font-mono text-text-faint">{stamp(line.at_ms)}</span>
+                    )}
+                    <span className="italic">“{line.text}”</span>
+                  </span>
+                ))}
+              </span>
               <input
+                list={invited.length ? "speaker-invitees" : undefined}
                 value={names[speaker.label] ?? ""}
                 onChange={(e) =>
                   setNames((n) => ({ ...n, [speaker.label]: e.target.value }))
@@ -99,9 +155,25 @@ export function SpeakerNamesDialog({
                 aria-label={`Name for ${speaker.label}`}
                 className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-brand"
               />
+              {speaker.suggestion && (
+                <span className="flex items-start gap-1.5 text-xs text-text-faint">
+                  <Sparkles className="mt-0.5 size-3 shrink-0 text-brand" />
+                  <span>
+                    Suggested {speaker.suggestion.name} from “{speaker.suggestion.because}” at{" "}
+                    {stamp(speaker.suggestion.at_ms)}.
+                  </span>
+                </span>
+              )}
             </label>
           ))}
         </div>
+        {invited.length > 0 && (
+          <datalist id="speaker-invitees">
+            {invited.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        )}
         {(speakers.error || save.error) && (
           <p role="alert" className="text-sm text-danger-c">
             {errorMessage(speakers.error || save.error)}

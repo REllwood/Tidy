@@ -4,7 +4,7 @@ use crate::{
     db::new_id,
     error::{AppError, AppResult},
     llm::MeetingSummary,
-    store::{documents, ingest, meeting_ai},
+    store::{documents, ingest, meeting_ai, recordings, speaker_guess},
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -57,42 +57,114 @@ pub struct Speaker {
     /// The first thing they said, to help tell who is who.
     pub sample: String,
     pub turns: usize,
+    /// A few things they said, with when, to listen to or read.
+    pub samples: Vec<Sample>,
+    /// A name the conversation points to, when it clearly does.
+    pub suggestion: Option<speaker_guess::Guess>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+pub struct Sample {
+    pub at_ms: i64,
+    pub text: String,
+}
+
+/// The transcript as speaker turns, in order. Lines before any speaker
+/// label belong to no one and are left out.
+fn transcript_turns(blocks: &[Value]) -> Vec<speaker_guess::Turn> {
+    let labels = label_blocks(blocks);
+    let mut turns: Vec<speaker_guess::Turn> = Vec::new();
+    let mut in_transcript = false;
+    let mut current: Option<String> = None;
+    for (i, block) in blocks.iter().enumerate() {
+        if block["type"] == "heading" {
+            in_transcript = text(block).trim().eq_ignore_ascii_case("transcript");
+            continue;
+        }
+        if !in_transcript {
+            continue;
+        }
+        if let Some((_, label)) = labels.iter().find(|(at, _)| *at == i) {
+            current = Some(label.clone());
+            turns.push(speaker_guess::Turn { label: label.clone(), lines: Vec::new() });
+            continue;
+        }
+        if let (Some(_), Some((ms, said))) = (&current, stamped(&text(block))) {
+            if let Some(turn) = turns.last_mut() {
+                turn.lines.push((ms, said));
+            }
+        }
+    }
+    turns.retain(|t| !t.lines.is_empty());
+    turns
+}
+
+/// People invited to the meeting, by name, from its calendar event.
+fn invitees(conn: &Connection, page_id: &str) -> AppResult<Vec<String>> {
+    Ok(recordings::event(conn, page_id)?
+        .map(|e| e.attendees.into_iter().filter(|a| !a.contains('@')).collect())
+        .unwrap_or_default())
+}
+
+/// Names the conversation points to for the meeting's speaker labels.
+pub fn name_suggestions(conn: &Connection, page_id: &str) -> AppResult<Vec<speaker_guess::Guess>> {
+    let blocks = blocks(&documents::core::get(conn, page_id)?)?;
+    Ok(speaker_guess::guess(&transcript_turns(&blocks), &invitees(conn, page_id)?))
+}
+
+/// Give speakers the names the conversation makes certain, such as someone
+/// introducing themselves or being asked a question by name and answering,
+/// more than once. Returns the names given.
+pub fn apply_certain_names(conn: &Connection, page_id: &str) -> AppResult<Vec<speaker_guess::Guess>> {
+    let certain: Vec<speaker_guess::Guess> =
+        name_suggestions(conn, page_id)?.into_iter().filter(|g| g.certain).collect();
+    if certain.is_empty() {
+        return Ok(certain);
+    }
+    let names: Vec<SpeakerName> = certain
+        .iter()
+        .map(|g| SpeakerName { from: g.label.clone(), to: g.name.clone() })
+        .collect();
+    rename_speakers(conn, page_id, &names)?;
+    Ok(certain)
 }
 
 /// The speakers in a meeting's transcript, in the order they first speak.
 pub fn speakers(conn: &Connection, page_id: &str) -> AppResult<Vec<Speaker>> {
     let blocks = blocks(&documents::core::get(conn, page_id)?)?;
-    let labels = label_blocks(&blocks);
+    let turns = transcript_turns(&blocks);
+    let guesses = speaker_guess::guess(&turns, &invitees(conn, page_id)?);
     let mut speakers: Vec<Speaker> = Vec::new();
-    for (n, (at, label)) in labels.iter().enumerate() {
-        let end = labels.get(n + 1).map_or(blocks.len(), |(next, _)| *next);
-        let said: Vec<String> = blocks[at + 1..end]
-            .iter()
-            .take_while(|b| b["type"] != "heading")
-            .map(text)
-            .filter(|t| t.trim_start().starts_with('['))
-            .collect();
-        let speaker = match speakers.iter_mut().find(|s| &s.label == label) {
+    for turn in &turns {
+        let speaker = match speakers.iter_mut().find(|s| s.label == turn.label) {
             Some(s) => s,
             None => {
                 speakers.push(Speaker {
-                    label: label.clone(),
+                    label: turn.label.clone(),
                     sample: String::new(),
                     turns: 0,
+                    samples: Vec::new(),
+                    suggestion: guesses.iter().find(|g| g.label == turn.label).cloned(),
                 });
                 speakers.last_mut().expect("just pushed")
             }
         };
         speaker.turns += 1;
-        if speaker.sample.is_empty() {
-            if let Some(first) = said.first() {
-                let line = first
-                    .split_once(']')
-                    .map_or(first.as_str(), |(_, rest)| rest)
-                    .trim();
-                speaker.sample = line.chars().take(140).collect();
-            }
-        }
+        speaker.samples.extend(
+            turn.lines
+                .iter()
+                .map(|(at_ms, said)| Sample { at_ms: *at_ms, text: said.chars().take(140).collect() }),
+        );
+    }
+    for speaker in &mut speakers {
+        speaker.sample = speaker.samples.first().map(|s| s.text.clone()).unwrap_or_default();
+        // The first thing they said, then their two longest lines, in order.
+        let first = speaker.samples.first().cloned();
+        let mut longest: Vec<Sample> = speaker.samples.iter().skip(1).cloned().collect();
+        longest.sort_by_key(|s| std::cmp::Reverse(s.text.len()));
+        let mut picked: Vec<Sample> = first.into_iter().chain(longest.into_iter().take(2)).collect();
+        picked.sort_by_key(|s| s.at_ms);
+        speaker.samples = picked;
     }
     Ok(speakers)
 }
@@ -182,6 +254,14 @@ fn rename_in_summary(summary: &mut MeetingSummary, names: &[SpeakerName]) {
         apply(&mut section.heading);
         section.points.iter_mut().for_each(apply);
     }
+    // Times are keyed by each point's text, so they follow the new names.
+    summary.times = std::mem::take(&mut summary.times)
+        .into_iter()
+        .map(|(mut point, time)| {
+            apply(&mut point);
+            (point, time)
+        })
+        .collect();
 }
 
 /// Give speakers real names throughout the transcript. Saved notes that
@@ -260,6 +340,74 @@ fn saved_summary(conn: &Connection, page_id: &str) -> AppResult<MeetingSummary> 
     Ok(serde_json::from_str(&saved)?)
 }
 
+/// "[hh:mm:ss] text" or "[mm:ss] text" as a time in ms and the words said.
+fn stamped(line: &str) -> Option<(i64, String)> {
+    let rest = line.trim_start().strip_prefix('[')?;
+    let (clock, said) = rest.split_once(']')?;
+    let mut ms = 0i64;
+    for part in clock.split(':') {
+        ms = ms * 60 + part.trim().parse::<i64>().ok()?;
+    }
+    Some((ms * 1000, said.trim().to_string()))
+}
+
+fn clock(ms: i64) -> String {
+    let s = ms.max(0) / 1000;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+    } else {
+        format!("{:02}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// The moments marked while recording, each with the transcript line being
+/// said at that point and who said it. Nothing is written by the model here,
+/// so these lines are exactly what the transcript holds.
+pub fn marked_moments(conn: &Connection, page_id: &str) -> AppResult<Vec<String>> {
+    let marks = recordings::marks(conn, page_id)?;
+    if marks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let blocks = blocks(&documents::core::get(conn, page_id)?)?;
+    let labels = label_blocks(&blocks);
+    let mut lines: Vec<(i64, Option<String>, String)> = Vec::new();
+    let mut in_transcript = false;
+    let mut speaker: Option<String> = None;
+    for (i, block) in blocks.iter().enumerate() {
+        if block["type"] == "heading" {
+            in_transcript = text(block).trim().eq_ignore_ascii_case("transcript");
+            continue;
+        }
+        if !in_transcript {
+            continue;
+        }
+        if let Some((_, label)) = labels.iter().find(|(at, _)| *at == i) {
+            speaker = Some(label.clone());
+            continue;
+        }
+        if let Some((ms, said)) = stamped(&text(block)) {
+            lines.push((ms, speaker.clone(), said));
+        }
+    }
+    Ok(marks
+        .iter()
+        .filter_map(|mark| {
+            // People mark a moment just after hearing it, so take the line
+            // that had started by then.
+            let (_, who, said) = lines
+                .iter()
+                .rev()
+                .find(|(ms, _, _)| *ms <= mark + 1_500)
+                .or_else(|| lines.first())?;
+            let said = ingest::shorten(said, 200);
+            Some(match who {
+                Some(who) => format!("[{}] {who}: {said}", clock(*mark)),
+                None => format!("[{}] {said}", clock(*mark)),
+            })
+        })
+        .collect())
+}
+
 /// The notes as page blocks: overview, topics, decisions, next steps (as
 /// tick boxes) and open questions.
 pub fn notes_blocks(summary: &MeetingSummary) -> Vec<Value> {
@@ -286,6 +434,10 @@ pub fn notes_blocks(summary: &MeetingSummary) -> Vec<Value> {
     if !summary.open_questions.is_empty() {
         out.push(heading("Open questions"));
         out.extend(summary.open_questions.iter().map(|p| bullet(p)));
+    }
+    if !summary.moments.is_empty() {
+        out.push(heading("Marked moments"));
+        out.extend(summary.moments.iter().map(|p| bullet(p)));
     }
     for block in &mut out {
         block["id"] = json!(new_id());
@@ -406,8 +558,71 @@ mod tests {
             action_items: vec!["Speaker 2 will send the report on Friday.".into()],
             decisions: vec![],
             sections: vec![SummarySection { heading: "Handover".into(), points: vec!["Speaker 1 opened the planning.".into()] }],
-            open_questions: vec![],
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn names_the_conversation_makes_clear_are_given_and_others_suggested() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let page = pages::core::create(&c, None, "Launch".into(), "doc".into()).unwrap();
+        documents::core::update(&c, &page.id, r#"[
+            {"type":"heading","props":{"level":2},"content":"Transcript"},
+            {"type":"paragraph","content":"Speaker 1"},
+            {"type":"paragraph","content":"[00:00:01] Let's look at the launch. What do you think, Tom?"},
+            {"type":"paragraph","content":"Speaker 2"},
+            {"type":"paragraph","content":"[00:00:05] I'd move it to the 28th."},
+            {"type":"paragraph","content":"Speaker 1"},
+            {"type":"paragraph","content":"[00:00:09] Thanks, Tom. Mia, can you send the timeline?"},
+            {"type":"paragraph","content":"Speaker 3"},
+            {"type":"paragraph","content":"[00:00:12] Yes, by Friday."}
+        ]"#).unwrap();
+        c.execute("INSERT INTO meeting(id,page_id,started_at) VALUES('m2',?1,1000)", [&page.id]).unwrap();
+
+        let found = speakers(&c, &page.id).unwrap();
+        let tom = found.iter().find(|s| s.label == "Speaker 2").unwrap();
+        assert_eq!(tom.suggestion.as_ref().map(|g| g.name.as_str()), Some("Tom"));
+        assert_eq!(tom.samples[0], Sample { at_ms: 5_000, text: "I'd move it to the 28th.".into() });
+
+        let given = apply_certain_names(&c, &page.id).unwrap();
+        assert_eq!(given.iter().map(|g| (g.label.as_str(), g.name.as_str())).collect::<Vec<_>>(), vec![("Speaker 2", "Tom")]);
+        let body = documents::core::get(&c, &page.id).unwrap();
+        assert!(body.contains(r#""content":"Tom""#), "{body}");
+        // Mia was only asked once, so she stays a suggestion.
+        assert!(body.contains("Speaker 3"));
+        let left = name_suggestions(&c, &page.id).unwrap();
+        assert_eq!(left.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), vec!["Mia"]);
+    }
+
+    #[test]
+    fn marked_moments_quote_the_line_being_said_and_who_said_it() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let id = meeting(&c);
+        // Marked just after the report was promised, and again near the end.
+        recordings::set_stop_details(&c, &id, None, &[6_000, 9_500]).unwrap();
+        save(&c, &id, &notes());
+        let summary = saved_summary(&c, &id).unwrap();
+        assert_eq!(
+            summary.moments,
+            vec!["[00:06] Speaker 2: I'll send the report on Friday.", "[00:09] Speaker 1: Thanks."]
+        );
+        let blocks = notes_blocks(&summary);
+        let texts: Vec<String> = blocks.iter().map(text).collect();
+        let at = texts.iter().position(|t| t == "Marked moments").expect("a Marked moments section");
+        assert_eq!(texts[at + 1], "[00:06] Speaker 2: I'll send the report on Friday.");
+    }
+
+    #[test]
+    fn meetings_without_marks_have_no_moments_section() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let id = meeting(&c);
+        save(&c, &id, &notes());
+        let summary = saved_summary(&c, &id).unwrap();
+        assert!(summary.moments.is_empty());
+        assert!(!notes_blocks(&summary).iter().any(|b| text(b) == "Marked moments"));
     }
 
     #[test]

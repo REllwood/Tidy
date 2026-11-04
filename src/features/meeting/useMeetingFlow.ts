@@ -8,9 +8,11 @@ import {
   recordingHistoryApi,
   recordingPreferencesApi,
   recordingHistoryKey,
-  diarizeApi,
   pagesApi,
-  documentsApi,
+  meetingHudApi,
+  liveApi,
+  type LiveLine,
+  type MeetingHud,
 } from "@/lib/api";
 import { localAi } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
@@ -21,11 +23,6 @@ import {
   writeTranscriptionLanguage,
   type TranscriptionLanguage,
 } from "./transcriptionLanguage";
-import {
-  buildMeetingBlocks,
-  assignSpeakers,
-  type LabeledSegment,
-} from "./meetingDoc";
 
 export type MeetingPhase =
   | "idle"
@@ -45,12 +42,21 @@ export interface MeetingState {
   sources: { mic: boolean; system: boolean };
   transcribeProgress: number;
   ollamaUsed: boolean;
-  liveTranscript: string;
+  /** The live transcript so far, line by line. */
+  liveLines: LiveLine[];
   savedPageId: string | null;
   client: string;
   error: string | null;
   /** True when the recorder adopted a recording that was already running (webview reload). */
   resumed: boolean;
+  /** Moments marked during this recording. */
+  marks: number;
+  /** Why Tidy stopped the recording itself, if it did. */
+  stopReason: string | null;
+  /** An automatic stop counting down, which "Keep recording" cancels. */
+  countdown: { reason: string; deadline_ms: number } | null;
+  /** System audio has been completely silent, which can mean it is not allowed. */
+  systemSilent: boolean;
 }
 
 const initial: MeetingState = {
@@ -61,14 +67,28 @@ const initial: MeetingState = {
   sources: { mic: true, system: true },
   transcribeProgress: 0,
   ollamaUsed: false,
-  liveTranscript: "",
+  liveLines: [],
   savedPageId: null,
   client: "",
   error: null,
   resumed: false,
+  marks: 0,
+  stopReason: null,
+  countdown: null,
+  systemSilent: false,
 };
 
 const quiet = { mic: 0, system: 0 };
+
+/** "Named Speaker 2 as Tom from the conversation." */
+export function namedMessage(named: { label: string; name: string }[]): string {
+  const parts = named.map((n) => `${n.label} as ${n.name}`);
+  const list =
+    parts.length > 1
+      ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+      : parts[0];
+  return `Named ${list} from the conversation.`;
+}
 
 /** Releasing the AI gate is best effort: it must never mask the real failure. */
 async function releaseAiGate() {
@@ -143,8 +163,26 @@ export function useMeetingFlow() {
       ),
     );
     unlisten.current.push(
-      await listen<string>("live-transcript", (e) =>
-        patch({ liveTranscript: e.payload }),
+      await listen<LiveLine>("live-line", (e) =>
+        setState((s) => ({ ...s, liveLines: [...s.liveLines, e.payload] })),
+      ),
+    );
+    unlisten.current.push(
+      await listen("system-audio-silent", () => patch({ systemSilent: true })),
+    );
+    unlisten.current.push(
+      await listen<{ count: number }>("moment-marked", (e) =>
+        patch({ marks: e.payload.count }),
+      ),
+    );
+    unlisten.current.push(
+      await listen<MeetingHud>("meeting-hud", (e) =>
+        patch({
+          countdown:
+            e.payload.kind === "countdown"
+              ? { reason: e.payload.reason, deadline_ms: e.payload.deadline_ms }
+              : null,
+        }),
       ),
     );
   }, []);
@@ -171,7 +209,7 @@ export function useMeetingFlow() {
     const run = async () => {
       try {
         await subscribe();
-        const keepAudio = await recordingApi.start();
+        const keepAudio = await recordingApi.start(languageRef.current);
         if (attempt !== generation.current) {
           // Cancelled while starting: tear the native recorder back down.
           await recordingApi.stop(clientRef.current).catch(() => undefined);
@@ -222,6 +260,9 @@ export function useMeetingFlow() {
         resumed: true,
       }));
       await subscribe();
+      // Pick up the live transcript written before the reload.
+      const liveLines = await liveApi.transcript().catch(() => []);
+      setState((s) => ({ ...s, liveLines }));
       if (!isTauri()) startMockMeters();
     } catch (e) {
       console.error("could not reconnect to the running recording", e);
@@ -229,7 +270,8 @@ export function useMeetingFlow() {
   }, [startMockMeters, subscribe]);
 
   const stopping = useRef(false);
-  const stop = useCallback(async () => {
+  /** `reason` is set when Tidy stops the recording itself. */
+  const stop = useCallback(async (reason?: string) => {
     if (stopping.current) return;
     stopping.current = true;
     // (i) A stop pressed during "starting" waits for the start to settle first.
@@ -243,13 +285,19 @@ export function useMeetingFlow() {
     let progressUnlisten: UnlistenFn | null = null;
     let savedPage: string | null = null;
     try {
-      patch({ phase: "transcribing", transcribeProgress: 0, levels: quiet });
+      patch({
+        phase: "transcribing",
+        transcribeProgress: 0,
+        levels: quiet,
+        countdown: null,
+        stopReason: reason ?? null,
+      });
       if (isTauri()) {
         progressUnlisten = await listen<number>("transcribe-progress", (e) =>
           patch({ transcribeProgress: e.payload }),
         );
       }
-      const rec = await recordingApi.stop(clientRef.current);
+      const rec = await recordingApi.stop(clientRef.current, reason);
       if (!rec.page_id)
         throw new Error(
           "Recording saved, but its meeting page could not be opened. Check Recording history.",
@@ -258,44 +306,26 @@ export function useMeetingFlow() {
       savedPage = pageId;
       patch({ savedPageId: pageId });
       const now = new Date();
+      // Named after the calendar event when there was one.
       await pagesApi.rename(
         pageId,
-        `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
+        rec.title?.trim() ||
+          `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
       );
       await qc.invalidateQueries({ queryKey: recordingHistoryKey });
+      // Each side of the call is transcribed on its own, and the other side
+      // split into speakers when that is switched on.
       const result = await recordingHistoryApi.transcribe(
         pageId,
         undefined,
         languageRef.current,
+        diarizeEnabled,
       );
-      const segments = result.segments;
-      const bodyJson = result.body_json;
+      if (result.named?.length)
+        toast.success(namedMessage(result.named), {
+          description: "Change them any time with Name speakers.",
+        });
       patch({ transcribeProgress: 100, phase: "saving" });
-
-      // Speaker diarization (optional; native-only, models must be installed).
-      let labeled: LabeledSegment[] = segments;
-      if (diarizeEnabled) {
-        try {
-          if (await diarizeApi.available()) {
-            const speakers = await diarizeApi.run(rec.audio_path);
-            labeled = assignSpeakers(segments, speakers);
-          }
-        } catch (e) {
-          console.error("diarization failed", e);
-        }
-      }
-
-      if (result.applied && labeled !== segments) {
-        const applied = await documentsApi.updateIfUnchanged(
-          pageId,
-          bodyJson,
-          JSON.stringify(buildMeetingBlocks(labeled, null, false)),
-        );
-        if (!applied)
-          toast.warning(
-            "Speaker labels could not be applied because the page changed",
-          );
-      }
       patch({ phase: "done", savedPageId: pageId });
       // Only now is the transcript safe, so temporary audio may be cleared.
       // A failure here is reported without pulling the flow out of "done".
@@ -332,6 +362,22 @@ export function useMeetingFlow() {
     setState(initial);
   }, [cleanup]);
 
+  /** Mark this moment in the recording. */
+  const mark = useCallback(async () => {
+    try {
+      await recordingApi.mark();
+      if (!isTauri()) setState((s) => ({ ...s, marks: s.marks + 1 }));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  }, []);
+
+  /** Cancel an automatic stop that is counting down. */
+  const keepRecording = useCallback(async () => {
+    patch({ countdown: null });
+    await meetingHudApi.respond("keep").catch((e) => toast.error(errorMessage(e)));
+  }, []);
+
   /** Give up on a start that has not finished yet, and hand the AI gate back. */
   const cancelStart = useCallback(async () => {
     reset();
@@ -348,5 +394,7 @@ export function useMeetingFlow() {
     cancelStart,
     reconcile,
     setClient,
+    mark,
+    keepRecording,
   };
 }

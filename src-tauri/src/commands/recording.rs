@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::{self, Recording, RecordingSession};
 use crate::db::Db;
@@ -25,11 +25,53 @@ pub fn recording_in_flight(app: &AppHandle) -> bool {
     app.state::<RecorderState>().lock().is_some()
 }
 
+/// Control-Option-M marks a moment while recording, from any app.
+fn mark_shortcut() -> tauri_plugin_global_shortcut::Shortcut {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM)
+}
+
+fn listen_for_marks(app: &AppHandle, on: bool) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let shortcuts = app.global_shortcut();
+    let result = if on {
+        shortcuts.register(mark_shortcut())
+    } else {
+        shortcuts.unregister(mark_shortcut())
+    };
+    if let Err(error) = result {
+        // Another app may own the shortcut; the Mark button still works.
+        log::warn!("The mark shortcut could not be {}: {error}", if on { "set" } else { "released" });
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+struct Marked {
+    at_ms: i64,
+    count: usize,
+}
+
+/// Mark this moment in the recording, if one is running.
+pub fn mark_now(app: &AppHandle) -> Option<i64> {
+    let marked = app.state::<RecorderState>().lock().as_mut().map(|session| {
+        let at_ms = session.mark();
+        Marked { at_ms, count: session.marks().len() }
+    })?;
+    let _ = app.emit("moment-marked", marked.clone());
+    Some(marked.at_ms)
+}
+
+#[tauri::command]
+pub fn mark_moment(app: AppHandle) -> AppResult<i64> {
+    mark_now(&app).ok_or_else(|| AppError::Invalid("There is no recording to mark.".into()))
+}
+
 #[tauri::command]
 pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
     db: State<'_, Db>,
+    language: Option<String>,
 ) -> AppResult<bool> {
     use std::sync::atomic::Ordering;
     let ai = app.state::<crate::local_ai::AiState>();
@@ -53,11 +95,36 @@ pub async fn start_recording(
             }));
         }
         drop(conn);
-        *guard = Some(recorder::start(app.clone(), model_path, keep_audio)?);
+        *guard = Some(recorder::start(
+            app.clone(),
+            model_path,
+            keep_audio,
+            language.unwrap_or_else(|| "en".into()),
+        )?);
         Ok(keep_audio)
     })();
+    if result.is_ok() {
+        listen_for_marks(&app, true);
+        // The meeting on the calendar right now, if the calendar is on: its
+        // title names the recording and its end lets Tidy stop on time.
+        let handle = app.clone();
+        let event = tauri::async_runtime::spawn_blocking(move || crate::calendar::event_now(&handle))
+            .await
+            .ok()
+            .flatten();
+        app.state::<crate::meeting_monitor::MonitorState>().0.lock().unwrap_or_else(|p| p.into_inner()).set_event(
+            event.as_ref().map(|e| crate::meeting_monitor::EventEnd { title: e.title.clone(), end_ms: e.end_ms }),
+        );
+        if let Some(session) = state.lock().as_mut() {
+            session.event = event;
+        }
+    }
     if result.is_err() {
         ai.recording.store(false, Ordering::SeqCst);
+    } else {
+        // Questions the person asks can run during the call; background
+        // processing stays paused until it ends.
+        ai.live.store(true, Ordering::SeqCst);
     }
     result
 }
@@ -69,6 +136,7 @@ fn finish(
     app: &AppHandle,
     mut session: RecordingSession,
     client: &str,
+    stop_reason: Option<&str>,
 ) -> (Option<RecordingSession>, AppResult<Recording>) {
     let mut recording = match recorder::stop(&mut session) {
         Ok(recording) => recording,
@@ -77,14 +145,19 @@ fn finish(
     let registered = (|| {
         let db = app.state::<Db>();
         let conn = db.lock()?;
-        tidy_core::store::recordings::register_with_retention(
+        let page = tidy_core::store::recordings::register_with_retention(
             &conn,
             &recording.audio_path,
             recording.duration_ms,
             recording.started_at,
             client,
             recording.keep_audio,
-        )
+        )?;
+        tidy_core::store::recordings::set_stop_details(&conn, &page, stop_reason, &recording.marks)?;
+        if let Some(event) = &session.event {
+            tidy_core::store::recordings::set_event(&conn, &page, event)?;
+        }
+        Ok(page)
     })();
     match registered {
         Ok(page_id) => {
@@ -100,15 +173,17 @@ pub async fn stop_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
     client: Option<String>,
+    stop_reason: Option<String>,
 ) -> AppResult<Recording> {
     let session = state
         .lock()
         .take()
         .ok_or_else(|| AppError::Other("No recording in progress".into()))?;
+    listen_for_marks(&app, false);
     let handle = app.clone();
     let client = client.unwrap_or_default();
     let (kept, result) = tauri::async_runtime::spawn_blocking(move || {
-        finish(&handle, session, &client)
+        finish(&handle, session, &client, stop_reason.as_deref())
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?;
@@ -116,9 +191,9 @@ pub async fn stop_recording(
         // Keep `is_recording` true so the user can press Stop again.
         *state.lock() = Some(session);
     }
-    app.state::<crate::local_ai::AiState>()
-        .recording
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let ai = app.state::<crate::local_ai::AiState>();
+    ai.live.store(false, std::sync::atomic::Ordering::SeqCst);
+    ai.recording.store(false, std::sync::atomic::Ordering::SeqCst);
     if result.is_ok() {
         let handle = app.clone();
         if let Err(error) =
@@ -143,14 +218,29 @@ pub fn finish_on_exit(app: &AppHandle) -> AppResult<()> {
     let Some(session) = session else {
         return Ok(());
     };
-    let (kept, result) = finish(app, session, "");
+    listen_for_marks(app, false);
+    let (kept, result) = finish(app, session, "", Some("Saved when Tidy quit"));
     if let Some(session) = kept {
         *app.state::<RecorderState>().lock() = Some(session);
     }
-    app.state::<crate::local_ai::AiState>()
-        .recording
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let ai = app.state::<crate::local_ai::AiState>();
+    ai.live.store(false, std::sync::atomic::Ordering::SeqCst);
+    ai.recording.store(false, std::sync::atomic::Ordering::SeqCst);
     result.map(|_| ())
+}
+
+/// The live transcript of the recording running now.
+pub fn live_lines(app: &AppHandle) -> Vec<crate::audio::live::LiveLine> {
+    app.state::<RecorderState>()
+        .lock()
+        .as_ref()
+        .map(|s| s.live_lines())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn live_transcript(app: AppHandle) -> Vec<crate::audio::live::LiveLine> {
+    live_lines(&app)
 }
 
 #[tauri::command]

@@ -65,3 +65,39 @@ pub async fn meeting_next_steps_to_tasks(
     let _ = app.emit("database-changed", ());
     Ok(added)
 }
+
+/// The note layouts a meeting's notes can be rewritten as.
+#[tauri::command]
+pub fn note_templates() -> &'static [tidy_core::store::note_templates::Template] {
+    tidy_core::store::note_templates::TEMPLATES
+}
+
+/// Rewrite a meeting's notes with another layout.
+#[tauri::command]
+pub async fn set_meeting_template(app: AppHandle, page_id: String, template: String) -> AppResult<()> {
+    run_db(&app, move |conn| tidy_core::store::meeting_brief::set_template(conn, &page_id, &template)).await
+}
+
+/// What earlier meetings like this one decided and left open.
+#[tauri::command]
+pub async fn meeting_last_time(
+    app: AppHandle,
+    title: String,
+    series: Option<String>,
+    client: Option<String>,
+) -> AppResult<Option<tidy_core::store::meeting_brief::LastTime>> {
+    let before = crate::db::now_ms();
+    run_db(&app, move |conn| {
+        tidy_core::store::meeting_brief::last_time(conn, &title, series.as_deref(), client.as_deref(), before)
+    })
+    .await
+}
+
+/// The calendar event a meeting was recorded for, if it had one.
+#[tauri::command]
+pub async fn meeting_event(
+    app: AppHandle,
+    page_id: String,
+) -> AppResult<Option<tidy_core::store::recordings::MeetingEvent>> {
+    run_db(&app, move |conn| tidy_core::store::recordings::event(conn, &page_id)).await
+}

@@ -26,6 +26,25 @@ pub async fn set_recording_preferences(app: AppHandle, keep_audio: bool) -> AppR
     .await
 }
 
+/// The person's own list of names and terms Whisper should expect.
+#[tauri::command]
+pub async fn get_transcription_vocabulary(app: AppHandle) -> AppResult<String> {
+    db(&app, |c| {
+        Ok(crate::db::get_setting(c, tidy_core::store::recordings::VOCABULARY)?.unwrap_or_default())
+    })
+    .await
+}
+#[tauri::command]
+pub async fn set_transcription_vocabulary(app: AppHandle, vocabulary: String) -> AppResult<()> {
+    if vocabulary.chars().count() > 2_000 {
+        return Err(AppError::Invalid("Keep the vocabulary under 2,000 characters.".into()));
+    }
+    db(&app, move |c| {
+        crate::db::set_setting(c, tidy_core::store::recordings::VOCABULARY, vocabulary.trim())
+    })
+    .await
+}
+
 /// Delete a recording's audio, refusing anything that is not a WAV inside the
 /// recording library.
 fn remove_within(path: &str, root: &Path) -> AppResult<()> {

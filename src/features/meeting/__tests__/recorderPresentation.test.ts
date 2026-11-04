@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
+import { countdownCause,
   controlEnabled,
   keepAudioNotice,
   sourceWarning,
@@ -89,5 +89,20 @@ describe("transcription language", () => {
     };
     expect(readTranscriptionLanguage(broken)).toBe("en");
     expect(() => writeTranscriptionLanguage("auto", broken)).not.toThrow();
+  });
+});
+
+describe("countdownCause", () => {
+  it("says why an automatic stop is counting down", () => {
+    expect(countdownCause("Stopped automatically when Zoom ended the call")).toBe(
+      "Zoom ended the call.",
+    );
+    expect(countdownCause("Stopped automatically after 3 minutes of silence")).toBe(
+      "No one has spoken for 3 minutes.",
+    );
+    expect(
+      countdownCause("Stopped automatically 5 minutes after Weekly sync ended"),
+    ).toBe("Weekly sync ended 5 minutes ago.");
+    expect(countdownCause("Something new")).toBe("This meeting looks finished.");
   });
 });

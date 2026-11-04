@@ -15,8 +15,11 @@ identity=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$team" =~ ^[A-Z0-9]{10}$ ]] || { echo 'Invalid release metadata.' >&2; exit 1; }
 echo 'Checking notarisation credentials in Keychain...'
 xcrun notarytool history --keychain-profile "$profile" --output-format json > /dev/null
-# Keep each attempt separate; no previous app, DMG or submission log is removed.
-attempt=$(mktemp -d "$run_dir/notarisation.XXXXXX")
+# One reused notarisation folder, replaced on every attempt. Apple keeps each
+# submission's log, which notarytool can fetch by its id if one is needed.
+attempt="$run_dir/notarisation"
+rm -rf "$attempt"
+mkdir -p "$attempt"
 app="$attempt/Tidy.app"
 ditto "$run_dir/Tidy.app" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"

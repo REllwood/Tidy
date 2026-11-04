@@ -76,6 +76,9 @@ pub struct AiState {
     process: std::sync::Arc<Mutex<Option<tokio::process::Child>>>,
     pub cancel: AtomicBool,
     pub recording: AtomicBool,
+    /// A meeting is being recorded right now (not transcribed): questions the
+    /// person asks may run, but background work waits.
+    pub live: AtomicBool,
     current: Mutex<Option<Progress>>,
     /// True while the background worker owns the gate.
     worker_origin: AtomicBool,
@@ -144,7 +147,8 @@ impl AiState {
         origin: Origin,
     ) -> AppResult<Operation<'a>> {
         self.cancel.store(false, Ordering::SeqCst);
-        if self.recording.load(Ordering::SeqCst) {
+        let live_request = origin == Origin::User && self.live.load(Ordering::SeqCst);
+        if self.recording.load(Ordering::SeqCst) && !live_request {
             return Err(AppError::Other(
                 "AI processing is paused while recording or transcribing a meeting.".into(),
             ));
@@ -373,7 +377,11 @@ pub async fn local_ai_status(app: AppHandle) -> AppResult<Status> {
         ready,
         search_ready,
         disk_bytes,
-        recording_paused: app.state::<AiState>().recording.load(Ordering::SeqCst),
+        // During a live recording, questions can still be asked.
+        recording_paused: {
+            let ai = app.state::<AiState>();
+            ai.recording.load(Ordering::SeqCst) && !ai.live.load(Ordering::SeqCst)
+        },
     })
 }
 fn recommended_model(memory: Option<u64>) -> &'static str {
@@ -468,6 +476,45 @@ pub async fn ask_meetings(
 ) -> AppResult<service::Answer> {
     service::ask(&app, &question, from, until, client_id).await
 }
+/// The live transcript as text for the model: "[mm:ss] You: …", with the
+/// call's side as Others. Without a call, everyone is in the room.
+fn live_text(lines: &[crate::audio::live::LiveLine]) -> String {
+    let call = lines.iter().any(|l| l.source == "system");
+    let mut lines: Vec<&crate::audio::live::LiveLine> = lines.iter().collect();
+    lines.sort_by_key(|l| l.start_ms);
+    lines
+        .iter()
+        .map(|l| {
+            let s = l.start_ms.max(0) / 1000;
+            let who = match (l.source, call) {
+                ("system", _) => "Others",
+                (_, true) => "You",
+                _ => "Room",
+            };
+            format!("[{:02}:{:02}] {who}: {}", s / 60, s % 60, l.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// "Recap so far" while a meeting is being recorded.
+#[tauri::command]
+pub async fn live_recap(app: AppHandle) -> AppResult<service::Recap> {
+    let transcript = live_text(&crate::commands::recording::live_lines(&app));
+    if transcript.trim().is_empty() {
+        return Err(AppError::Invalid(
+            "Nothing has been transcribed yet. Try again once people have spoken.".into(),
+        ));
+    }
+    let state = app.state::<AiState>();
+    let _op = state.begin_now("Writing a recap").await?;
+    let config = db(&app, read_config_mut).await?;
+    let engine = runtime::Engine::start(&app, &config, false, &state).await?;
+    let result = service::recap(&engine, &transcript, &state).await;
+    engine.stop().await?;
+    result
+}
+
 pub async fn generate(
     app: &AppHandle,
     instruction: &str,
@@ -504,7 +551,14 @@ pub async fn summarise(
     let state = app.state::<AiState>();
     let _op = state.begin_now("Summarising locally").await?;
     let config = db(app, read_config_mut).await?;
-    service::summarise(app, &config, transcript, &state).await
+    service::summarise(
+        app,
+        &config,
+        transcript,
+        tidy_core::store::note_templates::general(),
+        &state,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -562,5 +616,27 @@ mod tests {
         assert!(state.begin("during recording").is_err());
         state.recording.store(false, Ordering::SeqCst);
         assert!(state.begin("after recording").is_ok());
+    }
+
+    #[tokio::test]
+    async fn questions_can_be_asked_during_a_live_recording_but_not_background_work() {
+        let state = AiState::default();
+        state.pause_for_recording().await.unwrap();
+        state.live.store(true, Ordering::SeqCst);
+        assert!(state.begin_worker().is_err(), "background work waits for the call to end");
+        assert!(state.begin("a question during the call").is_ok());
+        // Transcribing afterwards is not live: everything waits again.
+        state.live.store(false, Ordering::SeqCst);
+        assert!(state.begin("during transcription").is_err());
+    }
+
+    #[test]
+    fn the_live_transcript_reads_as_you_and_others_or_the_room() {
+        use crate::audio::live::LiveLine;
+        let line = |source, start_ms, text: &str| LiveLine { source, start_ms, end_ms: start_ms + 1000, text: text.into() };
+        let call = vec![line("system", 5_000, "Shall we start?"), line("mic", 1_000, "Morning all.")];
+        assert_eq!(super::live_text(&call), "[00:01] You: Morning all.\n[00:05] Others: Shall we start?");
+        let room = vec![line("mic", 65_000, "Let's begin.")];
+        assert_eq!(super::live_text(&room), "[01:05] Room: Let's begin.");
     }
 }

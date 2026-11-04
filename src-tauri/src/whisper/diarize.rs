@@ -45,12 +45,21 @@ pub fn diarize_file(
     wav: &std::path::Path,
     num_speakers: i32,
 ) -> AppResult<Vec<SpeakerSegment>> {
+    let pcm = load_pcm_16k_mono(wav)?;
+    diarize_pcm(app, &pcm, num_speakers)
+}
+
+/// Run diarization over 16 kHz mono samples, such as one side of a call.
+pub fn diarize_pcm(
+    app: &AppHandle,
+    pcm: &[f32],
+    num_speakers: i32,
+) -> AppResult<Vec<SpeakerSegment>> {
     use sherpa_onnx::{
         FastClusteringConfig, OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig,
     };
 
     let (seg, emb) = model_paths(app)?;
-    let pcm = load_pcm_16k_mono(wav)?;
     if pcm.is_empty() {
         return Ok(vec![]);
     }
@@ -66,7 +75,7 @@ pub fn diarize_file(
     let diarizer = OfflineSpeakerDiarization::create(&config)
         .ok_or_else(|| AppError::Other("failed to init diarizer".into()))?;
     let result = diarizer
-        .process(&pcm)
+        .process(pcm)
         .ok_or_else(|| AppError::Other("diarization produced no result".into()))?;
 
     Ok(result
@@ -77,6 +86,14 @@ pub fn diarize_file(
             end_ms: (s.end * 1000.0) as i64,
             speaker: s.speaker,
         })
+        .collect())
+}
+
+/// Speaker turns for one channel, in the shape transcript assembly uses.
+pub fn turns(app: &AppHandle, pcm: &[f32], num_speakers: i32) -> AppResult<Vec<crate::whisper::assemble::Turn>> {
+    Ok(diarize_pcm(app, pcm, num_speakers)?
+        .into_iter()
+        .map(|s| crate::whisper::assemble::Turn { start_ms: s.start_ms, end_ms: s.end_ms, speaker: s.speaker })
         .collect())
 }
 

@@ -39,6 +39,11 @@ import { FeatureTip } from "@/components/help/FeatureTip";
 
 import { MeetingRecordingPanel } from "@/features/meeting/MeetingRecordingPanel";
 import { MeetingSummaryPanel } from "@/features/meeting/MeetingSummaryPanel";
+import {
+  stampSeconds,
+  stampUnder,
+  usePlayback,
+} from "@/features/meeting/playback";
 import { NoteSummaryStatus } from "@/features/ai/NoteSummaryStatus";
 
 const Kbd = ({ children }: { children: React.ReactNode }) => (
@@ -462,7 +467,15 @@ function EditorInner({
           Type <Kbd>/</Kbd> for blocks, <Kbd>[[</Kbd> to link another page, or{" "}
           <Kbd>#</Kbd> to tag it.
         </FeatureTip>
-        <div ref={editorArea}>
+        <div
+          ref={editorArea}
+          onClick={(e) => {
+            // Clicking a transcript line's stamp plays the meeting from there.
+            const stamp = stampUnder(e.clientX, e.clientY);
+            const seconds = stamp ? stampSeconds(stamp) : null;
+            if (seconds !== null) usePlayback.getState().play(pageId, seconds);
+          }}
+        >
           <BlockNoteView
             editor={editor}
             editable={!transcribing}

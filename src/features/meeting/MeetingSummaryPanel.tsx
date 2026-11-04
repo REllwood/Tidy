@@ -11,6 +11,7 @@ import {
 } from "@/lib/localAi";
 import {
   databasesApi,
+  meetingBriefApi,
   meetingNotesApi,
   recordingHistoryApi,
   recordingHistoryKey,
@@ -25,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SpeakerNamesDialog } from "./SpeakerNames";
+import { MeetingAudioPlayer } from "./MeetingAudioPlayer";
+import { revealLine, stampSeconds, usePlayback } from "./playback";
 import { useUi } from "@/store/ui";
 
 import { MeetingNotes } from "./MeetingNotes";
@@ -111,8 +114,42 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
     onError: (error) =>
       toast.error(`Couldn't add the next steps. ${errorMessage(error)}`),
   });
+  const layouts = useQuery({
+    queryKey: ["note-layouts"],
+    queryFn: meetingBriefApi.layouts,
+    enabled: isMeeting,
+    staleTime: Infinity,
+  });
+  const relayout = useMutation({
+    mutationFn: (template: string) => meetingBriefApi.setLayout(pageId, template),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: meetingJobsKey });
+      void qc.invalidateQueries({ queryKey: aiStatusKey });
+    },
+    onError: (error) =>
+      toast.error(`Couldn't rewrite the notes. ${errorMessage(error)}`),
+  });
+  const play = usePlayback((s) => s.play);
+  // Names the conversation points to that have not been given yet.
+  const speakers = useQuery({
+    queryKey: ["meeting-speakers", pageId],
+    queryFn: () => meetingNotesApi.speakers(pageId),
+    enabled: isMeeting,
+    staleTime: 60_000,
+  });
+  const suggested = (speakers.data ?? []).filter((s) => s.suggestion);
+  const recording = (history.data as SavedRecording[] | undefined)?.find(
+    (r) => r.page_id === pageId,
+  );
+  const audioAvailable = !!recording?.audio_available;
   const job = data?.find((j) => j.page_id === pageId);
   if (!job) return null;
+  const layout = layouts.data?.find((l) => l.id === job.template);
+  const jump = (stamp: string) => {
+    revealLine(stamp);
+    const seconds = stampSeconds(stamp);
+    if (audioAvailable && seconds !== null) play(pageId, seconds);
+  };
   const busy = ["summarising", "indexing"].includes(job.state);
   return (
     <section
@@ -120,7 +157,14 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
       aria-label="Generated meeting summary"
     >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Meeting notes</h2>
+        <h2 className="text-sm font-semibold">
+          Meeting notes
+          {layout && layout.id !== "general" && (
+            <span className="ml-2 font-normal text-text-faint">
+              {layout.name} layout
+            </span>
+          )}
+        </h2>
         <button
           className="text-xs text-brand hover:underline"
           onClick={() => setPane({ kind: "ask" })}
@@ -128,6 +172,7 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
           Meeting library
         </button>
       </div>
+      {audioAvailable && <MeetingAudioPlayer pageId={pageId} />}
       {busy && (
         <p
           role="status"
@@ -160,12 +205,26 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
       )}
       {job.summary && (
         <div className="mt-3 space-y-3 text-sm leading-relaxed">
-          <MeetingNotes summary={job.summary} />
+          <MeetingNotes summary={job.summary} onTime={jump} />
           <p className="text-xs text-text-faint">
             Generated locally. Check names, dates and commitments against the
             original transcript.
           </p>
         </div>
+      )}
+      {suggested.length > 0 && (
+        <p className="mt-4 flex flex-wrap items-center gap-2 rounded-lg bg-bg-subtle px-3 py-2 text-sm text-text-muted">
+          <span className="flex-1">
+            From the conversation,{" "}
+            {suggested
+              .map((s) => `${s.label} sounds like ${s.suggestion?.name}`)
+              .join(", ")}
+            .
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setNaming(true)}>
+            Review names
+          </Button>
+        </p>
       )}
       <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
         <Button
@@ -230,6 +289,41 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
             </DropdownMenuContent>
           </DropdownMenu>
         )}
+        {!!layouts.data?.length && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={
+                relayout.isPending ||
+                busy ||
+                job.state === "queued" ||
+                !status.data?.ready
+              }
+              render={<Button variant="ghost" size="sm" />}
+            >
+              {relayout.isPending && <Loader2 className="size-3 animate-spin" />}
+              Rewrite notes as
+              <ChevronDown className="size-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              {layouts.data.map((l) => (
+                <DropdownMenuItem
+                  key={l.id}
+                  disabled={l.id === job.template}
+                  onClick={() => relayout.mutate(l.id)}
+                >
+                  <span className="flex flex-col">
+                    <span>{l.name}</span>
+                    <span className="text-xs text-text-faint">
+                      {l.sections.length
+                        ? l.sections.map((s) => s.heading).join(", ")
+                        : "Topics chosen from the discussion"}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         <Button variant="ghost" size="sm" onClick={() => setNaming(true)}>
           Name speakers
         </Button>
@@ -238,6 +332,7 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
         pageId={pageId}
         open={naming}
         onOpenChange={setNaming}
+        audioAvailable={audioAvailable}
       />
     </section>
   );

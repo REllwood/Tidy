@@ -1,4 +1,4 @@
-//! Audio post-processing: resample to 16 kHz mono and mix two sources.
+//! Audio post-processing: resample to 16 kHz and keep or mix two sources.
 //! Whisper wants 16 kHz mono f32 PCM. A linear resampler is more than adequate
 //! for speech and keeps the dependency surface small.
 
@@ -145,6 +145,7 @@ pub fn soft_limit(sample: f32) -> f32 {
 
 /// Mix two mono streams (already at the same rate). Pads the shorter with
 /// silence and limits peaks so the mix stays inside the sample range.
+#[cfg(test)]
 pub fn mix_mono(a: &[f32], b: &[f32]) -> Vec<f32> {
     let n = a.len().max(b.len());
     (0..n)
@@ -152,10 +153,11 @@ pub fn mix_mono(a: &[f32], b: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// A recording's two live sources, mixed to 16 kHz mono a chunk at a time.
-/// Whatever has no counterpart yet is held back, so the microphone and the
-/// system capture stay aligned in time across the whole meeting.
-pub struct ChunkedMixer {
+/// A recording's two live sources, converted to 16 kHz a chunk at a time and
+/// kept apart, so each side of a call can be transcribed on its own. Whatever
+/// has no counterpart yet is held back, so the microphone and the system
+/// capture stay aligned in time across the whole meeting.
+pub struct ChunkedPair {
     mic: Resampler,
     system: Resampler,
     mic_pending: Vec<f32>,
@@ -168,7 +170,7 @@ pub struct ChunkedMixer {
 /// without it. A source that stops delivering must not stall the whole meeting.
 const MAX_SKEW: usize = WHISPER_RATE as usize * 5;
 
-impl ChunkedMixer {
+impl ChunkedPair {
     pub fn new(mic_rate: u32, mic_present: bool, system_rate: u32, system_present: bool) -> Self {
         Self {
             mic: Resampler::new(mic_rate, WHISPER_RATE),
@@ -180,8 +182,9 @@ impl ChunkedMixer {
         }
     }
 
-    /// Add newly captured samples and return whatever is ready to be written.
-    pub fn push(&mut self, mic: &[f32], system: &[f32]) -> Vec<f32> {
+    /// Add newly captured samples and return whatever is ready to be written,
+    /// as two channels of equal length.
+    pub fn push(&mut self, mic: &[f32], system: &[f32]) -> (Vec<f32>, Vec<f32>) {
         let converted = self.mic.push(mic);
         self.mic_pending.extend(converted);
         let converted = self.system.push(system);
@@ -199,8 +202,8 @@ impl ChunkedMixer {
         self.take(ready)
     }
 
-    /// Mix everything that is left once capture has stopped.
-    pub fn flush(&mut self) -> Vec<f32> {
+    /// Everything that is left once capture has stopped.
+    pub fn flush(&mut self) -> (Vec<f32>, Vec<f32>) {
         let converted = self.mic.finish();
         self.mic_pending.extend(converted);
         let converted = self.system.finish();
@@ -209,19 +212,23 @@ impl ChunkedMixer {
         self.take(remaining)
     }
 
-    fn take(&mut self, n: usize) -> Vec<f32> {
+    /// The next `n` samples of each source. A source that fell behind, or is
+    /// missing, is padded with silence so the channels stay the same length.
+    fn take(&mut self, n: usize) -> (Vec<f32>, Vec<f32>) {
         if n == 0 {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
-        let mic: Vec<f32> = self
+        let mut mic: Vec<f32> = self
             .mic_pending
             .drain(..n.min(self.mic_pending.len()))
             .collect();
-        let system: Vec<f32> = self
+        let mut system: Vec<f32> = self
             .system_pending
             .drain(..n.min(self.system_pending.len()))
             .collect();
-        mix_mono(&mic, &system)
+        mic.resize(n, 0.0);
+        system.resize(n, 0.0);
+        (mic, system)
     }
 }
 
@@ -235,8 +242,7 @@ pub fn rms(samples: &[f32]) -> f32 {
 }
 
 /// Combine two raw captured sources into a single 16 kHz mono buffer in one
-/// pass. Recording streams its audio through `ChunkedMixer` instead; this is
-/// the reference the chunked path is measured against.
+/// pass, the way a mixed preview of the recording sounds.
 #[cfg(test)]
 pub fn combine_sources(mic: &[f32], mic_rate: u32, system: &[f32], system_rate: u32) -> Vec<f32> {
     let mic16 = resample_mono(mic, mic_rate, WHISPER_RATE);
@@ -327,51 +333,61 @@ mod tests {
     }
 
     #[test]
-    fn incremental_mix_matches_a_single_pass_and_never_clips() {
-        // Loud enough that a naive sum would clip well past full scale.
+    fn chunked_pair_matches_converting_each_source_in_one_pass() {
         let mic = sine(44_100 * 3, 44_100, 300.0, 0.9);
         let system = noise(48_000 * 3, 0.9);
-        let expected = combine_sources(&mic, 44_100, &system, 48_000);
+        let expected_mic = resample_mono(&mic, 44_100, WHISPER_RATE);
+        let expected_system = resample_mono(&system, 48_000, WHISPER_RATE);
 
-        let mut mixer = ChunkedMixer::new(44_100, true, 48_000, true);
-        let mut out = Vec::new();
+        let mut pair = ChunkedPair::new(44_100, true, 48_000, true);
+        let (mut out_mic, mut out_system) = (Vec::new(), Vec::new());
         // Five-second chunks in real time land as uneven, interleaved arrivals.
         for (m, s) in mic.chunks(44_100 / 2).zip(system.chunks(48_000 / 2)) {
-            out.extend(mixer.push(m, s));
+            let (a, b) = pair.push(m, s);
+            assert_eq!(a.len(), b.len(), "channels stay aligned");
+            out_mic.extend(a);
+            out_system.extend(b);
         }
-        out.extend(mixer.flush());
+        let (a, b) = pair.flush();
+        out_mic.extend(a);
+        out_system.extend(b);
 
-        assert_eq!(out.len(), expected.len());
-        assert_eq!(out.len(), 16_000 * 3);
-        assert_eq!(out, expected);
-        assert!(out.iter().all(|s| s.abs() <= 1.0));
-        assert!(out.iter().any(|s| s.abs() > 0.8), "the mix must stay loud");
+        assert_eq!(out_mic.len(), 16_000 * 3);
+        assert_eq!(out_mic, expected_mic);
+        assert_eq!(out_system, expected_system);
     }
 
     #[test]
     fn a_single_source_is_written_without_waiting_for_the_other() {
         let mic = sine(16_000, 16_000, 220.0, 0.5);
-        let mut mixer = ChunkedMixer::new(16_000, true, 48_000, false);
-        let mut out = Vec::new();
+        let mut pair = ChunkedPair::new(16_000, true, 48_000, false);
+        let (mut out, mut silent) = (Vec::new(), Vec::new());
         for chunk in mic.chunks(1_000) {
-            out.extend(mixer.push(chunk, &[]));
+            let (a, b) = pair.push(chunk, &[]);
+            out.extend(a);
+            silent.extend(b);
         }
         assert_eq!(out.len(), mic.len(), "nothing is held back for a dead source");
-        out.extend(mixer.flush());
+        let (a, b) = pair.flush();
+        out.extend(a);
+        silent.extend(b);
         assert_eq!(out, mic);
+        assert_eq!(silent.len(), mic.len());
+        assert!(silent.iter().all(|s| *s == 0.0));
     }
 
     #[test]
     fn a_stalled_source_does_not_hold_up_the_recording() {
         let mic = sine(WHISPER_RATE as usize * 9, WHISPER_RATE, 200.0, 0.4);
-        let mut mixer = ChunkedMixer::new(WHISPER_RATE, true, WHISPER_RATE, true);
-        let written = mixer.push(&mic, &[]);
+        let mut pair = ChunkedPair::new(WHISPER_RATE, true, WHISPER_RATE, true);
+        let (written, padded) = pair.push(&mic, &[]);
         assert!(
             written.len() >= WHISPER_RATE as usize * 3,
             "written={}",
             written.len()
         );
         assert!(written.len() <= mic.len());
+        assert_eq!(padded.len(), written.len());
     }
 
     #[test]

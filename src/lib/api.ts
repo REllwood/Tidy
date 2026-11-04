@@ -229,6 +229,10 @@ export interface Recording {
   page_id: string | null;
   audio_path: string;
   duration_ms: number;
+  /** Moments marked while recording, in ms from the start. */
+  marks?: number[];
+  /** The meeting's title from the calendar, when it had an event. */
+  title?: string | null;
 }
 export interface ModelInfo {
   description: string;
@@ -255,12 +259,58 @@ export interface MeetingSummary {
   decisions: string[];
   sections?: { heading: string; points: string[] }[];
   open_questions?: string[];
+  /** Moments marked while recording, each with what was being said then. */
+  moments?: string[];
+  /** When each point was said ("00:12:34"), keyed by the point's text. */
+  times?: Record<string, string>;
 }
 
+/** One line of the live transcript shown while recording. */
+export interface LiveLine {
+  source: "mic" | "system";
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+/** "Recap so far" during a recording. */
+export interface LiveRecap {
+  points: string[];
+  decisions: string[];
+  actions: string[];
+  open_questions: string[];
+}
+export const liveApi = {
+  transcript: () => invoke<LiveLine[]>("live_transcript"),
+  recap: () => invoke<LiveRecap>("live_recap"),
+};
+
 export const recordingApi = {
-  start: () => invoke<boolean>("start_recording"),
-  stop: (client = "") => invoke<Recording>("stop_recording", { client }),
+  start: (language = "en") => invoke<boolean>("start_recording", { language }),
+  /** `stopReason` is set when Tidy stopped the recording itself. */
+  stop: (client = "", stopReason?: string) =>
+    invoke<Recording>("stop_recording", { client, stopReason }),
   isRecording: () => invoke<boolean>("is_recording"),
+  /** Mark this moment. Resolves to how far into the recording it is, in ms. */
+  mark: () => invoke<number>("mark_moment"),
+};
+
+/** What the small floating meeting window shows. */
+export type MeetingHud =
+  | { kind: "none" }
+  | { kind: "offer"; app: string }
+  | { kind: "countdown"; reason: string; deadline_ms: number };
+
+export const meetingHudApi = {
+  state: () => invoke<MeetingHud>("meeting_hud_state"),
+  respond: (action: "record" | "dismiss" | "keep") =>
+    invoke<void>("meeting_hud_respond", { action }),
+};
+
+/** Offering to record calls, and stopping recordings that have finished. */
+export const meetingAutomationApi = {
+  get: () => invoke<[boolean, boolean]>("get_meeting_automation"),
+  set: (offers: boolean, autoStop: boolean) =>
+    invoke<void>("set_meeting_automation", { offers, autoStop }),
 };
 
 export const modelsApi = {
@@ -402,6 +452,8 @@ export interface SavedRecording {
   model_used: string | null;
   transcript_state: string;
   transcript_error: string | null;
+  /** Why Tidy stopped the recording itself, such as the call ending. */
+  stop_reason?: string | null;
 }
 export interface TranscriptVersion {
   id: string;
@@ -411,18 +463,40 @@ export interface TranscriptVersion {
   body_json: string;
   reason: string;
 }
+/** A transcript line, with its speaker when it is known ("You", "Speaker 1"). */
+export interface LabelledSegment extends TranscriptSegment {
+  speaker?: string;
+}
 export interface RetranscriptionResult {
   body_json: string;
   applied: boolean;
-  segments: TranscriptSegment[];
+  segments: LabelledSegment[];
+  /** Speakers named from the conversation, such as someone asked by name who answered. */
+  named?: NameGuess[];
 }
 // ---- Meeting notes: speaker names, notes in the page, next steps -----------
 
+/** A name the conversation points to for a speaker label. */
+export interface NameGuess {
+  label: string;
+  name: string;
+  score: number;
+  /** The line that points to the name, as it was said. */
+  because: string;
+  /** When that line was said, in ms. */
+  at_ms: number;
+  /** Strong enough that Tidy applies it after transcription. */
+  certain: boolean;
+}
 export interface MeetingSpeaker {
   label: string;
   /** The first thing they said, to help tell who is who. */
   sample: string;
   turns: number;
+  /** A few things they said, with when. */
+  samples?: { at_ms: number; text: string }[];
+  /** A name the conversation clearly points to. */
+  suggestion?: NameGuess | null;
 }
 export interface TasksAdded {
   added: number;
@@ -441,15 +515,77 @@ export const meetingNotesApi = {
     invoke<TasksAdded>("meeting_next_steps_to_tasks", { pageId, databaseId }),
 };
 
+/** The calendar event a meeting was recorded for. */
+export interface MeetingEvent {
+  title: string;
+  start_ms: number;
+  end_ms: number;
+  /** The other people invited, without the person recording. */
+  attendees: string[];
+  /** The same for every meeting in a recurring series. */
+  series: string | null;
+}
+export type CalendarAccess = "granted" | "denied" | "not_determined";
+export interface CalendarStatus {
+  enabled: boolean;
+  access: CalendarAccess;
+}
+export const calendarApi = {
+  status: () => invoke<CalendarStatus>("calendar_status"),
+  /** Turns the calendar on, asking macOS for access the first time. */
+  connect: () => invoke<CalendarStatus>("calendar_connect"),
+  disconnect: () => invoke<void>("calendar_disconnect"),
+  /** Meetings from earlier today until this evening, earliest first. */
+  events: () => invoke<MeetingEvent[]>("calendar_events"),
+};
+
+export interface NotesLayout {
+  id: string;
+  name: string;
+  sections: { heading: string; hint: string }[];
+}
+/** What earlier meetings like this one decided and left open. */
+export interface LastTime {
+  meetings: { page_id: string; title: string; started_at: number }[];
+  points: string[];
+  open_actions: string[];
+}
+export const meetingBriefApi = {
+  layouts: () => invoke<NotesLayout[]>("note_templates"),
+  /** Rewrites the meeting's notes with another layout. */
+  setLayout: (pageId: string, template: string) =>
+    invoke<void>("set_meeting_template", { pageId, template }),
+  lastTime: (title: string, series?: string | null, client?: string | null) =>
+    invoke<LastTime | null>("meeting_last_time", {
+      title,
+      series: series ?? undefined,
+      client: client || undefined,
+    }),
+  event: (pageId: string) =>
+    invoke<MeetingEvent | null>("meeting_event", { pageId }),
+};
+
 export const recordingHistoryApi = {
   list: () => invoke<SavedRecording[]>("recording_history"),
   versions: (pageId: string) =>
     invoke<TranscriptVersion[]>("transcript_versions", { pageId }),
-  transcribe: (pageId: string, modelId?: string, language = "en") =>
+  /**
+   * Transcribe a meeting's saved audio. With `speakers` on, the other side of
+   * a call is also split into speakers (the speaker models must be installed).
+   */
+  transcribe: (
+    pageId: string,
+    modelId?: string,
+    language = "en",
+    speakers = false,
+    speakerCount?: number,
+  ) =>
     invoke<RetranscriptionResult>("retranscribe_meeting", {
       pageId,
       modelId,
       language,
+      speakers,
+      speakerCount,
     }),
   cancel: (pageId: string) => invoke<void>("cancel_transcription", { pageId }),
   /** Deletes the audio file for a meeting, keeping every saved transcript. */
@@ -462,6 +598,10 @@ export const recordingPreferencesApi = {
   set: (keepAudio: boolean) => invoke<void>("set_recording_preferences", {keepAudio}),
   /** Safe to call at any time: temporary audio is only discarded once the transcript is saved. */
   finish: (pageId: string) => invoke<void>("finish_recording", {pageId}),
+  /** Names and terms Whisper should expect, separated by commas or new lines. */
+  vocabulary: () => invoke<string>("get_transcription_vocabulary"),
+  setVocabulary: (vocabulary: string) =>
+    invoke<void>("set_transcription_vocabulary", { vocabulary }),
 };
 
 export const recordingHistoryKey = ["recording-history"];

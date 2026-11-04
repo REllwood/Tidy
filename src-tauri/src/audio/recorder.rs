@@ -5,10 +5,13 @@
 //! Audio is streamed to a `.partial` WAV as it arrives rather than held in
 //! memory until Stop, so a long meeting costs a bounded amount of RAM and a
 //! crash leaves a recoverable file behind.
+//!
+//! The file is stereo: the microphone on the left channel and system audio on
+//! the right, so each side of a call can be transcribed separately.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -16,17 +19,28 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use super::pipeline::{rms, ChunkedMixer, WHISPER_RATE};
-use super::system::SYSTEM_RATE;
+use super::pipeline::{rms, ChunkedPair, WHISPER_RATE};
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 
-/// How often captured audio is mixed and appended to the file on disk.
-const CHUNK: Duration = Duration::from_secs(5);
-/// The rolling window kept in memory for the live-transcription preview.
-const PREVIEW_SAMPLES: usize = WHISPER_RATE as usize * 15;
+/// How often captured audio is appended to the file on disk and handed to
+/// the live transcript.
+const CHUNK: Duration = Duration::from_secs(2);
 /// How long `start` waits for both capture sources to be attempted.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a tap may deliver nothing but silence before the recorder hints
+/// that system audio recording may not be allowed.
+const SILENT_TAP_HINT: Duration = Duration::from_secs(45);
+/// A level this loud on either side counts as someone speaking (about -42 dBFS).
+const VOICE_LEVEL: f32 = 0.008;
+
+/// When the current recording last heard someone, in ms since the epoch.
+static LAST_VOICE_MS: AtomicI64 = AtomicI64::new(0);
+
+/// When the current recording last heard someone speak, on either side.
+pub fn last_voice_ms() -> i64 {
+    LAST_VOICE_MS.load(Ordering::Relaxed)
+}
 
 #[derive(Serialize, Clone)]
 struct LevelEvent {
@@ -47,11 +61,18 @@ pub struct RecordingSession {
     keep_audio: bool,
     stop: Arc<AtomicBool>,
     started_at: i64,
+    /// When capture began, the zero point for marked moments.
+    began: Instant,
+    marks: Vec<i64>,
+    /// The calendar event this recording is for, when there is one.
+    pub event: Option<tidy_core::store::recordings::MeetingEvent>,
     path: PathBuf,
     partial: PathBuf,
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
     handle: Option<JoinHandle<()>>,
     live_handle: Option<JoinHandle<()>>,
+    /// The live transcript so far.
+    lines: Arc<Mutex<Vec<super::live::LiveLine>>>,
     finished: Option<Recording>,
 }
 
@@ -70,14 +91,38 @@ pub struct Recording {
     pub duration_ms: i64,
     pub started_at: i64,
     pub page_id: Option<String>,
+    /// Moments marked while recording, in ms from the start.
+    pub marks: Vec<i64>,
+    /// The meeting's title from the calendar, when the recording had an event.
+    pub title: Option<String>,
+}
+
+impl RecordingSession {
+    /// Mark this moment. Returns how far into the recording it is, in ms.
+    pub fn mark(&mut self) -> i64 {
+        let at = self.began.elapsed().as_millis() as i64;
+        self.marks.push(at);
+        at
+    }
+
+    pub fn marks(&self) -> &[i64] {
+        &self.marks
+    }
+
+    /// The live transcript so far, in the order lines finished.
+    pub fn live_lines(&self) -> Vec<super::live::LiveLine> {
+        self.lines.lock().map(|l| l.clone()).unwrap_or_default()
+    }
 }
 
 pub fn start(
     app: AppHandle,
     model_path: Option<PathBuf>,
     keep_audio: bool,
+    language: String,
 ) -> AppResult<RecordingSession> {
     let started_at = now_ms();
+    LAST_VOICE_MS.store(started_at, Ordering::Relaxed);
     let dir = if keep_audio {
         app_recordings_dir(&app)?
     } else {
@@ -88,9 +133,11 @@ pub fn start(
     let partial = path.with_extension("partial");
 
     let stop = Arc::new(AtomicBool::new(false));
-    let preview = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let generation = Arc::new(AtomicU64::new(0));
     let outcome = Arc::new(Mutex::new(None));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    // Each chunk is also handed to the live transcript, when there is a model.
+    let (live_tx, live_rx) = std::sync::mpsc::channel::<(Vec<f32>, Vec<f32>)>();
+    let live_tx = model_path.is_some().then_some(live_tx);
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(bool, bool), String>>();
     let thread = Capture {
@@ -99,8 +146,7 @@ pub fn start(
         mic_buf: Arc::new(Mutex::new(Vec::new())),
         sys_buf: Arc::new(Mutex::new(Vec::new())),
         mic_rate: Arc::new(AtomicU32::new(WHISPER_RATE)),
-        preview: preview.clone(),
-        generation: generation.clone(),
+        live: live_tx,
         partial: partial.clone(),
         outcome: outcome.clone(),
     };
@@ -122,28 +168,25 @@ pub fn start(
         return Err(AppError::Other(message));
     }
 
-    // Optional live-transcription preview: re-transcribe a rolling window while
-    // recording. The final saved transcript still comes from the recorded file
-    // — this is a real-time preview only.
+    // The live transcript, line by line. The saved transcript still comes
+    // from the recorded file once it stops.
     let live_handle = model_path.map(|mp| {
-        spawn_live_transcription(
-            app.clone(),
-            stop.clone(),
-            preview.clone(),
-            generation.clone(),
-            mp,
-        )
+        super::live::spawn(app.clone(), stop.clone(), live_rx, lines.clone(), mp, language)
     });
 
     Ok(RecordingSession {
         keep_audio,
         stop,
         started_at,
+        began: Instant::now(),
+        marks: Vec::new(),
+        event: None,
         path,
         partial,
         outcome,
         handle: Some(handle),
         live_handle,
+        lines,
         finished: None,
     })
 }
@@ -154,8 +197,7 @@ struct Capture {
     mic_buf: Arc<Mutex<Vec<f32>>>,
     sys_buf: Arc<Mutex<Vec<f32>>>,
     mic_rate: Arc<AtomicU32>,
-    preview: Arc<Mutex<Vec<f32>>>,
-    generation: Arc<AtomicU64>,
+    live: Option<std::sync::mpsc::Sender<(Vec<f32>, Vec<f32>)>>,
     partial: PathBuf,
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
 }
@@ -201,12 +243,15 @@ impl Capture {
             serde_json::json!({ "mic": mic.is_some(), "system": system.is_some() }),
         );
 
-        let mut mixer = ChunkedMixer::new(
+        let mut pair = ChunkedPair::new(
             self.mic_rate.load(Ordering::Relaxed),
             mic.is_some(),
-            SYSTEM_RATE,
+            system.as_ref().map_or(48_000, |s| s.sample_rate()),
             system.is_some(),
         );
+        // A tap without permission records silence rather than failing.
+        let watch_tap = system.as_ref().is_some_and(|s| s.is_tap());
+        let mut system_heard = false;
         let start = Instant::now();
         let mut last_mic = 0usize;
         let mut last_sys = 0usize;
@@ -218,6 +263,9 @@ impl Capture {
             std::thread::sleep(Duration::from_millis(120));
             let mic_level = tail_rms(&self.mic_buf, &mut last_mic);
             let sys_level = tail_rms(&self.sys_buf, &mut last_sys);
+            if mic_level >= VOICE_LEVEL || sys_level >= VOICE_LEVEL {
+                LAST_VOICE_MS.store(now_ms(), Ordering::Relaxed);
+            }
             let _ = self.app.emit(
                 "audio-level",
                 LevelEvent {
@@ -238,13 +286,20 @@ impl Capture {
             last_mic = 0;
             last_sys = 0;
             let (mic_raw, sys_raw) = self.drain();
-            let mixed = mixer.push(&mic_raw, &sys_raw);
-            if let Err(e) = append(&mut writer, &mixed) {
+            if watch_tap && !system_heard {
+                system_heard = sys_raw.iter().any(|s| *s != 0.0);
+                if !system_heard && start.elapsed() >= SILENT_TAP_HINT {
+                    system_heard = true; // say it once
+                    let _ = self.app.emit("system-audio-silent", ());
+                }
+            }
+            let (mic16, sys16) = pair.push(&mic_raw, &sys_raw);
+            if let Err(e) = append(&mut writer, &mic16, &sys16) {
                 error = Some(e.to_string());
                 break;
             }
-            frames += mixed.len() as u64;
-            self.remember(&mixed);
+            frames += mic16.len() as u64;
+            self.remember(&mic16, &sys16);
             // Checkpoint the header so a crash still leaves a readable file.
             if let Err(e) = writer.flush() {
                 log::warn!("recording checkpoint: {e}");
@@ -256,12 +311,14 @@ impl Capture {
         drop(system);
         if error.is_none() {
             let (mic_raw, sys_raw) = self.drain();
-            let mut mixed = mixer.push(&mic_raw, &sys_raw);
-            mixed.extend(mixer.flush());
-            match append(&mut writer, &mixed) {
+            let (mut mic16, mut sys16) = pair.push(&mic_raw, &sys_raw);
+            let (mic_rest, sys_rest) = pair.flush();
+            mic16.extend(mic_rest);
+            sys16.extend(sys_rest);
+            match append(&mut writer, &mic16, &sys16) {
                 Ok(()) => {
-                    frames += mixed.len() as u64;
-                    self.remember(&mixed);
+                    frames += mic16.len() as u64;
+                    self.remember(&mic16, &sys16);
                 }
                 Err(e) => error = Some(e.to_string()),
             }
@@ -288,18 +345,13 @@ impl Capture {
         (mic, system)
     }
 
-    fn remember(&self, mixed: &[f32]) {
-        if mixed.is_empty() {
+    fn remember(&self, mic: &[f32], system: &[f32]) {
+        if mic.is_empty() {
             return;
         }
-        if let Ok(mut preview) = self.preview.lock() {
-            preview.extend_from_slice(mixed);
-            let len = preview.len();
-            if len > PREVIEW_SAMPLES {
-                preview.drain(..len - PREVIEW_SAMPLES);
-            }
+        if let Some(live) = &self.live {
+            let _ = live.send((mic.to_vec(), system.to_vec()));
         }
-        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -353,87 +405,11 @@ pub fn stop(session: &mut RecordingSession) -> AppResult<Recording> {
         duration_ms: (frames as i64 * 1000) / WHISPER_RATE as i64,
         started_at: session.started_at,
         page_id: None,
+        marks: session.marks.clone(),
+        title: session.event.as_ref().map(|e| e.title.clone()),
     };
     session.finished = Some(recording.clone());
     Ok(recording)
-}
-
-/// Background worker: every few seconds, transcribe the last ~15s of mixed
-/// audio and emit it as a live preview. Loads the Whisper model once and reuses
-/// the state across windows.
-fn spawn_live_transcription(
-    app: AppHandle,
-    stop: Arc<AtomicBool>,
-    preview: Arc<Mutex<Vec<f32>>>,
-    generation: Arc<AtomicU64>,
-    model_path: PathBuf,
-) -> JoinHandle<()> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
-    const STEP: Duration = Duration::from_millis(500);
-    const SILENCE_RMS: f32 = 0.005;
-
-    std::thread::spawn(move || {
-        let ctx =
-            match WhisperContext::new_with_params(&model_path, WhisperContextParameters::default())
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("live transcription disabled (model load failed): {e}");
-                    return;
-                }
-            };
-        let mut state = match ctx.create_state() {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("live transcription disabled (state failed): {e}");
-                return;
-            }
-        };
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4);
-        let mut seen = generation.load(Ordering::Relaxed);
-
-        while !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(STEP);
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            // Only re-decode once the capture thread has mixed more audio.
-            let current = generation.load(Ordering::Relaxed);
-            if current == seen {
-                continue;
-            }
-            seen = current;
-            let window = match preview.lock() {
-                Ok(samples) => samples.clone(),
-                Err(_) => break,
-            };
-            if window.is_empty() || rms(&window) < SILENCE_RMS {
-                continue; // skip silent windows (cheap VAD gate)
-            }
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(threads.min(4));
-            params.set_translate(false);
-            params.set_language(Some("en"));
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            if state.full(params, &window).is_ok() {
-                let text = state
-                    .as_iter()
-                    .filter_map(|s| s.to_str_lossy().ok().map(|c| c.to_string()))
-                    .collect::<Vec<_>>()
-                    .join("")
-                    .trim()
-                    .to_string();
-                if !text.is_empty() {
-                    let _ = app.emit("live-transcript", text);
-                }
-            }
-        }
-    })
 }
 
 fn tail_rms(buf: &Arc<Mutex<Vec<f32>>>, last: &mut usize) -> f32 {
@@ -460,9 +436,10 @@ pub fn app_recordings_dir(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(dir.join("recordings"))
 }
 
+/// Left: microphone. Right: system audio.
 fn wav_spec() -> hound::WavSpec {
     hound::WavSpec {
-        channels: 1,
+        channels: 2,
         sample_rate: WHISPER_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
@@ -476,12 +453,16 @@ fn open_writer(path: &Path) -> AppResult<Writer> {
         .map_err(|e| AppError::Other(format!("wav create: {e}")))
 }
 
-fn append(writer: &mut Writer, samples: &[f32]) -> AppResult<()> {
-    for s in samples {
-        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-        writer
-            .write_sample(v)
-            .map_err(|e| AppError::Other(format!("wav write: {e}")))?;
+/// Write the two channels as interleaved frames. They always have the same
+/// length: the pair pads a missing source with silence.
+fn append(writer: &mut Writer, mic: &[f32], system: &[f32]) -> AppResult<()> {
+    for (m, s) in mic.iter().zip(system) {
+        for sample in [m, s] {
+            let v = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+            writer
+                .write_sample(v)
+                .map_err(|e| AppError::Other(format!("wav write: {e}")))?;
+        }
     }
     Ok(())
 }
@@ -502,15 +483,25 @@ pub fn recover_partial(path: &Path) -> AppResult<u32> {
     }
     let riff_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 
-    // Walk the chunk list to find where the samples start.
+    // Walk the chunk list to find the format and where the samples start.
     let mut offset: u64 = 12;
     let mut data_offset: Option<u64> = None;
     let mut declared: u32 = 0;
+    // Older recordings are mono; newer ones are stereo. Both are 16-bit.
+    let mut block_align = 2u64;
     while offset + 8 <= length {
         file.seek(SeekFrom::Start(offset))?;
         let mut chunk = [0u8; 8];
         file.read_exact(&mut chunk)?;
         let size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+        if &chunk[..4] == b"fmt " && size >= 16 {
+            let mut format = [0u8; 16];
+            file.read_exact(&mut format)?;
+            let align = u16::from_le_bytes([format[12], format[13]]) as u64;
+            if align > 0 {
+                block_align = align;
+            }
+        }
         if &chunk[..4] == b"data" {
             data_offset = Some(offset + 8);
             declared = size;
@@ -521,7 +512,6 @@ pub fn recover_partial(path: &Path) -> AppResult<u32> {
     let Some(data_offset) = data_offset else {
         return Ok(0);
     };
-    let block_align = 2u64; // mono, 16-bit
     let actual = ((length - data_offset) / block_align) * block_align;
     if actual == 0 || actual > u32::MAX as u64 {
         return Ok(0);
@@ -542,7 +532,7 @@ pub fn recover_partial(path: &Path) -> AppResult<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::pipeline::combine_sources;
+    use crate::audio::pipeline::resample_mono;
 
     #[test]
     fn meter_tracks_new_audio_and_returns_to_silence() {
@@ -568,41 +558,48 @@ mod tests {
             .collect()
     }
 
+    fn channels(path: &Path) -> (Vec<i16>, Vec<i16>) {
+        let reader = hound::WavReader::open(path).unwrap();
+        assert_eq!(reader.spec().channels, 2);
+        let samples: Vec<i16> = reader.into_samples::<i16>().collect::<Result<_, _>>().unwrap();
+        let left = samples.iter().step_by(2).copied().collect();
+        let right = samples.iter().skip(1).step_by(2).copied().collect();
+        (left, right)
+    }
+
+    fn quantise(samples: &[f32]) -> Vec<i16> {
+        samples
+            .iter()
+            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect()
+    }
+
     #[test]
-    fn streamed_chunks_write_the_same_audio_as_one_shot_mixing() {
+    fn streamed_chunks_keep_each_source_on_its_own_channel() {
         let mic = sine(44_100 * 2, 44_100, 440.0, 0.9);
         let system = sine(48_000 * 2, 48_000, 261.0, 0.9);
-        let expected = combine_sources(&mic, 44_100, &system, 48_000);
+        let expected_mic = resample_mono(&mic, 44_100, WHISPER_RATE);
+        let expected_system = resample_mono(&system, 48_000, WHISPER_RATE);
 
         let path = scratch("streamed.partial");
         let mut writer = open_writer(&path).unwrap();
-        let mut mixer = ChunkedMixer::new(44_100, true, 48_000, true);
+        let mut pair = ChunkedPair::new(44_100, true, 48_000, true);
         let mut frames = 0u64;
         for (m, s) in mic.chunks(44_100 * 5).zip(system.chunks(48_000 * 5)) {
-            let mixed = mixer.push(m, s);
-            append(&mut writer, &mixed).unwrap();
-            frames += mixed.len() as u64;
+            let (a, b) = pair.push(m, s);
+            append(&mut writer, &a, &b).unwrap();
+            frames += a.len() as u64;
             writer.flush().unwrap();
         }
-        let mixed = mixer.flush();
-        append(&mut writer, &mixed).unwrap();
-        frames += mixed.len() as u64;
+        let (a, b) = pair.flush();
+        append(&mut writer, &a, &b).unwrap();
+        frames += a.len() as u64;
         writer.finalize().unwrap();
 
-        assert_eq!(frames, expected.len() as u64);
-        let written: Vec<i16> = hound::WavReader::open(&path)
-            .unwrap()
-            .into_samples::<i16>()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(written.len(), expected.len());
-        let one_shot: Vec<i16> = expected
-            .iter()
-            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-        assert_eq!(written, one_shot);
-        // A soft limiter keeps the loud mix inside the sample range.
-        assert!(written.iter().all(|s| *s > i16::MIN && *s < i16::MAX));
+        assert_eq!(frames, expected_mic.len() as u64);
+        let (left, right) = channels(&path);
+        assert_eq!(left, quantise(&expected_mic), "the microphone is on the left");
+        assert_eq!(right, quantise(&expected_system), "system audio is on the right");
     }
 
     #[test]
@@ -610,7 +607,7 @@ mod tests {
         let path = scratch("crashed.partial");
         let mut writer = open_writer(&path).unwrap();
         let samples = sine(WHISPER_RATE as usize, WHISPER_RATE, 300.0, 0.5);
-        append(&mut writer, &samples).unwrap();
+        append(&mut writer, &samples, &samples).unwrap();
         writer.finalize().unwrap();
         // Simulate a crash: the samples reached the disk but the header still
         // claims an empty data chunk and the RIFF size was never updated.
@@ -630,12 +627,25 @@ mod tests {
             "the damaged header hides the audio"
         );
         assert_eq!(recover_partial(&path).unwrap(), samples.len() as u32);
-        let recovered: Vec<i16> = hound::WavReader::open(&path)
-            .unwrap()
-            .into_samples::<i16>()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(recovered.len(), samples.len());
+        let (left, right) = channels(&path);
+        assert_eq!(left.len(), samples.len());
+        assert_eq!(right.len(), samples.len());
+    }
+
+    #[test]
+    fn an_older_mono_partial_is_still_repaired() {
+        let path = scratch("mono.partial");
+        let spec = hound::WavSpec { channels: 1, ..wav_spec() };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for s in sine(WHISPER_RATE as usize, WHISPER_RATE, 300.0, 0.5) {
+            writer.write_sample((s * 32767.0) as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(40)).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+        drop(file);
+        assert_eq!(recover_partial(&path).unwrap(), WHISPER_RATE);
     }
 
     #[test]

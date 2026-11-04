@@ -19,6 +19,7 @@ import type {
 } from "@/lib/api";
 
 // ---- mock meeting state (browser preview only) ----
+let mockMarks = 0;
 let mockRecording = false;
 let mockRecordingKeepAudio = false;
 const cancelledTranscriptions = new Set<string>();
@@ -963,6 +964,8 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return undefined as T;
     case "get_recording_preferences": return (d.settings["recording.keep_audio"] === "true") as T;
     case "set_recording_preferences": d.settings["recording.keep_audio"] = args.keepAudio ? "true" : "false";commit();return undefined as T;
+    case "get_transcription_vocabulary": return (d.settings["transcription.vocabulary"] ?? "") as T;
+    case "set_transcription_vocabulary": d.settings["transcription.vocabulary"] = String(args.vocabulary ?? "").trim();commit();return undefined as T;
     // Retention: temporary audio is kept until the transcript is saved, so an
     // interrupted or failed transcription can always be retried.
     case "finish_recording": {
@@ -981,7 +984,53 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
     case "start_recording":
       mockRecordingKeepAudio = d.settings["recording.keep_audio"] === "true";
       mockRecording = true;
+      mockMarks = 0;
       return mockRecordingKeepAudio as T;
+    case "mark_moment":
+      if (!mockRecording) throw new Error("There is no recording to mark.");
+      mockMarks++;
+      return (mockMarks * 30_000) as T;
+    case "meeting_hud_state":
+      return { kind: "none" } as T;
+    case "live_transcript":
+      return [] as T;
+    case "live_recap":
+      return {
+        points: ["Preview: the team reviewed the recorder beta."],
+        decisions: ["Ship the beta on Friday."],
+        actions: ["You will send the release notes."],
+        open_questions: [],
+      } as T;
+    case "calendar_status":
+      return { enabled: false, access: "not_determined" } as T;
+    case "calendar_connect":
+      return { enabled: false, access: "denied" } as T;
+    case "calendar_disconnect":
+      return undefined as T;
+    case "calendar_events":
+      return [] as T;
+    case "note_templates":
+      return [
+        { id: "general", name: "General", sections: [] },
+        { id: "customer", name: "Customer call", sections: [{ heading: "Goals", hint: "" }, { heading: "Pain points", hint: "" }] },
+      ] as T;
+    case "set_meeting_template":
+      return undefined as T;
+    case "meeting_last_time":
+    case "meeting_event":
+      return null as T;
+    case "meeting_hud_respond":
+      return undefined as T;
+    case "get_meeting_automation":
+      return [
+        d.settings["recording.offer_calls"] !== "false",
+        d.settings["recording.auto_stop"] !== "false",
+      ] as T;
+    case "set_meeting_automation":
+      d.settings["recording.offer_calls"] = args.offers ? "true" : "false";
+      d.settings["recording.auto_stop"] = args.autoStop ? "true" : "false";
+      commit();
+      return undefined as T;
     case "stop_recording": {
       mockRecording = false;
       const note = await mockInvoke<{ page_id: string }>("ingest_note", {
@@ -1009,6 +1058,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         model_used: null,
         transcript_state: "pending",
         transcript_error: null,
+        stop_reason: args.stopReason ?? null,
       };
       (d.recordings ??= []).push(rec);
       previewMeetings.add(note.page_id);
@@ -1170,7 +1220,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return undefined as T;
     case "ai_end_recording": return undefined as T;
     case "meeting_ai_jobs":
-      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', sections: [{ heading: 'Recorder beta', points: ['The team agreed to ship the recorder beta by Friday.'] }, { heading: 'Scope and ownership', points: ['The team will confirm the first release scope and owners this week.'] }], open_questions: [], action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
+      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', template: 'general', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', sections: [{ heading: 'Recorder beta', points: ['The team agreed to ship the recorder beta by Friday.'] }, { heading: 'Scope and ownership', points: ['The team will confirm the first release scope and owners this week.'] }], open_questions: [], action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
     case "meeting_ai_retry":
       // Background meeting notes: worker-origin progress, so settings stay usable.
       previewProgress = { label: 'Writing meeting notes in the background', model_id: previewSelected, completed: 0, total: 100, origin: 'worker' };
