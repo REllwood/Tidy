@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { meetingNotesApi } from "@/lib/api";
+import { meetingBriefApi, meetingNotesApi } from "@/lib/api";
 import { meetingJobsKey } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
 import { flushPendingEdits } from "@/lib/pendingEdits";
@@ -33,6 +33,13 @@ export function SpeakerNamesDialog({
     queryFn: () => meetingNotesApi.speakers(pageId),
     enabled: open,
   });
+  // People invited to the meeting, offered as names to pick from.
+  const event = useQuery({
+    queryKey: ["meeting-event", pageId],
+    queryFn: () => meetingBriefApi.event(pageId),
+    enabled: open,
+  });
+  const invited = (event.data?.attendees ?? []).filter((a) => !a.includes("@"));
   const [names, setNames] = useState<Record<string, string>>({});
   useEffect(() => {
     if (open) setNames({});
@@ -90,6 +97,7 @@ export function SpeakerNamesDialog({
                 </span>
               )}
               <input
+                list={invited.length ? "speaker-invitees" : undefined}
                 value={names[speaker.label] ?? ""}
                 onChange={(e) =>
                   setNames((n) => ({ ...n, [speaker.label]: e.target.value }))
@@ -102,6 +110,13 @@ export function SpeakerNamesDialog({
             </label>
           ))}
         </div>
+        {invited.length > 0 && (
+          <datalist id="speaker-invitees">
+            {invited.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        )}
         {(speakers.error || save.error) && (
           <p role="alert" className="text-sm text-danger-c">
             {errorMessage(speakers.error || save.error)}

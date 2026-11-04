@@ -290,9 +290,11 @@ export function useMeetingFlow() {
       savedPage = pageId;
       patch({ savedPageId: pageId });
       const now = new Date();
+      // Named after the calendar event when there was one.
       await pagesApi.rename(
         pageId,
-        `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
+        rec.title?.trim() ||
+          `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
       );
       await qc.invalidateQueries({ queryKey: recordingHistoryKey });
       // Each side of the call is transcribed on its own, and the other side

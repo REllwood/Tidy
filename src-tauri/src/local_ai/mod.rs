@@ -504,7 +504,14 @@ pub async fn summarise(
     let state = app.state::<AiState>();
     let _op = state.begin_now("Summarising locally").await?;
     let config = db(app, read_config_mut).await?;
-    service::summarise(app, &config, transcript, &state).await
+    service::summarise(
+        app,
+        &config,
+        transcript,
+        tidy_core::store::note_templates::general(),
+        &state,
+    )
+    .await
 }
 
 #[tauri::command]

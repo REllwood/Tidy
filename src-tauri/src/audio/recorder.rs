@@ -65,6 +65,8 @@ pub struct RecordingSession {
     /// When capture began, the zero point for marked moments.
     began: Instant,
     marks: Vec<i64>,
+    /// The calendar event this recording is for, when there is one.
+    pub event: Option<tidy_core::store::recordings::MeetingEvent>,
     path: PathBuf,
     partial: PathBuf,
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
@@ -90,6 +92,8 @@ pub struct Recording {
     pub page_id: Option<String>,
     /// Moments marked while recording, in ms from the start.
     pub marks: Vec<i64>,
+    /// The meeting's title from the calendar, when the recording had an event.
+    pub title: Option<String>,
 }
 
 impl RecordingSession {
@@ -175,6 +179,7 @@ pub fn start(
         started_at,
         began: Instant::now(),
         marks: Vec::new(),
+        event: None,
         path,
         partial,
         outcome,
@@ -407,6 +412,7 @@ pub fn stop(session: &mut RecordingSession) -> AppResult<Recording> {
         started_at: session.started_at,
         page_id: None,
         marks: session.marks.clone(),
+        title: session.event.as_ref().map(|e| e.title.clone()),
     };
     session.finished = Some(recording.clone());
     Ok(recording)

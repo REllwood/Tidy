@@ -60,6 +60,8 @@ pub struct MeetingJob {
     pub client_name: Option<String>,
     pub passage_count: i64,
     pub started_at: i64,
+    /// The notes layout these notes use, chosen or picked from the title.
+    pub template: String,
 }
 
 pub fn list(conn: &Connection) -> AppResult<Vec<MeetingJob>> {
@@ -67,7 +69,8 @@ pub fn list(conn: &Connection) -> AppResult<Vec<MeetingJob>> {
         "SELECT a.page_id,p.title,a.state,a.error,a.summary,
         EXISTS(SELECT 1 FROM meeting_chunk c WHERE c.page_id=a.page_id AND c.embedding IS NOT NULL AND c.embedding_model=?1),
         client.id,client.title,(SELECT count(*) FROM meeting_chunk c WHERE c.page_id=a.page_id AND c.embedding_model=?1),
-        (SELECT min(started_at) FROM meeting WHERE page_id=a.page_id)
+        (SELECT min(started_at) FROM meeting WHERE page_id=a.page_id),
+        a.template
         FROM meeting_ai a JOIN page p ON p.id=a.page_id
         LEFT JOIN page client ON client.id=(SELECT target_page_id FROM link WHERE source_page_id=p.id AND kind='task_of' ORDER BY target_page_id LIMIT 1) AND client.deleted_at IS NULL
         WHERE p.deleted_at IS NULL
@@ -85,6 +88,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<MeetingJob>> {
             r.get::<_, Option<String>>(7)?,
             r.get::<_, i64>(8)?,
             r.get::<_, i64>(9)?,
+            r.get::<_, Option<String>>(10)?,
         ))
     })?;
     rows.map(|row| {
@@ -99,7 +103,14 @@ pub fn list(conn: &Connection) -> AppResult<Vec<MeetingJob>> {
             client_name,
             passage_count,
             started_at,
+            template,
         ) = row?;
+        let template = template
+            .as_deref()
+            .and_then(crate::store::note_templates::by_id)
+            .unwrap_or_else(|| crate::store::note_templates::choose(&title))
+            .id
+            .to_string();
         Ok(MeetingJob {
             page_id,
             title,
@@ -111,6 +122,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<MeetingJob>> {
             client_name,
             passage_count,
             started_at,
+            template,
         })
     })
     .collect()
@@ -1649,6 +1661,7 @@ mod tests {
             client_name: None,
             passage_count: 1,
             started_at,
+            template: "general".into(),
         }
     }
 

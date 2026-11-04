@@ -8,6 +8,7 @@ import type { MeetingJob } from "@/lib/localAi";
 const job = (id: string, client: string, date: string): MeetingJob => ({
   page_id: id,
   title: id,
+  template: "general",
   client_id: client,
   client_name: client,
   started_at: new Date(`${date}T12:00:00`).getTime(),

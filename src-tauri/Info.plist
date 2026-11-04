@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Tidy names recordings after the meeting on your calendar, notes who was invited, and stops a recording once the meeting ends. Nothing is uploaded.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Tidy names recordings after the meeting on your calendar, notes who was invited, and stops a recording once the meeting ends. Nothing is uploaded.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Tidy records your microphone during meetings and transcribes the audio on-device. Nothing is uploaded.</string>
   <key>NSAudioCaptureUsageDescription</key>

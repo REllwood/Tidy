@@ -251,19 +251,27 @@ pub async fn retranscribe_meeting(
   let _release=release; // Keep the processing lock until Whisper really exits, even if its caller disappears.
   let state=h.state::<Db>();
   let outcome: AppResult<ResultTranscript> = (|| {
-  let (audio,model,model_name,expected,terms)={
+  let (audio,model,model_name,expected,terms,invited)={
    let c=state.lock()?;
    let audio=checked_audio(&h,&recordings::source(&c,&id)?)?;
    let model=match model_id {Some(ref id)=>crate::whisper::models::core::path_for(&h,id)?,None=>crate::whisper::models::core::selected_path(&c,&h)?};
    let name=model.file_stem().and_then(|s|s.to_str()).unwrap_or("Whisper").to_owned();
    let expected=documents::core::get(&c,&id)?;
    let terms=recordings::vocabulary(&c,&id)?;
+   // No more voices than people invited (and the person recording).
+   let invited=recordings::event(&c,&id)?.map(|e| e.attendees.len() as i32 + 1).unwrap_or(0);
    c.execute("UPDATE meeting SET transcript_state='transcribing',transcript_error=NULL WHERE page_id=?1",[&id])?;
-   (audio,model,name,expected,terms)
+   (audio,model,name,expected,terms,invited)
   };
   let options=crate::whisper::transcribe::Options{language:lang.clone(),vocabulary:crate::whisper::transcribe::vocabulary_prompt(&terms),vad_model};
   let speaker_app=h.clone();
-  let diarizer=move |pcm:&[f32]| crate::whisper::diarize::turns(&speaker_app,pcm,count);
+  let cap=if count>0 {count} else {invited};
+  let diarizer=move |pcm:&[f32]| {
+    let turns=crate::whisper::diarize::turns(&speaker_app,pcm,if count>0 {count} else {-1})?;
+    let found:std::collections::HashSet<i32>=turns.iter().map(|t|t.speaker).collect();
+    // Fewer people were invited than voices found: split again into that many.
+    if count<=0 && cap>0 && found.len() as i32>cap { crate::whisper::diarize::turns(&speaker_app,pcm,cap) } else { Ok(turns) }
+  };
   let progress_app=h.clone();
   let segments=crate::whisper::transcribe::transcribe_recording(&model,&audio,&options,diarize.then_some(&diarizer as crate::whisper::transcribe::Diarizer<'_>),cancel.clone(),move |p| { use tauri::Emitter; let _=progress_app.emit("transcribe-progress",p); })?;
   if cancel.load(Ordering::SeqCst){return Err(AppError::Other("Transcription cancelled; saved audio and text have been kept.".into()));}

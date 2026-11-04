@@ -53,6 +53,8 @@ export interface MeetingJob {
   client_name: string | null;
   passage_count: number;
   started_at: number;
+  /** The notes layout these notes use, chosen or picked from the title. */
+  template: string;
 }
 /** transcript: an indexed passage; notes: a meeting's saved notes; page: the person's own written page. */
 export type MeetingSourceKind = "transcript" | "notes" | "page";

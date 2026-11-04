@@ -99,6 +99,19 @@ pub async fn start_recording(
     })();
     if result.is_ok() {
         listen_for_marks(&app, true);
+        // The meeting on the calendar right now, if the calendar is on: its
+        // title names the recording and its end lets Tidy stop on time.
+        let handle = app.clone();
+        let event = tauri::async_runtime::spawn_blocking(move || crate::calendar::event_now(&handle))
+            .await
+            .ok()
+            .flatten();
+        app.state::<crate::meeting_monitor::MonitorState>().0.lock().unwrap_or_else(|p| p.into_inner()).set_event(
+            event.as_ref().map(|e| crate::meeting_monitor::EventEnd { title: e.title.clone(), end_ms: e.end_ms }),
+        );
+        if let Some(session) = state.lock().as_mut() {
+            session.event = event;
+        }
     }
     if result.is_err() {
         ai.recording.store(false, Ordering::SeqCst);
@@ -131,6 +144,9 @@ fn finish(
             recording.keep_audio,
         )?;
         tidy_core::store::recordings::set_stop_details(&conn, &page, stop_reason, &recording.marks)?;
+        if let Some(event) = &session.event {
+            tidy_core::store::recordings::set_event(&conn, &page, event)?;
+        }
         Ok(page)
     })();
     match registered {

@@ -231,6 +231,8 @@ export interface Recording {
   duration_ms: number;
   /** Moments marked while recording, in ms from the start. */
   marks?: number[];
+  /** The meeting's title from the calendar, when it had an event. */
+  title?: string | null;
 }
 export interface ModelInfo {
   description: string;
@@ -472,6 +474,56 @@ export const meetingNotesApi = {
     invoke<boolean>("add_meeting_notes_to_page", { pageId }),
   nextStepsToTasks: (pageId: string, databaseId: string) =>
     invoke<TasksAdded>("meeting_next_steps_to_tasks", { pageId, databaseId }),
+};
+
+/** The calendar event a meeting was recorded for. */
+export interface MeetingEvent {
+  title: string;
+  start_ms: number;
+  end_ms: number;
+  /** The other people invited, without the person recording. */
+  attendees: string[];
+  /** The same for every meeting in a recurring series. */
+  series: string | null;
+}
+export type CalendarAccess = "granted" | "denied" | "not_determined";
+export interface CalendarStatus {
+  enabled: boolean;
+  access: CalendarAccess;
+}
+export const calendarApi = {
+  status: () => invoke<CalendarStatus>("calendar_status"),
+  /** Turns the calendar on, asking macOS for access the first time. */
+  connect: () => invoke<CalendarStatus>("calendar_connect"),
+  disconnect: () => invoke<void>("calendar_disconnect"),
+  /** Meetings from earlier today until this evening, earliest first. */
+  events: () => invoke<MeetingEvent[]>("calendar_events"),
+};
+
+export interface NotesLayout {
+  id: string;
+  name: string;
+  sections: { heading: string; hint: string }[];
+}
+/** What earlier meetings like this one decided and left open. */
+export interface LastTime {
+  meetings: { page_id: string; title: string; started_at: number }[];
+  points: string[];
+  open_actions: string[];
+}
+export const meetingBriefApi = {
+  layouts: () => invoke<NotesLayout[]>("note_templates"),
+  /** Rewrites the meeting's notes with another layout. */
+  setLayout: (pageId: string, template: string) =>
+    invoke<void>("set_meeting_template", { pageId, template }),
+  lastTime: (title: string, series?: string | null, client?: string | null) =>
+    invoke<LastTime | null>("meeting_last_time", {
+      title,
+      series: series ?? undefined,
+      client: client || undefined,
+    }),
+  event: (pageId: string) =>
+    invoke<MeetingEvent | null>("meeting_event", { pageId }),
 };
 
 export const recordingHistoryApi = {

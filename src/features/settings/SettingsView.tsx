@@ -1,5 +1,6 @@
 import { UpdateSettings } from "@/features/updates/UpdateProvider";
 import { RecordingSettings } from "./RecordingSettings";
+import { CalendarSettings } from "./CalendarSettings";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, Circle, RefreshCw, Lock } from "lucide-react";
@@ -62,6 +63,7 @@ export function SettingsView() {
         </Section>
 
         <Section title="Recording"><RecordingSettings /></Section>
+        <Section title="Calendar"><CalendarSettings /></Section>
 
         <Section
           title="Transcription models"

@@ -9,8 +9,10 @@ pub mod pages;
 pub mod search;
 
 pub mod meeting_ai;
+pub mod meeting_brief;
 pub mod meeting_notes;
 pub mod meeting_question;
+pub mod note_templates;
 pub mod page_index;
 
 pub mod recordings;

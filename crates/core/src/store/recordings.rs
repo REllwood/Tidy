@@ -5,7 +5,7 @@ use crate::{
     store::{documents, pages},
 };
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 pub struct SavedMeeting {
@@ -158,6 +158,40 @@ pub fn save_result(
     Ok(applied)
 }
 
+/// The calendar event a meeting was recorded for.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MeetingEvent {
+    pub title: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    /// The other people invited, by name or email, without the person recording.
+    #[serde(default)]
+    pub attendees: Vec<String>,
+    /// The same id for every meeting in a recurring series.
+    #[serde(default)]
+    pub series: Option<String>,
+}
+
+pub fn set_event(c: &Connection, page: &str, event: &MeetingEvent) -> AppResult<()> {
+    c.execute(
+        "UPDATE meeting SET event=?2 WHERE page_id=?1",
+        params![page, serde_json::to_string(event)?],
+    )?;
+    Ok(())
+}
+
+pub fn event(c: &Connection, page: &str) -> AppResult<Option<MeetingEvent>> {
+    let raw: Option<String> = c
+        .query_row(
+            "SELECT event FROM meeting WHERE page_id=?1 ORDER BY started_at DESC LIMIT 1",
+            [page],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(raw.and_then(|r| serde_json::from_str(&r).ok()))
+}
+
 /// Record how a recording ended and the moments marked during it.
 pub fn set_stop_details(
     c: &Connection,
@@ -201,7 +235,8 @@ pub fn split_terms(text: &str) -> Vec<String> {
 }
 
 /// Names and terms Whisper should expect in this meeting: the client it is
-/// filed under, then the person's own list from Settings.
+/// filed under, the people invited to its calendar event, then the person's
+/// own list from Settings.
 pub fn vocabulary(c: &Connection, page: &str) -> AppResult<Vec<String>> {
     let mut terms = Vec::new();
     let client = c
@@ -212,6 +247,10 @@ pub fn vocabulary(c: &Connection, page: &str) -> AppResult<Vec<String>> {
         )
         .optional()?;
     terms.extend(client.filter(|t| !t.trim().is_empty()));
+    if let Some(event) = event(c, page)? {
+        // Email addresses are not words anyone says.
+        terms.extend(event.attendees.into_iter().filter(|a| !a.contains('@')));
+    }
     terms.extend(split_terms(&crate::db::get_setting(c, VOCABULARY)?.unwrap_or_default()));
     Ok(terms)
 }
@@ -270,6 +309,23 @@ mod tests {
         set_stop_details(&c, &page, Some("  "), &[]).unwrap();
         assert!(list(&c).unwrap()[0].stop_reason.is_none());
         assert!(marks(&c, &page).unwrap().is_empty());
+    }
+    #[test]
+    fn a_meetings_calendar_event_is_kept_and_its_people_are_heard() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let page = register(&c, "/recordings/a.wav", 1000, 42, "Acme").unwrap();
+        assert!(event(&c, &page).unwrap().is_none());
+        let invite = MeetingEvent {
+            title: "Acme weekly".into(),
+            start_ms: 0,
+            end_ms: 1_800_000,
+            attendees: vec!["Priya Shah".into(), "jo@acme.test".into()],
+            series: Some("series-1".into()),
+        };
+        set_event(&c, &page, &invite).unwrap();
+        assert_eq!(event(&c, &page).unwrap(), Some(invite));
+        assert_eq!(vocabulary(&c, &page).unwrap(), vec!["Acme", "Priya Shah"]);
     }
     #[test]
     fn whisper_hears_the_client_and_the_persons_own_terms() {

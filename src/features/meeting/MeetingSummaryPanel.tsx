@@ -11,6 +11,7 @@ import {
 } from "@/lib/localAi";
 import {
   databasesApi,
+  meetingBriefApi,
   meetingNotesApi,
   recordingHistoryApi,
   recordingHistoryKey,
@@ -111,8 +112,24 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
     onError: (error) =>
       toast.error(`Couldn't add the next steps. ${errorMessage(error)}`),
   });
+  const layouts = useQuery({
+    queryKey: ["note-layouts"],
+    queryFn: meetingBriefApi.layouts,
+    enabled: isMeeting,
+    staleTime: Infinity,
+  });
+  const relayout = useMutation({
+    mutationFn: (template: string) => meetingBriefApi.setLayout(pageId, template),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: meetingJobsKey });
+      void qc.invalidateQueries({ queryKey: aiStatusKey });
+    },
+    onError: (error) =>
+      toast.error(`Couldn't rewrite the notes. ${errorMessage(error)}`),
+  });
   const job = data?.find((j) => j.page_id === pageId);
   if (!job) return null;
+  const layout = layouts.data?.find((l) => l.id === job.template);
   const busy = ["summarising", "indexing"].includes(job.state);
   return (
     <section
@@ -120,7 +137,14 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
       aria-label="Generated meeting summary"
     >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Meeting notes</h2>
+        <h2 className="text-sm font-semibold">
+          Meeting notes
+          {layout && layout.id !== "general" && (
+            <span className="ml-2 font-normal text-text-faint">
+              {layout.name} layout
+            </span>
+          )}
+        </h2>
         <button
           className="text-xs text-brand hover:underline"
           onClick={() => setPane({ kind: "ask" })}
@@ -227,6 +251,41 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
                   Create a table for tasks first.
                 </p>
               )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        {!!layouts.data?.length && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={
+                relayout.isPending ||
+                busy ||
+                job.state === "queued" ||
+                !status.data?.ready
+              }
+              render={<Button variant="ghost" size="sm" />}
+            >
+              {relayout.isPending && <Loader2 className="size-3 animate-spin" />}
+              Rewrite notes as
+              <ChevronDown className="size-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              {layouts.data.map((l) => (
+                <DropdownMenuItem
+                  key={l.id}
+                  disabled={l.id === job.template}
+                  onClick={() => relayout.mutate(l.id)}
+                >
+                  <span className="flex flex-col">
+                    <span>{l.name}</span>
+                    <span className="text-xs text-text-faint">
+                      {l.sections.length
+                        ? l.sections.map((s) => s.heading).join(", ")
+                        : "Topics chosen from the discussion"}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

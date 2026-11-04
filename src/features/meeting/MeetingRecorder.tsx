@@ -39,6 +39,7 @@ import {
 } from "./recorderPresentation";
 
 import { AudioLevelMeter } from "./AudioLevelMeter";
+import { MeetingNow } from "./MeetingNow";
 import { clientOptions } from "./meetingLibrary";
 
 function mmss(ms: number) {
@@ -93,6 +94,7 @@ export function MeetingRecorder() {
         </p>
         {(state.phase === "idle" || state.phase === "starting") && (
           <div className="workspace-panel p-6 sm:p-7">
+            <MeetingNow client={state.client} />
             <SourceRow
               icon={<Mic className="size-4" />}
               name="Microphone"
