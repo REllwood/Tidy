@@ -116,7 +116,8 @@ pub fn last_time(
     let all = candidates(conn, before)?;
     let base = base_title(title);
     let client = client.map(str::trim).filter(|c| !c.is_empty());
-    let tiers: [Box<dyn Fn(&Candidate) -> bool>; 3] = [
+    type Tier<'a> = Box<dyn Fn(&Candidate) -> bool + 'a>;
+    let tiers: [Tier; 3] = [
         Box::new(|c| series.is_some() && c.series.as_deref() == series),
         Box::new(|c| !base.is_empty() && base_title(&c.title) == base),
         Box::new(|c| client.is_some_and(|name| c.client.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(name)))),

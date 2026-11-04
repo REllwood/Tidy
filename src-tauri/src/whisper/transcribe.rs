@@ -318,7 +318,7 @@ pub fn transcribe_recording(
         let segments = decode_pcm(&ctx, &pcm, options, cancel.clone(), move |p| {
             report(base + p / parts);
         })?;
-        let segments = assemble::keep_spoken(segments, &pcm);
+        let segments = assemble::fit_to_speech(assemble::keep_spoken(segments, &pcm), &pcm);
         decoded.push((source, segments, pcm));
     }
     // The other side's voice coming back through the speakers is not the
@@ -503,6 +503,50 @@ mod tests {
         .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
     }
+    #[test]
+    #[ignore = "requires TIDY_WHISPER_MODEL and TIDY_TRANSCRIPTION_FIXTURE"]
+    fn real_calls_label_each_side_and_drop_echo() {
+        let model = std::path::PathBuf::from(std::env::var("TIDY_WHISPER_MODEL").unwrap());
+        let speech = load_pcm_16k_mono(std::path::Path::new(&std::env::var("TIDY_TRANSCRIPTION_FIXTURE").unwrap())).unwrap();
+        let half = speech.len() / 2;
+        let silence = |n: usize| vec![0.0f32; n];
+        let quieter = |pcm: &[f32]| pcm.iter().map(|s| s * 0.3).collect::<Vec<_>>();
+        let run = |left: Vec<f32>, right: Vec<f32>| {
+            let path = fixture("call.wav");
+            stereo(&path, &left, &right);
+            let options = Options { language: "en".into(), ..Options::default() };
+            let lines = transcribe_recording(&model, &path, &options, None, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+            for l in &lines {
+                eprintln!("{:>6} {:?}: {}", l.start_ms, l.speaker, l.text);
+            }
+            eprintln!("--");
+            lines
+        };
+
+        // A call: the person recording speaks first, then the other side.
+        let mut left = speech[..half].to_vec();
+        left.extend(silence(speech.len() - half));
+        let mut right = silence(half);
+        right.extend_from_slice(&speech[half..]);
+        let call = run(left, right);
+        assert!(call.iter().any(|l| l.speaker.as_deref() == Some("You")), "{call:?}");
+        assert!(call.iter().any(|l| l.speaker.as_deref() == Some("Others")), "{call:?}");
+        // Their first line starts where they start speaking, after the person recording.
+        let first_other = call.iter().position(|l| l.speaker.as_deref() == Some("Others")).unwrap();
+        assert!(call[..first_other].iter().all(|l| l.speaker.as_deref() == Some("You")));
+        assert!(call[first_other].start_ms >= (half as i64 * 1000 / 16_000) - 300, "{call:?}");
+
+        // A room: only the microphone heard anything, so nobody is "You".
+        let room = run(speech.clone(), silence(speech.len()));
+        assert!(!room.is_empty());
+        assert!(room.iter().all(|l| l.speaker.is_none()), "{room:?}");
+
+        // Their voice leaking quietly into the microphone is not the person speaking.
+        let echo = run(quieter(&speech), speech.clone());
+        assert!(!echo.is_empty());
+        assert!(echo.iter().all(|l| l.speaker.as_deref() == Some("Others")), "{echo:?}");
+    }
+
     #[test]
     #[ignore = "requires TIDY_WHISPER_MODEL and TIDY_TRANSCRIPTION_FIXTURE"]
     fn real_saved_audio_can_be_transcribed_twice() {

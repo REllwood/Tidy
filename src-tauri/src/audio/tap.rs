@@ -5,7 +5,6 @@
 //! The tap is wrapped in a private aggregate device holding only the tap, as
 //! adding the output device as well doubles the audio.
 
-use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
@@ -248,6 +247,7 @@ pub fn start_tap(buf: Arc<Mutex<Vec<f32>>>) -> AppResult<TapCapture> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::c_void;
 
     fn list(buffers: &mut [Vec<f32>], channels: u32) -> Vec<u8> {
         // An AudioBufferList with room for every buffer, laid out as Core Audio does.

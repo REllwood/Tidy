@@ -153,6 +153,36 @@ pub fn keep_spoken(segments: Vec<TranscriptSegment>, pcm: &[f32]) -> Vec<Transcr
         .collect()
 }
 
+/// Whisper often starts a line at the beginning of its window when the words
+/// come later, for example after the other side has been talking. Move each
+/// line's start and end in to where its channel actually has speech, so the
+/// two sides merge in the right order.
+pub fn fit_to_speech(segments: Vec<TranscriptSegment>, pcm: &[f32]) -> Vec<TranscriptSegment> {
+    let rate = WHISPER_RATE as i64;
+    segments
+        .into_iter()
+        .map(|mut seg| {
+            let from = ((seg.start_ms.max(0) * rate / 1000) as usize).min(pcm.len());
+            let to = ((seg.end_ms.max(0) * rate / 1000) as usize).min(pcm.len());
+            if from >= to {
+                return seg;
+            }
+            let voiced: Vec<usize> = pcm[from..to]
+                .chunks(FRAME)
+                .enumerate()
+                .filter(|(_, f)| frame_rms(f) >= VOICED_RMS)
+                .map(|(i, _)| i)
+                .collect();
+            if let (Some(first), Some(last)) = (voiced.first(), voiced.last()) {
+                let ms = |samples: usize| samples as i64 * 1000 / rate;
+                seg.start_ms = ms(from + first * FRAME);
+                seg.end_ms = ms((from + (last + 1) * FRAME).min(to)).max(seg.start_ms);
+            }
+            seg
+        })
+        .collect()
+}
+
 /// Longest common subsequence of two word lists.
 fn common_words(a: &[String], b: &[String]) -> usize {
     if a.is_empty() || b.is_empty() {
@@ -326,6 +356,19 @@ mod tests {
         );
         assert_eq!(kept.len(), 1, "{kept:?}");
         assert_eq!(kept[0].text, "We moved the launch to the 28th.");
+    }
+
+    #[test]
+    fn lines_start_where_their_channel_has_speech() {
+        let mut pcm = vec![0.0; WHISPER_RATE as usize * 6];
+        pcm.extend(tone(4.0, 0.1));
+        // Whisper said the line ran from the start of its window.
+        let fitted = fit_to_speech(vec![seg(0, 10_000, "The account owner by Friday.")], &pcm);
+        assert!((fitted[0].start_ms - 6_000).abs() <= 30, "{}", fitted[0].start_ms);
+        assert!((fitted[0].end_ms - 10_000).abs() <= 30, "{}", fitted[0].end_ms);
+        // A line with no speech under it is left as it was.
+        let kept = fit_to_speech(vec![seg(0, 2_000, "x")], &pcm);
+        assert_eq!(kept[0].start_ms, 0);
     }
 
     #[test]

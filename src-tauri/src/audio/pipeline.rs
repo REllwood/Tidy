@@ -145,6 +145,7 @@ pub fn soft_limit(sample: f32) -> f32 {
 
 /// Mix two mono streams (already at the same rate). Pads the shorter with
 /// silence and limits peaks so the mix stays inside the sample range.
+#[cfg(test)]
 pub fn mix_mono(a: &[f32], b: &[f32]) -> Vec<f32> {
     let n = a.len().max(b.len());
     (0..n)
