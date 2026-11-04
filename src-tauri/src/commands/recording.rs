@@ -71,6 +71,7 @@ pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
     db: State<'_, Db>,
+    language: Option<String>,
 ) -> AppResult<bool> {
     use std::sync::atomic::Ordering;
     let ai = app.state::<crate::local_ai::AiState>();
@@ -94,7 +95,12 @@ pub async fn start_recording(
             }));
         }
         drop(conn);
-        *guard = Some(recorder::start(app.clone(), model_path, keep_audio)?);
+        *guard = Some(recorder::start(
+            app.clone(),
+            model_path,
+            keep_audio,
+            language.unwrap_or_else(|| "en".into()),
+        )?);
         Ok(keep_audio)
     })();
     if result.is_ok() {
@@ -115,6 +121,10 @@ pub async fn start_recording(
     }
     if result.is_err() {
         ai.recording.store(false, Ordering::SeqCst);
+    } else {
+        // Questions the person asks can run during the call; background
+        // processing stays paused until it ends.
+        ai.live.store(true, Ordering::SeqCst);
     }
     result
 }
@@ -181,9 +191,9 @@ pub async fn stop_recording(
         // Keep `is_recording` true so the user can press Stop again.
         *state.lock() = Some(session);
     }
-    app.state::<crate::local_ai::AiState>()
-        .recording
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let ai = app.state::<crate::local_ai::AiState>();
+    ai.live.store(false, std::sync::atomic::Ordering::SeqCst);
+    ai.recording.store(false, std::sync::atomic::Ordering::SeqCst);
     if result.is_ok() {
         let handle = app.clone();
         if let Err(error) =
@@ -213,10 +223,24 @@ pub fn finish_on_exit(app: &AppHandle) -> AppResult<()> {
     if let Some(session) = kept {
         *app.state::<RecorderState>().lock() = Some(session);
     }
-    app.state::<crate::local_ai::AiState>()
-        .recording
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let ai = app.state::<crate::local_ai::AiState>();
+    ai.live.store(false, std::sync::atomic::Ordering::SeqCst);
+    ai.recording.store(false, std::sync::atomic::Ordering::SeqCst);
     result.map(|_| ())
+}
+
+/// The live transcript of the recording running now.
+pub fn live_lines(app: &AppHandle) -> Vec<crate::audio::live::LiveLine> {
+    app.state::<RecorderState>()
+        .lock()
+        .as_ref()
+        .map(|s| s.live_lines())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn live_transcript(app: AppHandle) -> Vec<crate::audio::live::LiveLine> {
+    live_lines(&app)
 }
 
 #[tauri::command]

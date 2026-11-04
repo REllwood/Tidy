@@ -11,7 +11,7 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -19,14 +19,13 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use super::pipeline::{mix_mono, rms, ChunkedPair, WHISPER_RATE};
+use super::pipeline::{rms, ChunkedPair, WHISPER_RATE};
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 
-/// How often captured audio is mixed and appended to the file on disk.
-const CHUNK: Duration = Duration::from_secs(5);
-/// The rolling window kept in memory for the live-transcription preview.
-const PREVIEW_SAMPLES: usize = WHISPER_RATE as usize * 15;
+/// How often captured audio is appended to the file on disk and handed to
+/// the live transcript.
+const CHUNK: Duration = Duration::from_secs(2);
 /// How long `start` waits for both capture sources to be attempted.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a tap may deliver nothing but silence before the recorder hints
@@ -72,6 +71,8 @@ pub struct RecordingSession {
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
     handle: Option<JoinHandle<()>>,
     live_handle: Option<JoinHandle<()>>,
+    /// The live transcript so far.
+    lines: Arc<Mutex<Vec<super::live::LiveLine>>>,
     finished: Option<Recording>,
 }
 
@@ -107,12 +108,18 @@ impl RecordingSession {
     pub fn marks(&self) -> &[i64] {
         &self.marks
     }
+
+    /// The live transcript so far, in the order lines finished.
+    pub fn live_lines(&self) -> Vec<super::live::LiveLine> {
+        self.lines.lock().map(|l| l.clone()).unwrap_or_default()
+    }
 }
 
 pub fn start(
     app: AppHandle,
     model_path: Option<PathBuf>,
     keep_audio: bool,
+    language: String,
 ) -> AppResult<RecordingSession> {
     let started_at = now_ms();
     LAST_VOICE_MS.store(started_at, Ordering::Relaxed);
@@ -126,9 +133,11 @@ pub fn start(
     let partial = path.with_extension("partial");
 
     let stop = Arc::new(AtomicBool::new(false));
-    let preview = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let generation = Arc::new(AtomicU64::new(0));
     let outcome = Arc::new(Mutex::new(None));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    // Each chunk is also handed to the live transcript, when there is a model.
+    let (live_tx, live_rx) = std::sync::mpsc::channel::<(Vec<f32>, Vec<f32>)>();
+    let live_tx = model_path.is_some().then_some(live_tx);
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(bool, bool), String>>();
     let thread = Capture {
@@ -137,8 +146,7 @@ pub fn start(
         mic_buf: Arc::new(Mutex::new(Vec::new())),
         sys_buf: Arc::new(Mutex::new(Vec::new())),
         mic_rate: Arc::new(AtomicU32::new(WHISPER_RATE)),
-        preview: preview.clone(),
-        generation: generation.clone(),
+        live: live_tx,
         partial: partial.clone(),
         outcome: outcome.clone(),
     };
@@ -160,17 +168,10 @@ pub fn start(
         return Err(AppError::Other(message));
     }
 
-    // Optional live-transcription preview: re-transcribe a rolling window while
-    // recording. The final saved transcript still comes from the recorded file
-    // — this is a real-time preview only.
+    // The live transcript, line by line. The saved transcript still comes
+    // from the recorded file once it stops.
     let live_handle = model_path.map(|mp| {
-        spawn_live_transcription(
-            app.clone(),
-            stop.clone(),
-            preview.clone(),
-            generation.clone(),
-            mp,
-        )
+        super::live::spawn(app.clone(), stop.clone(), live_rx, lines.clone(), mp, language)
     });
 
     Ok(RecordingSession {
@@ -185,6 +186,7 @@ pub fn start(
         outcome,
         handle: Some(handle),
         live_handle,
+        lines,
         finished: None,
     })
 }
@@ -195,8 +197,7 @@ struct Capture {
     mic_buf: Arc<Mutex<Vec<f32>>>,
     sys_buf: Arc<Mutex<Vec<f32>>>,
     mic_rate: Arc<AtomicU32>,
-    preview: Arc<Mutex<Vec<f32>>>,
-    generation: Arc<AtomicU64>,
+    live: Option<std::sync::mpsc::Sender<(Vec<f32>, Vec<f32>)>>,
     partial: PathBuf,
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
 }
@@ -348,16 +349,9 @@ impl Capture {
         if mic.is_empty() {
             return;
         }
-        // The live preview listens to both sides at once.
-        let mixed = mix_mono(mic, system);
-        if let Ok(mut preview) = self.preview.lock() {
-            preview.extend_from_slice(&mixed);
-            let len = preview.len();
-            if len > PREVIEW_SAMPLES {
-                preview.drain(..len - PREVIEW_SAMPLES);
-            }
+        if let Some(live) = &self.live {
+            let _ = live.send((mic.to_vec(), system.to_vec()));
         }
-        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -416,84 +410,6 @@ pub fn stop(session: &mut RecordingSession) -> AppResult<Recording> {
     };
     session.finished = Some(recording.clone());
     Ok(recording)
-}
-
-/// Background worker: every few seconds, transcribe the last ~15s of mixed
-/// audio and emit it as a live preview. Loads the Whisper model once and reuses
-/// the state across windows.
-fn spawn_live_transcription(
-    app: AppHandle,
-    stop: Arc<AtomicBool>,
-    preview: Arc<Mutex<Vec<f32>>>,
-    generation: Arc<AtomicU64>,
-    model_path: PathBuf,
-) -> JoinHandle<()> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
-    const STEP: Duration = Duration::from_millis(500);
-    const SILENCE_RMS: f32 = 0.005;
-
-    std::thread::spawn(move || {
-        let ctx =
-            match WhisperContext::new_with_params(&model_path, WhisperContextParameters::default())
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("live transcription disabled (model load failed): {e}");
-                    return;
-                }
-            };
-        let mut state = match ctx.create_state() {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("live transcription disabled (state failed): {e}");
-                return;
-            }
-        };
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4);
-        let mut seen = generation.load(Ordering::Relaxed);
-
-        while !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(STEP);
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            // Only re-decode once the capture thread has mixed more audio.
-            let current = generation.load(Ordering::Relaxed);
-            if current == seen {
-                continue;
-            }
-            seen = current;
-            let window = match preview.lock() {
-                Ok(samples) => samples.clone(),
-                Err(_) => break,
-            };
-            if window.is_empty() || rms(&window) < SILENCE_RMS {
-                continue; // skip silent windows (cheap VAD gate)
-            }
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(threads.min(4));
-            params.set_translate(false);
-            params.set_language(Some("en"));
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            if state.full(params, &window).is_ok() {
-                let text = state
-                    .as_iter()
-                    .filter_map(|s| s.to_str_lossy().ok().map(|c| c.to_string()))
-                    .collect::<Vec<_>>()
-                    .join("")
-                    .trim()
-                    .to_string();
-                if !text.is_empty() {
-                    let _ = app.emit("live-transcript", text);
-                }
-            }
-        }
-    })
 }
 
 fn tail_rms(buf: &Arc<Mutex<Vec<f32>>>, last: &mut usize) -> f32 {

@@ -10,6 +10,8 @@ import {
   recordingHistoryKey,
   pagesApi,
   meetingHudApi,
+  liveApi,
+  type LiveLine,
   type MeetingHud,
 } from "@/lib/api";
 import { localAi } from "@/lib/localAi";
@@ -40,7 +42,8 @@ export interface MeetingState {
   sources: { mic: boolean; system: boolean };
   transcribeProgress: number;
   ollamaUsed: boolean;
-  liveTranscript: string;
+  /** The live transcript so far, line by line. */
+  liveLines: LiveLine[];
   savedPageId: string | null;
   client: string;
   error: string | null;
@@ -64,7 +67,7 @@ const initial: MeetingState = {
   sources: { mic: true, system: true },
   transcribeProgress: 0,
   ollamaUsed: false,
-  liveTranscript: "",
+  liveLines: [],
   savedPageId: null,
   client: "",
   error: null,
@@ -150,8 +153,8 @@ export function useMeetingFlow() {
       ),
     );
     unlisten.current.push(
-      await listen<string>("live-transcript", (e) =>
-        patch({ liveTranscript: e.payload }),
+      await listen<LiveLine>("live-line", (e) =>
+        setState((s) => ({ ...s, liveLines: [...s.liveLines, e.payload] })),
       ),
     );
     unlisten.current.push(
@@ -196,7 +199,7 @@ export function useMeetingFlow() {
     const run = async () => {
       try {
         await subscribe();
-        const keepAudio = await recordingApi.start();
+        const keepAudio = await recordingApi.start(languageRef.current);
         if (attempt !== generation.current) {
           // Cancelled while starting: tear the native recorder back down.
           await recordingApi.stop(clientRef.current).catch(() => undefined);
@@ -247,6 +250,9 @@ export function useMeetingFlow() {
         resumed: true,
       }));
       await subscribe();
+      // Pick up the live transcript written before the reload.
+      const liveLines = await liveApi.transcript().catch(() => []);
+      setState((s) => ({ ...s, liveLines }));
       if (!isTauri()) startMockMeters();
     } catch (e) {
       console.error("could not reconnect to the running recording", e);

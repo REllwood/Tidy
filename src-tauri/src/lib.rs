@@ -212,6 +212,8 @@ pub fn run() {
             commands::recording_preferences::set_recording_preferences,
             commands::recording_preferences::get_transcription_vocabulary,
             commands::recording::mark_moment,
+            commands::recording::live_transcript,
+            local_ai::live_recap,
             meeting_monitor::meeting_hud_state,
             meeting_monitor::meeting_hud_respond,
             meeting_monitor::get_meeting_automation,

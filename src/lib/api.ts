@@ -265,8 +265,27 @@ export interface MeetingSummary {
   times?: Record<string, string>;
 }
 
+/** One line of the live transcript shown while recording. */
+export interface LiveLine {
+  source: "mic" | "system";
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+/** "Recap so far" during a recording. */
+export interface LiveRecap {
+  points: string[];
+  decisions: string[];
+  actions: string[];
+  open_questions: string[];
+}
+export const liveApi = {
+  transcript: () => invoke<LiveLine[]>("live_transcript"),
+  recap: () => invoke<LiveRecap>("live_recap"),
+};
+
 export const recordingApi = {
-  start: () => invoke<boolean>("start_recording"),
+  start: (language = "en") => invoke<boolean>("start_recording", { language }),
   /** `stopReason` is set when Tidy stopped the recording itself. */
   stop: (client = "", stopReason?: string) =>
     invoke<Recording>("stop_recording", { client, stopReason }),

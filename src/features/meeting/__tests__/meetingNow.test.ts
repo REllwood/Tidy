@@ -27,3 +27,16 @@ describe("pickEvent", () => {
     expect(pickEvent([], 0)).toBeNull();
   });
 });
+
+import { liveSpeaker } from "../LivePanel";
+import type { LiveLine } from "@/lib/api";
+
+describe("liveSpeaker", () => {
+  const line = (source: LiveLine["source"]): LiveLine => ({ source, start_ms: 0, end_ms: 1, text: "hi" });
+  it("labels each side of a call and nobody in a room", () => {
+    const call = [line("mic"), line("system")];
+    expect(liveSpeaker(call[0], call)).toBe("You");
+    expect(liveSpeaker(call[1], call)).toBe("Others");
+    expect(liveSpeaker(line("mic"), [line("mic")])).toBeNull();
+  });
+});

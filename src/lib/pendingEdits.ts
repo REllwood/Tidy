@@ -27,6 +27,8 @@ const READ_COMMANDS = new Set([
   "meeting_ai_jobs",
   "meeting_speakers",
   "meeting_hud_state",
+  "live_transcript",
+  "live_recap",
   "note_templates",
   "meeting_last_time",
   "meeting_event",

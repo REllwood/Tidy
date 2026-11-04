@@ -40,6 +40,7 @@ import {
 
 import { AudioLevelMeter } from "./AudioLevelMeter";
 import { MeetingNow } from "./MeetingNow";
+import { LivePanel } from "./LivePanel";
 import { clientOptions } from "./meetingLibrary";
 
 function mmss(ms: number) {
@@ -295,16 +296,7 @@ export function MeetingRecorder() {
               Press Control-Option-M in any app to mark a moment. Marked moments
               are listed in the meeting notes.
             </p>
-            {state.liveTranscript && (
-              <div className="mt-5 border-t border-border pt-4">
-                <div className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-text-faint">
-                  Live preview
-                </div>
-                <p className="max-h-32 overflow-y-auto text-sm leading-relaxed text-text-muted">
-                  {state.liveTranscript}
-                </p>
-              </div>
-            )}
+            {selected && <LivePanel lines={state.liveLines} />}
           </div>
         )}
 

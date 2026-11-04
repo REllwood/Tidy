@@ -992,6 +992,15 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return (mockMarks * 30_000) as T;
     case "meeting_hud_state":
       return { kind: "none" } as T;
+    case "live_transcript":
+      return [] as T;
+    case "live_recap":
+      return {
+        points: ["Preview: the team reviewed the recorder beta."],
+        decisions: ["Ship the beta on Friday."],
+        actions: ["You will send the release notes."],
+        open_questions: [],
+      } as T;
     case "calendar_status":
       return { enabled: false, access: "not_determined" } as T;
     case "calendar_connect":
