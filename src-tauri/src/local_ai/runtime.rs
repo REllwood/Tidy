@@ -34,8 +34,11 @@ pub fn recoverable(error: &AppError) -> bool {
     [TOO_LONG, ANSWER_LIMIT, TIMED_OUT].iter().any(|m| text.contains(m))
 }
 
-/// The model's context, shared by the prompt and its answer.
-const CONTEXT: usize = 8192;
+/// The model's context, shared by the prompt and its answer: room for about
+/// half an hour of meeting, so its notes are written from all of it at once.
+/// The cache holding it is stored at 8 bits, so it takes the memory 8,192
+/// tokens did at full size.
+const CONTEXT: usize = 16384;
 /// Room always kept for the answer; a longer prompt is refused.
 const MIN_ANSWER: usize = 1024;
 /// The longest answer asked for.
@@ -209,7 +212,7 @@ impl Engine {
                 "--port",
                 &port.to_string(),
                 "--ctx-size",
-                "8192",
+                if embedding { "8192" } else { "16384" },
                 "--parallel",
                 "1",
                 "--threads",
@@ -236,6 +239,12 @@ impl Engine {
                 "--jinja",
                 "--chat-template-kwargs",
                 r#"{"enable_thinking":false}"#,
+                "--flash-attn",
+                "on",
+                "--cache-type-k",
+                "q8_0",
+                "--cache-type-v",
+                "q8_0",
             ]);
         }
         let mut child = command
@@ -356,7 +365,7 @@ impl Engine {
     ) -> AppResult<String> {
         let messages = json!([{"role":"system","content":system},{"role":"user","content":text}]);
         if self.ollama {
-            let mut body = json!({"model":self.model,"messages":messages,"stream":false,"think":false,"keep_alive":0,"options":{"num_ctx":8192,"num_predict":2000,"temperature":0}});
+            let mut body = json!({"model":self.model,"messages":messages,"stream":false,"think":false,"keep_alive":0,"options":{"num_ctx":16384,"num_predict":2000,"temperature":0}});
             if let Some(schema) = schema {
                 body["format"] = schema;
             }
@@ -471,8 +480,8 @@ mod tests {
     #[test]
     fn answers_get_the_room_the_prompt_leaves() {
         assert_eq!(answer_room(1_500), Some(MAX_ANSWER), "a usual prompt gets the full answer");
-        assert_eq!(answer_room(6_000), Some(CONTEXT - 6_000 - MARGIN));
-        assert_eq!(answer_room(7_100), None, "too little room is refused");
+        assert_eq!(answer_room(13_000), Some(CONTEXT - 13_000 - MARGIN));
+        assert_eq!(answer_room(15_300), None, "too little room is refused");
         assert_eq!(answer_room(usize::MAX - 10), None);
     }
 
