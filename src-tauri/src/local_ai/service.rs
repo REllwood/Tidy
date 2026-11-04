@@ -2580,15 +2580,19 @@ mod quality_tests {
             .iter()
             .map(|c| c.to_string())
             .collect();
-        clients.extend((clients.len()..copies).map(|i| format!("Client{i}")));
+        // Made-up place names, letters only: digits would read as numbers.
+        let starts = ["Mar", "Bel", "Cor", "Dun", "Eas", "Fern", "Glen", "Hol", "Ivy", "Jun"];
+        let ends = ["ton", "field", "wood", "vale", "bridge", "ford", "mere"];
+        clients.extend((clients.len()..copies).map(|i| format!("{}{}", starts[i % 10], ends[i / 10 % 7])));
         clients.truncate(copies.max(1));
-        let last = clients.last().cloned().unwrap_or_default();
-        let transcript = clients
+        let mut transcript = clients
             .iter()
             .enumerate()
             .map(|(i, client)| one.replace("Harbourside", client).replace("Balmain", &format!("{client} North")).replace("$2,400", &format!("${},400", i + 2)))
             .collect::<Vec<_>>()
             .join("\n");
+        // Something said only at the very end, which the notes must still hold.
+        transcript.push_str("\nSpeaker 1: [02:29:00] Before we finish, we agreed to move the board review to the ninth of December.\nSpeaker 3: [02:29:10] Kofi will book the boardroom for the board review by Monday.");
         let model = std::env::var("TIDY_AI_CHAT_MODEL").unwrap_or_else(|_| "qwen3-4b".into());
         let engine = Engine::start_builtin(None, dir.join(format!("{model}.gguf")), &model, &state).await.unwrap();
         let started = std::time::Instant::now();
@@ -2608,7 +2612,7 @@ mod quality_tests {
         assert!(notes.action_items.len() >= 8, "next steps from across the meeting");
         assert!(!notes.times.is_empty());
         let rendered = serde_json::to_string(&notes).unwrap();
-        assert!(rendered.contains(&last), "the end of the meeting is in the notes");
+        assert!(rendered.contains("Kofi") || rendered.contains("December"), "the end of the meeting is in the notes");
     }
 
     #[tokio::test]
