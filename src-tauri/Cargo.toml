@@ -1,6 +1,6 @@
 [package]
 name = "tidy"
-version = "0.4.0"
+version = "0.5.0"
 description = "Tidy, a local-first workspace with on-device meeting notes"
 authors = ["Tidy"]
 license = "AGPL-3.0-or-later"
