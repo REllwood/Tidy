@@ -17,3 +17,10 @@ reqwest = { version = "0.12", features = ["stream", "json"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread", "macros", "sync", "process", "time"] }
 futures-util = "0.3"
 tidy-core = { path = "crates/core" }
+
+# Proc macros and build scripts run on this Mac while compiling and never
+# ship, so they are left unstripped. Xcode 27's strip damages the metadata a
+# proc-macro library carries, and release builds then fail with "can't find
+# crate". The app itself is still stripped.
+[profile.release.build-override]
+strip = false
