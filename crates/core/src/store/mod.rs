@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod knowledge;
 pub mod pages;
 pub mod search;
+pub mod speaker_guess;
 
 pub mod meeting_ai;
 pub mod meeting_brief;

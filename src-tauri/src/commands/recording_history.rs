@@ -210,6 +210,9 @@ pub struct ResultTranscript {
     pub body_json: String,
     pub applied: bool,
     pub segments: Vec<crate::whisper::assemble::Labelled>,
+    /// Speakers named from the conversation itself, such as someone asked a
+    /// question by name who then answered.
+    pub named: Vec<tidy_core::store::speaker_guess::Guess>,
 }
 
 /// Transcribe a meeting's saved audio. Each side of a call is transcribed on
@@ -279,11 +282,17 @@ pub async fn retranscribe_meeting(
   let body_json=serde_json::to_string(&blocks)?;
   let c=state.lock()?;
   let applied=recordings::save_result(&c,&id,&expected,&body_json,&model_name,&lang)?;
+  // Names the conversation makes certain go in before the notes are written,
+  // so the notes say who will do what. A failure here keeps the transcript.
+  let named=if applied {
+    tidy_core::store::meeting_notes::apply_certain_names(&c,&id).unwrap_or_else(|error|{log::warn!("Speakers were not named from the conversation: {error}");Vec::new()})
+  } else { Vec::new() };
+  let body_json=if named.is_empty() {body_json} else {documents::core::get(&c,&id)?};
   if applied { use tauri::Emitter; let _=h.emit("meeting-transcript-updated",serde_json::json!({"page_id":id,"body_json":body_json})); }
   // Keep-audio-off meetings hand their temporary file back now that a
   // transcript exists. A failure above keeps the audio for another attempt.
   if let Err(error)=super::recording_preferences::discard(&c,&temporary,&id) { log::warn!("Temporary audio could not be discarded: {error}"); }
-  Ok(ResultTranscript{body_json,applied,segments})
+  Ok(ResultTranscript{body_json,applied,segments,named})
   })();
   if let Err(ref error)=outcome {
     let c=state.lock()?;

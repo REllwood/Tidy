@@ -471,14 +471,32 @@ export interface RetranscriptionResult {
   body_json: string;
   applied: boolean;
   segments: LabelledSegment[];
+  /** Speakers named from the conversation, such as someone asked by name who answered. */
+  named?: NameGuess[];
 }
 // ---- Meeting notes: speaker names, notes in the page, next steps -----------
 
+/** A name the conversation points to for a speaker label. */
+export interface NameGuess {
+  label: string;
+  name: string;
+  score: number;
+  /** The line that points to the name, as it was said. */
+  because: string;
+  /** When that line was said, in ms. */
+  at_ms: number;
+  /** Strong enough that Tidy applies it after transcription. */
+  certain: boolean;
+}
 export interface MeetingSpeaker {
   label: string;
   /** The first thing they said, to help tell who is who. */
   sample: string;
   turns: number;
+  /** A few things they said, with when. */
+  samples?: { at_ms: number; text: string }[];
+  /** A name the conversation clearly points to. */
+  suggestion?: NameGuess | null;
 }
 export interface TasksAdded {
   added: number;

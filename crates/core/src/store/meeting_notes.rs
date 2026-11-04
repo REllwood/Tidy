@@ -4,7 +4,7 @@ use crate::{
     db::new_id,
     error::{AppError, AppResult},
     llm::MeetingSummary,
-    store::{documents, ingest, meeting_ai, recordings},
+    store::{documents, ingest, meeting_ai, recordings, speaker_guess},
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -57,42 +57,114 @@ pub struct Speaker {
     /// The first thing they said, to help tell who is who.
     pub sample: String,
     pub turns: usize,
+    /// A few things they said, with when, to listen to or read.
+    pub samples: Vec<Sample>,
+    /// A name the conversation points to, when it clearly does.
+    pub suggestion: Option<speaker_guess::Guess>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+pub struct Sample {
+    pub at_ms: i64,
+    pub text: String,
+}
+
+/// The transcript as speaker turns, in order. Lines before any speaker
+/// label belong to no one and are left out.
+fn transcript_turns(blocks: &[Value]) -> Vec<speaker_guess::Turn> {
+    let labels = label_blocks(blocks);
+    let mut turns: Vec<speaker_guess::Turn> = Vec::new();
+    let mut in_transcript = false;
+    let mut current: Option<String> = None;
+    for (i, block) in blocks.iter().enumerate() {
+        if block["type"] == "heading" {
+            in_transcript = text(block).trim().eq_ignore_ascii_case("transcript");
+            continue;
+        }
+        if !in_transcript {
+            continue;
+        }
+        if let Some((_, label)) = labels.iter().find(|(at, _)| *at == i) {
+            current = Some(label.clone());
+            turns.push(speaker_guess::Turn { label: label.clone(), lines: Vec::new() });
+            continue;
+        }
+        if let (Some(_), Some((ms, said))) = (&current, stamped(&text(block))) {
+            if let Some(turn) = turns.last_mut() {
+                turn.lines.push((ms, said));
+            }
+        }
+    }
+    turns.retain(|t| !t.lines.is_empty());
+    turns
+}
+
+/// People invited to the meeting, by name, from its calendar event.
+fn invitees(conn: &Connection, page_id: &str) -> AppResult<Vec<String>> {
+    Ok(recordings::event(conn, page_id)?
+        .map(|e| e.attendees.into_iter().filter(|a| !a.contains('@')).collect())
+        .unwrap_or_default())
+}
+
+/// Names the conversation points to for the meeting's speaker labels.
+pub fn name_suggestions(conn: &Connection, page_id: &str) -> AppResult<Vec<speaker_guess::Guess>> {
+    let blocks = blocks(&documents::core::get(conn, page_id)?)?;
+    Ok(speaker_guess::guess(&transcript_turns(&blocks), &invitees(conn, page_id)?))
+}
+
+/// Give speakers the names the conversation makes certain, such as someone
+/// introducing themselves or being asked a question by name and answering,
+/// more than once. Returns the names given.
+pub fn apply_certain_names(conn: &Connection, page_id: &str) -> AppResult<Vec<speaker_guess::Guess>> {
+    let certain: Vec<speaker_guess::Guess> =
+        name_suggestions(conn, page_id)?.into_iter().filter(|g| g.certain).collect();
+    if certain.is_empty() {
+        return Ok(certain);
+    }
+    let names: Vec<SpeakerName> = certain
+        .iter()
+        .map(|g| SpeakerName { from: g.label.clone(), to: g.name.clone() })
+        .collect();
+    rename_speakers(conn, page_id, &names)?;
+    Ok(certain)
 }
 
 /// The speakers in a meeting's transcript, in the order they first speak.
 pub fn speakers(conn: &Connection, page_id: &str) -> AppResult<Vec<Speaker>> {
     let blocks = blocks(&documents::core::get(conn, page_id)?)?;
-    let labels = label_blocks(&blocks);
+    let turns = transcript_turns(&blocks);
+    let guesses = speaker_guess::guess(&turns, &invitees(conn, page_id)?);
     let mut speakers: Vec<Speaker> = Vec::new();
-    for (n, (at, label)) in labels.iter().enumerate() {
-        let end = labels.get(n + 1).map_or(blocks.len(), |(next, _)| *next);
-        let said: Vec<String> = blocks[at + 1..end]
-            .iter()
-            .take_while(|b| b["type"] != "heading")
-            .map(text)
-            .filter(|t| t.trim_start().starts_with('['))
-            .collect();
-        let speaker = match speakers.iter_mut().find(|s| &s.label == label) {
+    for turn in &turns {
+        let speaker = match speakers.iter_mut().find(|s| s.label == turn.label) {
             Some(s) => s,
             None => {
                 speakers.push(Speaker {
-                    label: label.clone(),
+                    label: turn.label.clone(),
                     sample: String::new(),
                     turns: 0,
+                    samples: Vec::new(),
+                    suggestion: guesses.iter().find(|g| g.label == turn.label).cloned(),
                 });
                 speakers.last_mut().expect("just pushed")
             }
         };
         speaker.turns += 1;
-        if speaker.sample.is_empty() {
-            if let Some(first) = said.first() {
-                let line = first
-                    .split_once(']')
-                    .map_or(first.as_str(), |(_, rest)| rest)
-                    .trim();
-                speaker.sample = line.chars().take(140).collect();
-            }
-        }
+        speaker.samples.extend(
+            turn.lines
+                .iter()
+                .map(|(at_ms, said)| Sample { at_ms: *at_ms, text: said.chars().take(140).collect() }),
+        );
+    }
+    for speaker in &mut speakers {
+        speaker.sample = speaker.samples.first().map(|s| s.text.clone()).unwrap_or_default();
+        // The first thing they said, then their two longest lines, in order.
+        let first = speaker.samples.first().cloned();
+        let mut longest: Vec<Sample> = speaker.samples.iter().skip(1).cloned().collect();
+        longest.sort_by_key(|s| std::cmp::Reverse(s.text.len()));
+        let mut picked: Vec<Sample> = first.into_iter().chain(longest.into_iter().take(2)).collect();
+        picked.sort_by_key(|s| s.at_ms);
+        speaker.samples = picked;
     }
     Ok(speakers)
 }
@@ -488,6 +560,39 @@ mod tests {
             sections: vec![SummarySection { heading: "Handover".into(), points: vec!["Speaker 1 opened the planning.".into()] }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn names_the_conversation_makes_clear_are_given_and_others_suggested() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let page = pages::core::create(&c, None, "Launch".into(), "doc".into()).unwrap();
+        documents::core::update(&c, &page.id, r#"[
+            {"type":"heading","props":{"level":2},"content":"Transcript"},
+            {"type":"paragraph","content":"Speaker 1"},
+            {"type":"paragraph","content":"[00:00:01] Let's look at the launch. What do you think, Tom?"},
+            {"type":"paragraph","content":"Speaker 2"},
+            {"type":"paragraph","content":"[00:00:05] I'd move it to the 28th."},
+            {"type":"paragraph","content":"Speaker 1"},
+            {"type":"paragraph","content":"[00:00:09] Thanks, Tom. Mia, can you send the timeline?"},
+            {"type":"paragraph","content":"Speaker 3"},
+            {"type":"paragraph","content":"[00:00:12] Yes, by Friday."}
+        ]"#).unwrap();
+        c.execute("INSERT INTO meeting(id,page_id,started_at) VALUES('m2',?1,1000)", [&page.id]).unwrap();
+
+        let found = speakers(&c, &page.id).unwrap();
+        let tom = found.iter().find(|s| s.label == "Speaker 2").unwrap();
+        assert_eq!(tom.suggestion.as_ref().map(|g| g.name.as_str()), Some("Tom"));
+        assert_eq!(tom.samples[0], Sample { at_ms: 5_000, text: "I'd move it to the 28th.".into() });
+
+        let given = apply_certain_names(&c, &page.id).unwrap();
+        assert_eq!(given.iter().map(|g| (g.label.as_str(), g.name.as_str())).collect::<Vec<_>>(), vec![("Speaker 2", "Tom")]);
+        let body = documents::core::get(&c, &page.id).unwrap();
+        assert!(body.contains(r#""content":"Tom""#), "{body}");
+        // Mia was only asked once, so she stays a suggestion.
+        assert!(body.contains("Speaker 3"));
+        let left = name_suggestions(&c, &page.id).unwrap();
+        assert_eq!(left.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), vec!["Mia"]);
     }
 
     #[test]

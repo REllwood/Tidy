@@ -130,6 +130,14 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
       toast.error(`Couldn't rewrite the notes. ${errorMessage(error)}`),
   });
   const play = usePlayback((s) => s.play);
+  // Names the conversation points to that have not been given yet.
+  const speakers = useQuery({
+    queryKey: ["meeting-speakers", pageId],
+    queryFn: () => meetingNotesApi.speakers(pageId),
+    enabled: isMeeting,
+    staleTime: 60_000,
+  });
+  const suggested = (speakers.data ?? []).filter((s) => s.suggestion);
   const recording = (history.data as SavedRecording[] | undefined)?.find(
     (r) => r.page_id === pageId,
   );
@@ -203,6 +211,20 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
             original transcript.
           </p>
         </div>
+      )}
+      {suggested.length > 0 && (
+        <p className="mt-4 flex flex-wrap items-center gap-2 rounded-lg bg-bg-subtle px-3 py-2 text-sm text-text-muted">
+          <span className="flex-1">
+            From the conversation,{" "}
+            {suggested
+              .map((s) => `${s.label} sounds like ${s.suggestion?.name}`)
+              .join(", ")}
+            .
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setNaming(true)}>
+            Review names
+          </Button>
+        </p>
       )}
       <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
         <Button
@@ -310,6 +332,7 @@ export function MeetingSummaryPanel({ pageId }: { pageId: string }) {
         pageId={pageId}
         open={naming}
         onOpenChange={setNaming}
+        audioAvailable={audioAvailable}
       />
     </section>
   );

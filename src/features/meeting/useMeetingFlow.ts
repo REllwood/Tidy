@@ -80,6 +80,16 @@ const initial: MeetingState = {
 
 const quiet = { mic: 0, system: 0 };
 
+/** "Named Speaker 2 as Tom from the conversation." */
+export function namedMessage(named: { label: string; name: string }[]): string {
+  const parts = named.map((n) => `${n.label} as ${n.name}`);
+  const list =
+    parts.length > 1
+      ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+      : parts[0];
+  return `Named ${list} from the conversation.`;
+}
+
 /** Releasing the AI gate is best effort: it must never mask the real failure. */
 async function releaseAiGate() {
   try {
@@ -305,12 +315,16 @@ export function useMeetingFlow() {
       await qc.invalidateQueries({ queryKey: recordingHistoryKey });
       // Each side of the call is transcribed on its own, and the other side
       // split into speakers when that is switched on.
-      await recordingHistoryApi.transcribe(
+      const result = await recordingHistoryApi.transcribe(
         pageId,
         undefined,
         languageRef.current,
         diarizeEnabled,
       );
+      if (result.named?.length)
+        toast.success(namedMessage(result.named), {
+          description: "Change them any time with Name speakers.",
+        });
       patch({ transcribeProgress: 100, phase: "saving" });
       patch({ phase: "done", savedPageId: pageId });
       // Only now is the transcript safe, so temporary audio may be cleared.
