@@ -51,14 +51,32 @@ pub(crate) fn load_pcm_16k_mono(path: &Path) -> AppResult<Vec<f32>> {
 
 /// Load each channel of a WAV file separately at 16 kHz. New recordings hold
 /// the microphone on the first channel and system audio on the second.
+///
+/// Samples go straight into their channel, and a 16 kHz recording is not
+/// copied again, so a long meeting needs memory for one copy of its audio.
 pub(crate) fn load_channels_16k(path: &Path) -> AppResult<Vec<Vec<f32>>> {
-    let (spec, samples) = read_samples(path)?;
+    let reader =
+        hound::WavReader::open(path).map_err(|e| AppError::Other(format!("open wav: {e}")))?;
+    let spec = reader.spec();
     let count = (spec.channels as usize).max(1);
-    Ok((0..count)
-        .map(|c| {
-            let channel: Vec<f32> = samples.iter().skip(c).step_by(count).copied().collect();
-            resample_mono(&channel, spec.sample_rate, WHISPER_RATE)
-        })
+    let frames = reader.duration() as usize;
+    let mut channels: Vec<Vec<f32>> = (0..count).map(|_| Vec::with_capacity(frames)).collect();
+    let read = |e: hound::Error| AppError::Other(format!("Read recording: {e}"));
+    match spec.sample_format {
+        hound::SampleFormat::Int => {
+            for (i, sample) in reader.into_samples::<i16>().enumerate() {
+                channels[i % count].push(sample.map_err(read)? as f32 / 32768.0);
+            }
+        }
+        hound::SampleFormat::Float => {
+            for (i, sample) in reader.into_samples::<f32>().enumerate() {
+                channels[i % count].push(sample.map_err(read)?);
+            }
+        }
+    }
+    Ok(channels
+        .into_iter()
+        .map(|c| if spec.sample_rate == WHISPER_RATE { c } else { resample_mono(&c, spec.sample_rate, WHISPER_RATE) })
         .collect())
 }
 

@@ -21,12 +21,53 @@ pub fn too_long(error: &AppError) -> bool {
     error.to_string().contains(TOO_LONG)
 }
 
+/// What `chat` reports when the answer filled all the room it had.
+pub const ANSWER_LIMIT: &str = "The model reached its answer limit. Try a more focused question.";
+/// What a request reports when the model took longer than allowed.
+pub const TIMED_OUT: &str = "The local model took too long to answer. Try again, or choose a smaller model in Settings.";
+
+/// A failure that a smaller piece of the same work may avoid: the input or
+/// answer did not fit, or the model ran out of time. Long meetings split
+/// their work and carry on when they see one of these.
+pub fn recoverable(error: &AppError) -> bool {
+    let text = error.to_string();
+    [TOO_LONG, ANSWER_LIMIT, TIMED_OUT].iter().any(|m| text.contains(m))
+}
+
+/// The model's context, shared by the prompt and its answer.
+const CONTEXT: usize = 8192;
+/// Room always kept for the answer; a longer prompt is refused.
+const MIN_ANSWER: usize = 1024;
+/// The longest answer asked for.
+const MAX_ANSWER: usize = 4096;
+/// Tokens the chat template and response format add to the prompt.
+const MARGIN: usize = 160;
+
+/// How many tokens an answer may use after a prompt of `prompt` tokens, or
+/// None when the prompt leaves too little room.
+fn answer_room(prompt: usize) -> Option<usize> {
+    CONTEXT
+        .checked_sub(prompt.saturating_add(MARGIN))
+        .filter(|room| *room >= MIN_ANSWER)
+        .map(|room| room.min(MAX_ANSWER))
+}
+
+/// How long a request may take. Writing notes for a long meeting on a large
+/// model can take minutes, so model answers get much longer than the rest.
+fn request_timeout(path: &str) -> Duration {
+    if path.contains("chat") {
+        Duration::from_secs(15 * 60)
+    } else {
+        Duration::from_secs(120)
+    }
+}
+
 pub fn client() -> AppResult<reqwest::Client> {
     reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(15 * 60))
         .build()
         .map_err(|e| AppError::Other(e.to_string()))
 }
@@ -288,13 +329,21 @@ impl Engine {
             .client
             .post(format!("{}{path}", self.base))
             .bearer_auth(&self.key)
+            .timeout(request_timeout(path))
             .json(&body);
+        let failed = |what: &str, e: reqwest::Error| {
+            if e.is_timeout() {
+                AppError::Other(TIMED_OUT.into())
+            } else {
+                AppError::Other(format!("{what}: {e}"))
+            }
+        };
         tokio::select! {
             _=state.cancelled()=>Err(AppError::Other("AI processing cancelled".into())),
             result=async {
-                let response=request.send().await.map_err(|e|AppError::Other(format!("Local AI connection: {e}")))?;
+                let response=request.send().await.map_err(|e|failed("Local AI connection",e))?;
                 if !response.status().is_success(){return Err(AppError::Other(format!("Local AI request failed ({}). Check the model and available memory.",response.status())));}
-                response.json().await.map_err(|e|AppError::Other(format!("Local AI response: {e}")))
+                response.json().await.map_err(|e|failed("Local AI response",e))
             }=>result
         }
     }
@@ -312,6 +361,9 @@ impl Engine {
                 body["format"] = schema;
             }
             let value = self.post("/api/chat", body, state).await?;
+            if value["done_reason"] == "length" {
+                return Err(AppError::Other(ANSWER_LIMIT.into()));
+            }
             return value["message"]["content"]
                 .as_str()
                 .filter(|s| !s.trim().is_empty())
@@ -325,18 +377,19 @@ impl Engine {
                 state,
             )
             .await?;
-        if tokens["tokens"].as_array().map_or(true, |t| t.len() > 5800) {
+        let prompt = tokens["tokens"].as_array().map_or(usize::MAX, |t| t.len());
+        // The answer gets whatever room the prompt leaves, so a long piece of
+        // transcript with a lot to say doesn't run out of space.
+        let Some(room) = answer_room(prompt) else {
             return Err(AppError::Invalid(TOO_LONG.into()));
-        }
-        let mut body = json!({"model":self.model,"messages":messages,"stream":false,"max_tokens":2000,"temperature":0,"chat_template_kwargs":{"enable_thinking":false}});
+        };
+        let mut body = json!({"model":self.model,"messages":messages,"stream":false,"max_tokens":room,"temperature":0,"chat_template_kwargs":{"enable_thinking":false}});
         if let Some(schema) = schema {
             body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"result","strict":true,"schema":schema}});
         }
         let value = self.post("/v1/chat/completions", body, state).await?;
         if value["choices"][0]["finish_reason"] == "length" {
-            return Err(AppError::Other(
-                "The model reached its answer limit. Try a more focused question.".into(),
-            ));
+            return Err(AppError::Other(ANSWER_LIMIT.into()));
         }
         value["choices"][0]["message"]["content"]
             .as_str()
@@ -414,6 +467,23 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_get_the_room_the_prompt_leaves() {
+        assert_eq!(answer_room(1_500), Some(MAX_ANSWER), "a usual prompt gets the full answer");
+        assert_eq!(answer_room(6_000), Some(CONTEXT - 6_000 - MARGIN));
+        assert_eq!(answer_room(7_100), None, "too little room is refused");
+        assert_eq!(answer_room(usize::MAX - 10), None);
+    }
+
+    #[test]
+    fn length_and_time_failures_can_be_recovered_from() {
+        assert!(recoverable(&AppError::Invalid(TOO_LONG.into())));
+        assert!(recoverable(&AppError::Other(ANSWER_LIMIT.into())));
+        assert!(recoverable(&AppError::Other(TIMED_OUT.into())));
+        assert!(!recoverable(&AppError::Other("AI processing cancelled".into())));
+        assert!(request_timeout("/v1/chat/completions") > request_timeout("/tokenize"));
+    }
     #[tokio::test]
     #[ignore = "requires TIDY_AI_MODEL_DIR with the pinned model downloads"]
     async fn real_runtime_roundtrip_and_cancellation() {
