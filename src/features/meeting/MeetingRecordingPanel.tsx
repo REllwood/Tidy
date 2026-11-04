@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useUi } from "@/store/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2 } from "lucide-react";
@@ -104,6 +105,7 @@ export function MeetingRecordingPanel({
           pageId,
           model || undefined,
           language,
+          useUi.getState().diarizeEnabled,
         );
         if (mounted.current) onResult(result);
         return result;

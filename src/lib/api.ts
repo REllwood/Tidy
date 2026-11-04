@@ -411,10 +411,14 @@ export interface TranscriptVersion {
   body_json: string;
   reason: string;
 }
+/** A transcript line, with its speaker when it is known ("You", "Speaker 1"). */
+export interface LabelledSegment extends TranscriptSegment {
+  speaker?: string;
+}
 export interface RetranscriptionResult {
   body_json: string;
   applied: boolean;
-  segments: TranscriptSegment[];
+  segments: LabelledSegment[];
 }
 // ---- Meeting notes: speaker names, notes in the page, next steps -----------
 
@@ -445,11 +449,23 @@ export const recordingHistoryApi = {
   list: () => invoke<SavedRecording[]>("recording_history"),
   versions: (pageId: string) =>
     invoke<TranscriptVersion[]>("transcript_versions", { pageId }),
-  transcribe: (pageId: string, modelId?: string, language = "en") =>
+  /**
+   * Transcribe a meeting's saved audio. With `speakers` on, the other side of
+   * a call is also split into speakers (the speaker models must be installed).
+   */
+  transcribe: (
+    pageId: string,
+    modelId?: string,
+    language = "en",
+    speakers = false,
+    speakerCount?: number,
+  ) =>
     invoke<RetranscriptionResult>("retranscribe_meeting", {
       pageId,
       modelId,
       language,
+      speakers,
+      speakerCount,
     }),
   cancel: (pageId: string) => invoke<void>("cancel_transcription", { pageId }),
   /** Deletes the audio file for a meeting, keeping every saved transcript. */
@@ -462,6 +478,10 @@ export const recordingPreferencesApi = {
   set: (keepAudio: boolean) => invoke<void>("set_recording_preferences", {keepAudio}),
   /** Safe to call at any time: temporary audio is only discarded once the transcript is saved. */
   finish: (pageId: string) => invoke<void>("finish_recording", {pageId}),
+  /** Names and terms Whisper should expect, separated by commas or new lines. */
+  vocabulary: () => invoke<string>("get_transcription_vocabulary"),
+  setVocabulary: (vocabulary: string) =>
+    invoke<void>("set_transcription_vocabulary", { vocabulary }),
 };
 
 export const recordingHistoryKey = ["recording-history"];

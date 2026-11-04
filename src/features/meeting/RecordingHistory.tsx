@@ -67,7 +67,12 @@ export function RecordingHistory() {
 
   const transcribe = useMutation({
     mutationFn: (pageId: string) =>
-      recordingHistoryApi.transcribe(pageId, model || undefined, language),
+      recordingHistoryApi.transcribe(
+        pageId,
+        model || undefined,
+        language,
+        useUi.getState().diarizeEnabled,
+      ),
     onSettled: (_data, _error, pageId) => {
       setPending(null);
       invalidateMeetingQueries(qc, pageId);

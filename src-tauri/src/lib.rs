@@ -189,6 +189,8 @@ pub fn run() {
             commands::updates::install_app_update,
             commands::recording_preferences::get_recording_preferences,
             commands::recording_preferences::set_recording_preferences,
+            commands::recording_preferences::get_transcription_vocabulary,
+            commands::recording_preferences::set_transcription_vocabulary,
             commands::recording_preferences::finish_recording,
             commands::recording_preferences::discard_recording_audio,
             commands::recording::start_recording,

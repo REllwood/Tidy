@@ -209,15 +209,20 @@ pub fn cancel_transcription(app: AppHandle, page_id: String) -> AppResult<()> {
 pub struct ResultTranscript {
     pub body_json: String,
     pub applied: bool,
-    pub segments: Vec<crate::whisper::transcribe::TranscriptSegment>,
+    pub segments: Vec<crate::whisper::assemble::Labelled>,
 }
 
+/// Transcribe a meeting's saved audio. Each side of a call is transcribed on
+/// its own; with `speakers` on, the other side is also split into speakers.
+/// `speaker_count` caps how many, when the meeting's attendees are known.
 #[tauri::command]
 pub async fn retranscribe_meeting(
     app: AppHandle,
     page_id: String,
     model_id: Option<String>,
     language: Option<String>,
+    speakers: Option<bool>,
+    speaker_count: Option<i32>,
 ) -> AppResult<ResultTranscript> {
     let lang = language.unwrap_or_else(|| "en".into());
     if !["en", "auto"].contains(&lang.as_str()) {
@@ -236,6 +241,9 @@ pub async fn retranscribe_meeting(
     // Register cancellation before waiting for another AI operation to stop.
     // The release guard also handles the caller disappearing during that wait.
     app.state::<AiState>().wait_until_idle().await;
+    let vad_model = crate::whisper::vad::ensure(&app).await;
+    let diarize = speakers.unwrap_or(false) && crate::whisper::diarize::models_present(&app);
+    let count = speaker_count.unwrap_or(0);
     let h = app.clone();
     let id = page_id.clone();
     let temporary = crate::audio::recorder::app_recordings_dir(&app)?.join("temporary");
@@ -243,19 +251,23 @@ pub async fn retranscribe_meeting(
   let _release=release; // Keep the processing lock until Whisper really exits, even if its caller disappears.
   let state=h.state::<Db>();
   let outcome: AppResult<ResultTranscript> = (|| {
-  let (audio,model,model_name,expected)={
+  let (audio,model,model_name,expected,terms)={
    let c=state.lock()?;
    let audio=checked_audio(&h,&recordings::source(&c,&id)?)?;
    let model=match model_id {Some(ref id)=>crate::whisper::models::core::path_for(&h,id)?,None=>crate::whisper::models::core::selected_path(&c,&h)?};
    let name=model.file_stem().and_then(|s|s.to_str()).unwrap_or("Whisper").to_owned();
    let expected=documents::core::get(&c,&id)?;
+   let terms=recordings::vocabulary(&c,&id)?;
    c.execute("UPDATE meeting SET transcript_state='transcribing',transcript_error=NULL WHERE page_id=?1",[&id])?;
-   (audio,model,name,expected)
+   (audio,model,name,expected,terms)
   };
-  let segments=crate::whisper::transcribe::run(&h,&model,&audio,&lang,cancel.clone())?;
+  let options=crate::whisper::transcribe::Options{language:lang.clone(),vocabulary:crate::whisper::transcribe::vocabulary_prompt(&terms),vad_model};
+  let speaker_app=h.clone();
+  let diarizer=move |pcm:&[f32]| crate::whisper::diarize::turns(&speaker_app,pcm,count);
+  let progress_app=h.clone();
+  let segments=crate::whisper::transcribe::transcribe_recording(&model,&audio,&options,diarize.then_some(&diarizer as crate::whisper::transcribe::Diarizer<'_>),cancel.clone(),move |p| { use tauri::Emitter; let _=progress_app.emit("transcribe-progress",p); })?;
   if cancel.load(Ordering::SeqCst){return Err(AppError::Other("Transcription cancelled; saved audio and text have been kept.".into()));}
-  let mut blocks=vec![serde_json::json!({"type":"heading","props":{"level":2},"content":"Transcript"})];
-  for s in &segments {let seconds=s.start_ms.max(0)/1000; blocks.push(serde_json::json!({"type":"paragraph","content":format!("[{:02}:{:02}:{:02}] {}",seconds/3600,(seconds/60)%60,seconds%60,s.text)}));}
+  let blocks=crate::whisper::assemble::transcript_blocks(&segments);
   let body_json=serde_json::to_string(&blocks)?;
   let c=state.lock()?;
   let applied=recordings::save_result(&c,&id,&expected,&body_json,&model_name,&lang)?;

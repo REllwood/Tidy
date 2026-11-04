@@ -8,9 +8,7 @@ import {
   recordingHistoryApi,
   recordingPreferencesApi,
   recordingHistoryKey,
-  diarizeApi,
   pagesApi,
-  documentsApi,
 } from "@/lib/api";
 import { localAi } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
@@ -21,11 +19,6 @@ import {
   writeTranscriptionLanguage,
   type TranscriptionLanguage,
 } from "./transcriptionLanguage";
-import {
-  buildMeetingBlocks,
-  assignSpeakers,
-  type LabeledSegment,
-} from "./meetingDoc";
 
 export type MeetingPhase =
   | "idle"
@@ -263,39 +256,15 @@ export function useMeetingFlow() {
         `Meeting ${now.toLocaleDateString("en-AU")} ${now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`,
       );
       await qc.invalidateQueries({ queryKey: recordingHistoryKey });
-      const result = await recordingHistoryApi.transcribe(
+      // Each side of the call is transcribed on its own, and the other side
+      // split into speakers when that is switched on.
+      await recordingHistoryApi.transcribe(
         pageId,
         undefined,
         languageRef.current,
+        diarizeEnabled,
       );
-      const segments = result.segments;
-      const bodyJson = result.body_json;
       patch({ transcribeProgress: 100, phase: "saving" });
-
-      // Speaker diarization (optional; native-only, models must be installed).
-      let labeled: LabeledSegment[] = segments;
-      if (diarizeEnabled) {
-        try {
-          if (await diarizeApi.available()) {
-            const speakers = await diarizeApi.run(rec.audio_path);
-            labeled = assignSpeakers(segments, speakers);
-          }
-        } catch (e) {
-          console.error("diarization failed", e);
-        }
-      }
-
-      if (result.applied && labeled !== segments) {
-        const applied = await documentsApi.updateIfUnchanged(
-          pageId,
-          bodyJson,
-          JSON.stringify(buildMeetingBlocks(labeled, null, false)),
-        );
-        if (!applied)
-          toast.warning(
-            "Speaker labels could not be applied because the page changed",
-          );
-      }
       patch({ phase: "done", savedPageId: pageId });
       // Only now is the transcript safe, so temporary audio may be cleared.
       // A failure here is reported without pulling the flow out of "done".

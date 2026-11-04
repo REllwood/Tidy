@@ -155,6 +155,33 @@ pub fn save_result(
     Ok(applied)
 }
 
+/// The setting holding the person's own list of names and terms for Whisper.
+pub const VOCABULARY: &str = "transcription.vocabulary";
+
+/// Split a typed list of terms on commas, semicolons and new lines.
+pub fn split_terms(text: &str) -> Vec<String> {
+    text.split([',', ';', '\n'])
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Names and terms Whisper should expect in this meeting: the client it is
+/// filed under, then the person's own list from Settings.
+pub fn vocabulary(c: &Connection, page: &str) -> AppResult<Vec<String>> {
+    let mut terms = Vec::new();
+    let client = c
+        .query_row(
+            "SELECT p.title FROM page m JOIN page p ON p.id = m.parent_id WHERE m.id = ?1 AND p.deleted_at IS NULL",
+            [page],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    terms.extend(client.filter(|t| !t.trim().is_empty()));
+    terms.extend(split_terms(&crate::db::get_setting(c, VOCABULARY)?.unwrap_or_default()));
+    Ok(terms)
+}
+
 pub fn source(c: &Connection, page: &str) -> AppResult<String> {
     c.query_row(
         "SELECT audio_path FROM meeting WHERE page_id=?1 ORDER BY started_at DESC LIMIT 1",
@@ -195,6 +222,20 @@ mod tests {
         assert!(!save_result(&c, &page, revised, "[]", "medium", "en").unwrap());
         assert_eq!(documents::core::get(&c, &page).unwrap(), original);
         assert_eq!(versions(&c, &page).unwrap().len(), 4);
+    }
+    #[test]
+    fn whisper_hears_the_client_and_the_persons_own_terms() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let page = register(&c, "/recordings/a.wav", 1000, 42, "Harbourside Dental").unwrap();
+        assert_eq!(vocabulary(&c, &page).unwrap(), vec!["Harbourside Dental"]);
+        crate::db::set_setting(&c, VOCABULARY, "Cliniko, HotDoc;\nDr Chen\n").unwrap();
+        assert_eq!(
+            vocabulary(&c, &page).unwrap(),
+            vec!["Harbourside Dental", "Cliniko", "HotDoc", "Dr Chen"]
+        );
+        let unfiled = register(&c, "/recordings/b.wav", 1000, 43, "").unwrap();
+        assert_eq!(vocabulary(&c, &unfiled).unwrap(), vec!["Cliniko", "HotDoc", "Dr Chen"]);
     }
     #[test]
     fn invalid_result_does_not_change_saved_text_or_source() {

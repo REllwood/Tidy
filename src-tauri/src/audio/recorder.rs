@@ -5,6 +5,9 @@
 //! Audio is streamed to a `.partial` WAV as it arrives rather than held in
 //! memory until Stop, so a long meeting costs a bounded amount of RAM and a
 //! crash leaves a recoverable file behind.
+//!
+//! The file is stereo: the microphone on the left channel and system audio on
+//! the right, so each side of a call can be transcribed separately.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -16,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use super::pipeline::{rms, ChunkedMixer, WHISPER_RATE};
+use super::pipeline::{mix_mono, rms, ChunkedPair, WHISPER_RATE};
 use super::system::SYSTEM_RATE;
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
@@ -201,7 +204,7 @@ impl Capture {
             serde_json::json!({ "mic": mic.is_some(), "system": system.is_some() }),
         );
 
-        let mut mixer = ChunkedMixer::new(
+        let mut pair = ChunkedPair::new(
             self.mic_rate.load(Ordering::Relaxed),
             mic.is_some(),
             SYSTEM_RATE,
@@ -238,13 +241,13 @@ impl Capture {
             last_mic = 0;
             last_sys = 0;
             let (mic_raw, sys_raw) = self.drain();
-            let mixed = mixer.push(&mic_raw, &sys_raw);
-            if let Err(e) = append(&mut writer, &mixed) {
+            let (mic16, sys16) = pair.push(&mic_raw, &sys_raw);
+            if let Err(e) = append(&mut writer, &mic16, &sys16) {
                 error = Some(e.to_string());
                 break;
             }
-            frames += mixed.len() as u64;
-            self.remember(&mixed);
+            frames += mic16.len() as u64;
+            self.remember(&mic16, &sys16);
             // Checkpoint the header so a crash still leaves a readable file.
             if let Err(e) = writer.flush() {
                 log::warn!("recording checkpoint: {e}");
@@ -256,12 +259,14 @@ impl Capture {
         drop(system);
         if error.is_none() {
             let (mic_raw, sys_raw) = self.drain();
-            let mut mixed = mixer.push(&mic_raw, &sys_raw);
-            mixed.extend(mixer.flush());
-            match append(&mut writer, &mixed) {
+            let (mut mic16, mut sys16) = pair.push(&mic_raw, &sys_raw);
+            let (mic_rest, sys_rest) = pair.flush();
+            mic16.extend(mic_rest);
+            sys16.extend(sys_rest);
+            match append(&mut writer, &mic16, &sys16) {
                 Ok(()) => {
-                    frames += mixed.len() as u64;
-                    self.remember(&mixed);
+                    frames += mic16.len() as u64;
+                    self.remember(&mic16, &sys16);
                 }
                 Err(e) => error = Some(e.to_string()),
             }
@@ -288,12 +293,14 @@ impl Capture {
         (mic, system)
     }
 
-    fn remember(&self, mixed: &[f32]) {
-        if mixed.is_empty() {
+    fn remember(&self, mic: &[f32], system: &[f32]) {
+        if mic.is_empty() {
             return;
         }
+        // The live preview listens to both sides at once.
+        let mixed = mix_mono(mic, system);
         if let Ok(mut preview) = self.preview.lock() {
-            preview.extend_from_slice(mixed);
+            preview.extend_from_slice(&mixed);
             let len = preview.len();
             if len > PREVIEW_SAMPLES {
                 preview.drain(..len - PREVIEW_SAMPLES);
@@ -460,9 +467,10 @@ pub fn app_recordings_dir(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(dir.join("recordings"))
 }
 
+/// Left: microphone. Right: system audio.
 fn wav_spec() -> hound::WavSpec {
     hound::WavSpec {
-        channels: 1,
+        channels: 2,
         sample_rate: WHISPER_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
@@ -476,12 +484,16 @@ fn open_writer(path: &Path) -> AppResult<Writer> {
         .map_err(|e| AppError::Other(format!("wav create: {e}")))
 }
 
-fn append(writer: &mut Writer, samples: &[f32]) -> AppResult<()> {
-    for s in samples {
-        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-        writer
-            .write_sample(v)
-            .map_err(|e| AppError::Other(format!("wav write: {e}")))?;
+/// Write the two channels as interleaved frames. They always have the same
+/// length: the pair pads a missing source with silence.
+fn append(writer: &mut Writer, mic: &[f32], system: &[f32]) -> AppResult<()> {
+    for (m, s) in mic.iter().zip(system) {
+        for sample in [m, s] {
+            let v = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+            writer
+                .write_sample(v)
+                .map_err(|e| AppError::Other(format!("wav write: {e}")))?;
+        }
     }
     Ok(())
 }
@@ -502,15 +514,25 @@ pub fn recover_partial(path: &Path) -> AppResult<u32> {
     }
     let riff_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 
-    // Walk the chunk list to find where the samples start.
+    // Walk the chunk list to find the format and where the samples start.
     let mut offset: u64 = 12;
     let mut data_offset: Option<u64> = None;
     let mut declared: u32 = 0;
+    // Older recordings are mono; newer ones are stereo. Both are 16-bit.
+    let mut block_align = 2u64;
     while offset + 8 <= length {
         file.seek(SeekFrom::Start(offset))?;
         let mut chunk = [0u8; 8];
         file.read_exact(&mut chunk)?;
         let size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+        if &chunk[..4] == b"fmt " && size >= 16 {
+            let mut format = [0u8; 16];
+            file.read_exact(&mut format)?;
+            let align = u16::from_le_bytes([format[12], format[13]]) as u64;
+            if align > 0 {
+                block_align = align;
+            }
+        }
         if &chunk[..4] == b"data" {
             data_offset = Some(offset + 8);
             declared = size;
@@ -521,7 +543,6 @@ pub fn recover_partial(path: &Path) -> AppResult<u32> {
     let Some(data_offset) = data_offset else {
         return Ok(0);
     };
-    let block_align = 2u64; // mono, 16-bit
     let actual = ((length - data_offset) / block_align) * block_align;
     if actual == 0 || actual > u32::MAX as u64 {
         return Ok(0);
@@ -542,7 +563,7 @@ pub fn recover_partial(path: &Path) -> AppResult<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::pipeline::combine_sources;
+    use crate::audio::pipeline::resample_mono;
 
     #[test]
     fn meter_tracks_new_audio_and_returns_to_silence() {
@@ -568,41 +589,48 @@ mod tests {
             .collect()
     }
 
+    fn channels(path: &Path) -> (Vec<i16>, Vec<i16>) {
+        let reader = hound::WavReader::open(path).unwrap();
+        assert_eq!(reader.spec().channels, 2);
+        let samples: Vec<i16> = reader.into_samples::<i16>().collect::<Result<_, _>>().unwrap();
+        let left = samples.iter().step_by(2).copied().collect();
+        let right = samples.iter().skip(1).step_by(2).copied().collect();
+        (left, right)
+    }
+
+    fn quantise(samples: &[f32]) -> Vec<i16> {
+        samples
+            .iter()
+            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect()
+    }
+
     #[test]
-    fn streamed_chunks_write_the_same_audio_as_one_shot_mixing() {
+    fn streamed_chunks_keep_each_source_on_its_own_channel() {
         let mic = sine(44_100 * 2, 44_100, 440.0, 0.9);
         let system = sine(48_000 * 2, 48_000, 261.0, 0.9);
-        let expected = combine_sources(&mic, 44_100, &system, 48_000);
+        let expected_mic = resample_mono(&mic, 44_100, WHISPER_RATE);
+        let expected_system = resample_mono(&system, 48_000, WHISPER_RATE);
 
         let path = scratch("streamed.partial");
         let mut writer = open_writer(&path).unwrap();
-        let mut mixer = ChunkedMixer::new(44_100, true, 48_000, true);
+        let mut pair = ChunkedPair::new(44_100, true, 48_000, true);
         let mut frames = 0u64;
         for (m, s) in mic.chunks(44_100 * 5).zip(system.chunks(48_000 * 5)) {
-            let mixed = mixer.push(m, s);
-            append(&mut writer, &mixed).unwrap();
-            frames += mixed.len() as u64;
+            let (a, b) = pair.push(m, s);
+            append(&mut writer, &a, &b).unwrap();
+            frames += a.len() as u64;
             writer.flush().unwrap();
         }
-        let mixed = mixer.flush();
-        append(&mut writer, &mixed).unwrap();
-        frames += mixed.len() as u64;
+        let (a, b) = pair.flush();
+        append(&mut writer, &a, &b).unwrap();
+        frames += a.len() as u64;
         writer.finalize().unwrap();
 
-        assert_eq!(frames, expected.len() as u64);
-        let written: Vec<i16> = hound::WavReader::open(&path)
-            .unwrap()
-            .into_samples::<i16>()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(written.len(), expected.len());
-        let one_shot: Vec<i16> = expected
-            .iter()
-            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-        assert_eq!(written, one_shot);
-        // A soft limiter keeps the loud mix inside the sample range.
-        assert!(written.iter().all(|s| *s > i16::MIN && *s < i16::MAX));
+        assert_eq!(frames, expected_mic.len() as u64);
+        let (left, right) = channels(&path);
+        assert_eq!(left, quantise(&expected_mic), "the microphone is on the left");
+        assert_eq!(right, quantise(&expected_system), "system audio is on the right");
     }
 
     #[test]
@@ -610,7 +638,7 @@ mod tests {
         let path = scratch("crashed.partial");
         let mut writer = open_writer(&path).unwrap();
         let samples = sine(WHISPER_RATE as usize, WHISPER_RATE, 300.0, 0.5);
-        append(&mut writer, &samples).unwrap();
+        append(&mut writer, &samples, &samples).unwrap();
         writer.finalize().unwrap();
         // Simulate a crash: the samples reached the disk but the header still
         // claims an empty data chunk and the RIFF size was never updated.
@@ -630,12 +658,25 @@ mod tests {
             "the damaged header hides the audio"
         );
         assert_eq!(recover_partial(&path).unwrap(), samples.len() as u32);
-        let recovered: Vec<i16> = hound::WavReader::open(&path)
-            .unwrap()
-            .into_samples::<i16>()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(recovered.len(), samples.len());
+        let (left, right) = channels(&path);
+        assert_eq!(left.len(), samples.len());
+        assert_eq!(right.len(), samples.len());
+    }
+
+    #[test]
+    fn an_older_mono_partial_is_still_repaired() {
+        let path = scratch("mono.partial");
+        let spec = hound::WavSpec { channels: 1, ..wav_spec() };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for s in sine(WHISPER_RATE as usize, WHISPER_RATE, 300.0, 0.5) {
+            writer.write_sample((s * 32767.0) as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(40)).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+        drop(file);
+        assert_eq!(recover_partial(&path).unwrap(), WHISPER_RATE);
     }
 
     #[test]

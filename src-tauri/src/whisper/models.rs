@@ -355,6 +355,9 @@ pub async fn download_model(app: AppHandle, db: State<'_, Db>, id: String) -> Ap
             core::select(&conn, &id)?;
         }
     }
+    // Fetch Whisper's small voice activity model now, while online, so the
+    // first transcription does not have to.
+    let _ = crate::whisper::vad::ensure(&app).await;
     Ok(())
 }
 

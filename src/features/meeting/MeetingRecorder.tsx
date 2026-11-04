@@ -353,7 +353,12 @@ function RecorderError() {
           unlisten = await listen<number>("transcribe-progress", (e) => {
             if (mounted.current) setProgress(e.payload);
           });
-        return await recordingHistoryApi.transcribe(pageId, undefined, language);
+        return await recordingHistoryApi.transcribe(
+          pageId,
+          undefined,
+          language,
+          useUi.getState().diarizeEnabled,
+        );
       } finally {
         unlisten?.();
         invalidateMeetingQueries(qc, pageId);

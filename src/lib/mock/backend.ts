@@ -963,6 +963,8 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return undefined as T;
     case "get_recording_preferences": return (d.settings["recording.keep_audio"] === "true") as T;
     case "set_recording_preferences": d.settings["recording.keep_audio"] = args.keepAudio ? "true" : "false";commit();return undefined as T;
+    case "get_transcription_vocabulary": return (d.settings["transcription.vocabulary"] ?? "") as T;
+    case "set_transcription_vocabulary": d.settings["transcription.vocabulary"] = String(args.vocabulary ?? "").trim();commit();return undefined as T;
     // Retention: temporary audio is kept until the transcript is saved, so an
     // interrupted or failed transcription can always be retried.
     case "finish_recording": {
