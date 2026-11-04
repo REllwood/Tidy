@@ -268,13 +268,8 @@ pub async fn retranscribe_meeting(
   };
   let options=crate::whisper::transcribe::Options{language:lang.clone(),vocabulary:crate::whisper::transcribe::vocabulary_prompt(&terms),vad_model};
   let speaker_app=h.clone();
-  let cap=if count>0 {count} else {invited};
-  let diarizer=move |pcm:&[f32]| {
-    let turns=crate::whisper::diarize::turns(&speaker_app,pcm,if count>0 {count} else {-1})?;
-    let found:std::collections::HashSet<i32>=turns.iter().map(|t|t.speaker).collect();
-    // Fewer people were invited than voices found: split again into that many.
-    if count<=0 && cap>0 && found.len() as i32>cap { crate::whisper::diarize::turns(&speaker_app,pcm,cap) } else { Ok(turns) }
-  };
+  // Voices that sound like one person are joined, and never more voices than people invited.
+  let diarizer=move |pcm:&[f32]| crate::whisper::diarize::turns(&speaker_app,pcm,count,invited);
   let progress_app=h.clone();
   let segments=crate::whisper::transcribe::transcribe_recording(&model,&audio,&options,diarize.then_some(&diarizer as crate::whisper::transcribe::Diarizer<'_>),cancel.clone(),move |p| { use tauri::Emitter; let _=progress_app.emit("transcribe-progress",p); })?;
   if cancel.load(Ordering::SeqCst){return Err(AppError::Other("Transcription cancelled; saved audio and text have been kept.".into()));}

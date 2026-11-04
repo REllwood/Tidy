@@ -4,7 +4,7 @@
 
 <p align="center">
   Notes, tasks and meeting transcripts on your Mac.<br />
-  Record meetings and ask questions across each client's meeting history.
+  Record calls, get checked notes and ask questions across each client's meetings.
 </p>
 
 <p align="center">
@@ -14,59 +14,67 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/tour.gif" alt="Tidy v0.2.1: home, planner, tables, meeting notes and client meeting search" width="1000" />
+  <img src="docs/screenshots/tour.gif" alt="Tidy: home, planner, tables, meeting notes and client meeting search" width="1000" />
 </p>
 
-*Captured from the v0.2.1 browser preview with synthetic sample data. Recording, model setup and AI answers in these demonstrations are simulated; timings do not represent desktop performance. [Still images and capture details](docs/screenshots/README.md).*
+*Captured from an earlier browser preview with made-up sample data. Recording, model setup and AI answers in these demonstrations are simulated, and timings do not represent desktop performance. [Still images and capture details](docs/screenshots/README.md).*
 
 ## Meet Tidy
 
 Tidy brings a block editor, daily planner, relational tables and meeting recorder into one Mac app. Notes link to pages, dated tasks appear in your agenda, and recordings become a searchable meeting library.
 
-No Tidy account, subscription or telemetry. Your workspace lives on your Mac. Model downloads and update checks use an internet connection; transcription and built-in AI processing run locally after setup.
+No Tidy account, subscription or telemetry. Your workspace lives on your Mac. Model downloads and update checks use an internet connection. Transcription and the built-in AI run on your Mac after setup.
 
 ## Install
 
-Download [Tidy v0.3.0 for Apple Silicon](https://github.com/REllwood/Tidy/releases/download/v0.3.0/Tidy_0.3.0_aarch64.dmg), open the DMG and drag **Tidy** into **Applications**.
+Download the latest DMG from the [releases page](https://github.com/REllwood/Tidy/releases/latest), open it and drag **Tidy** into **Applications**.
 
 | | Current release |
 | --- | --- |
 | Mac | Apple Silicon, M1 and newer |
-| macOS | Configured minimum 14.4; release checked on 26.5.2 |
+| macOS | 14.4 or later |
 | Distribution | Developer ID signed and notarised by Apple |
-| Verification | Signatures, notarisation tickets and Gatekeeper acceptance checked, including the app inside the DMG |
+| Updates | Offered in the app from v0.3.0 onwards |
 
-The [release page](https://github.com/REllwood/Tidy/releases/tag/v0.3.0) includes a SHA-256 checksum and upgrade notes. Intel, Windows and Linux installers are not included.
+Each release page lists what changed and a SHA-256 checksum. Intel, Windows and Linux installers are not included.
 
-On upgrade, existing transcripts remain in place while older meeting indexes queue for rebuilding. Keep Tidy open with local AI enabled until preparation completes. Use **Regenerate notes** to refresh an existing summary. macOS may ask for microphone and screen-recording permissions again after the application identifier change.
+Tidy checks for updates automatically, and you choose when to download, install and restart. Versions before v0.3.0 need to install the DMG once by hand. A new version can upgrade the workspace database the first time it opens, and earlier versions cannot open it after that. Existing notes, transcripts and pages stay in place.
 
-**Updating from v0.2.1:** install v0.3.0 manually using the DMG. Future releases can
-be installed through **Settings → Updates**. Tidy checks for updates automatically;
-you choose when to download, install and restart.
-
-**Audio is off by default.** Turn on **Settings → Recording → Keep meeting audio**
-before a meeting if you want to export or re-transcribe its audio later. Existing
-saved audio is preserved, and a temporary recording is kept until its transcript has
-been saved. [Recording history and recovery limits](docs/MEETING-RELIABILITY.md).
-
-## From a conversation to useful notes
+## Recording a call
 
 <p align="center">
   <img src="docs/screenshots/meeting.gif" alt="Sample meeting flow: choose Acme, record with audio meters, transcribe locally, and open structured meeting notes" width="1000" />
 </p>
 
-1. Open **New meeting** and choose an existing client or enter a new one.
-2. Record your microphone and system audio, with separate level meters for each source.
-3. Stop to transcribe on-device with Whisper and optional speaker labels.
-4. With local AI enabled, Tidy writes an overview, topic sections, decisions, next steps and open questions. Every point is checked against a quote from the transcript, and points it can't back up are left out.
+- **Tidy offers to record.** When Zoom, Teams, FaceTime, Slack or a browser starts using the microphone, a small window asks whether to record and reminds you to tell everyone. Nothing records until you choose **Record**. Turn this off under **Settings → Recording → Offer to record calls**.
+- **Both sides, kept apart.** Your microphone and the other side of the call are recorded separately. Your words are labelled **You**, and only the other side is split into speakers, so their voice coming back through your speakers is not transcribed as yours.
+- **It stops by itself.** A recording stops when the call ends, after 3 minutes of silence, or 5 minutes after its calendar event ends. A 15-second countdown lets you choose **Keep recording**, and the meeting notes why it stopped.
+- **Mark a moment.** Press **Control-Option-M** in any app, or **Mark moment**, and the moment is listed in the notes.
+- **Help during the call.** A live transcript, **Recap so far**, and answers from past meetings without leaving the call.
 
-Your transcript is saved before AI processing. If AI is disabled, it remains available and the meeting waits in the preparation queue. Editing the page keeps the notes; they're only written again if the transcript itself changes.
+Transcription runs on your Mac with Whisper. It skips silence, leaves out lines Whisper invents (such as "thanks for watching") and spells names the way you do, using the meeting's client, its invitees and **Settings → Recording → Names and terms**.
+
+**Audio is off by default.** Turn on **Settings → Recording → Keep meeting audio** before a meeting if you want to play it back, export it or transcribe it again later. A temporary recording is kept until its transcript has been saved. [Recording history and recovery limits](docs/MEETING-RELIABILITY.md).
+
+## From a conversation to useful notes
+
+1. Open **New meeting** and choose an existing client or enter a new one, or let Tidy name the recording after its calendar event.
+2. Record, then stop to transcribe on your Mac, with optional speaker labels.
+3. With local AI enabled, Tidy reads the whole meeting and writes an overview, topic sections, decisions, next steps and open questions. Every point is checked against what was said when it was said: its names, numbers and the person given a task must be there. Points it cannot back up are left out.
+
+Notes follow a layout chosen from the meeting title: 1:1, Standup, Customer call, Interview, Planning or Retro. **Rewrite notes as** changes it. Every note point shows when it was said. Click the time to jump to that line of the transcript and, when the audio was kept, to play from there.
+
+Your transcript is saved before AI processing. If AI is disabled, it remains available and the meeting waits in the preparation queue. Editing the page keeps the notes, and they are only written again if the transcript itself changes.
 
 From the meeting notes you can:
 
-- **Name speakers**, so "Speaker 2" becomes "Priya" in the transcript, the notes and answers.
+- **Name speakers**, so "Speaker 2" becomes "Priya" in the transcript, the notes and answers. Tidy works names out from the conversation, for example someone asked "What do you think, Tom?" who then answers. Clear ones are applied before the notes are written, and others are suggested, with lines from each speaker that you can play.
 - **Add notes to page**, to put the notes above the transcript where exports, your vault and search include them.
 - **Send next steps to planner**, to add them as dated tasks in a table you choose. Nothing is added unless you ask.
+
+## Your calendar
+
+Turn on **Settings → Calendar → Use my calendar** to name recordings after their event, suggest invitees as speaker names and, before a meeting, see what earlier meetings like it decided and left open. Tidy reads the calendar through macOS on your Mac, and only after you turn it on.
 
 ## Ask across the same client's meetings
 
@@ -82,15 +90,15 @@ Questions to try when the information is in your transcripts:
 - “What are the next steps from our last meeting with Acme?”
 - “Who is responsible for the client handover?”
 - “What changed between the kickoff and the follow-up?”
-- “What's still unresolved?”
+- “What is still unresolved?”
 
 Recaps and lists of decisions, next steps or open questions come from each meeting's checked notes, so they cover every meeting in range. Specific questions search transcript passages and your own pages by meaning. Answers link individual claims to their sources. When nothing can be backed up, Tidy shows the closest passages instead of guessing. The library displays ready, queued and failed meetings, with stage and passage progress while work runs.
 
-AI can still miss context or get an inference wrong. Review the original sources for names, dates and commitments. Large-library answers may use a sample of the available material; the displayed coverage makes that visible. Each question is independent. [How retrieval and verification work](docs/LOCAL-AI.md#retrieval-and-answer-limits).
+AI can still miss context or get an inference wrong. Review the original sources for names, dates and commitments. Large-library answers may use a sample of the available material, and the displayed coverage makes that visible. Each question is independent. [How retrieval and verification work](docs/LOCAL-AI.md#retrieval-and-answer-limits).
 
 ## Local AI, without a separate app
 
-In **Settings → Local AI**, choose **Enable local AI** to download the recommended answer model and meeting search model. Downloads have progress and cancellation controls; you can choose another model or remove downloaded files in Settings.
+In **Settings → Local AI**, choose **Enable local AI** to download the recommended answer model and meeting search model. Downloads have progress and cancellation controls, and you can choose another model or remove downloaded files in Settings.
 
 | Model | Purpose | Approximate download |
 | --- | --- | --- |
@@ -98,16 +106,9 @@ In **Settings → Local AI**, choose **Enable local AI** to download the recomme
 | Qwen 3 · Lightweight | Lower-memory alternative | 639 MB |
 | Nomic meeting search | Find related passages in meetings and pages | 146 MB |
 
-The app bundles the inference runtime. **Ollama is optional**, available as an advanced provider. Models load one at a time, and recording pauses background AI work. A 16 GB Mac is offered the balanced model, but speed and memory pressure depend on the meeting and other open apps; we have not benchmarked the full workflow on an M1 with 16 GB. [Setup, model licences and limits](docs/LOCAL-AI.md).
+The app bundles the inference runtime. **Ollama is optional**, available as an advanced provider. Models load one at a time, and background AI work pauses while you record, apart from the live help you ask for. A 16 GB Mac is offered the balanced model, but speed and memory pressure depend on the meeting and other open apps. [Setup, model licences and limits](docs/LOCAL-AI.md).
 
-### More model choices
-
-Version 0.3.0 expands transcription to 12 Whisper options, including
-English-only models, Large V3, Turbo and compressed versions. It also adds Qwen
-answer models at 1.7B, 8B, 14B and 32B alongside the existing 0.6B and 4B choices.
-Settings shows download sizes, suggested RAM and filters for lower-memory,
-everyday and larger models. Suggestions do not prevent users choosing another
-model. RAM guidance is an estimate, and the full range has not been benchmarked across Mac models.
+Transcription offers 12 Whisper models, including English-only models, Large V3, Turbo and compressed versions. Answers can use Qwen models from 0.6B to 32B. Settings shows download sizes, suggested RAM and filters for lower-memory, everyday and larger models. Suggestions do not stop you choosing another model. RAM guidance is an estimate, and the full range has not been benchmarked across Mac models. Larger models write more accurate notes but take longer.
 
 ## Keep the rest of your work close
 
@@ -131,9 +132,9 @@ model. RAM guidance is an estimate, and the full range has not been benchmarked 
 
 ## Your files and your tools
 
-Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors page content to a folder you choose, reads external edits back in and preserves conflicting edits in a separate copy. Meeting notes join the vault once you choose **Add notes to page**. **Export as Markdown** saves a page, or a table's rows, through the save dialog.
+Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors page content to a folder you choose, reads external edits back in and keeps conflicting edits in a separate copy. Meeting notes join the vault once you choose **Add notes to page**. **Export as Markdown** saves a page, or a table's rows, through the save dialog.
 
-The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its `ingest_note` tool files raw text at once with the original wording kept; Tidy's own local AI adds a checked summary and any tasks while Tidy is open, whichever model you've chosen. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
+The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its `ingest_note` tool files raw text at once with the original wording kept, and Tidy's own local AI adds a checked summary and any tasks while Tidy is open, whichever model you have chosen. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
 
 ## Run from source
 
@@ -157,9 +158,9 @@ Checks:
 ```bash
 npm test
 npm run build
-DYLD_FALLBACK_LIBRARY_PATH=/usr/lib/swift cargo test --workspace --locked
+cargo test --workspace --locked
 ```
 
-v0.2.1 passed 80 front-end tests, 42 shared-core tests and 14 native unit tests, plus a synthetic client-handover regression using the real local models. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
+The source passes 202 front-end, 110 shared-core and 104 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
 
 Built with Tauri, React, TypeScript, SQLite, whisper.cpp, sherpa-onnx and llama.cpp. Distributed under AGPL-3.0-or-later. Maintainers can follow the [local signing and release guide](docs/RELEASING.md).
