@@ -311,7 +311,23 @@ pub fn migrations() -> Migrations<'static> {
                 WHERE page_id=new.id AND embedding_model NOT LIKE 'stale:%';
         END;
         "#,
-    )])
+    ),
+    // ---- v10 (call detection, marked moments, calendar events, note layouts) ----
+    M::up(
+        r#"
+        -- Why a recording stopped when Tidy stopped it, for example because the
+        -- call ended. Empty when the person pressed Stop.
+        ALTER TABLE meeting ADD COLUMN stop_reason TEXT;
+        -- Moments marked while recording: a JSON array of offsets in ms.
+        ALTER TABLE meeting ADD COLUMN marks TEXT;
+        -- The calendar event the meeting was recorded for: JSON with its
+        -- title, attendees, start, end and series.
+        ALTER TABLE meeting ADD COLUMN event TEXT;
+        -- The notes layout (template) chosen for a meeting's notes.
+        ALTER TABLE meeting_ai ADD COLUMN template TEXT;
+        "#,
+    ),
+    ])
 }
 
 /// Populate `page.body_text` for every page that predates the projection, so

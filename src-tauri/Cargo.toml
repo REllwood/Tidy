@@ -39,6 +39,12 @@ sherpa-onnx = "1.13.2"
 tar = "0.4.46"
 bzip2-rs = "0.1.2"
 tauri-plugin-updater = "2"
+tauri-plugin-global-shortcut = "2"
+
+# Core Audio: which apps hold the microphone, and process taps for system audio.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2-core-audio = "0.3.2"
 
 # Whisper: Metal acceleration on Apple Silicon, CPU on Intel.
 [target.'cfg(target_arch = "aarch64")'.dependencies]

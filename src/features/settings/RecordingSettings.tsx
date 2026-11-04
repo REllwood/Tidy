@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { recordingPreferencesApi } from "@/lib/api";
+import { meetingAutomationApi, recordingPreferencesApi } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +10,67 @@ import { Textarea } from "@/components/ui/textarea";
 
 const KEY = ["recording-preferences"] as const;
 const VOCABULARY_KEY = ["transcription-vocabulary"] as const;
+const AUTOMATION_KEY = ["meeting-automation"] as const;
+
+/** Offering to record calls, and stopping recordings once a meeting ends. */
+function Automation() {
+  const qc = useQueryClient();
+  const saved = useQuery({
+    queryKey: AUTOMATION_KEY,
+    queryFn: meetingAutomationApi.get,
+  });
+  const change = useMutation({
+    mutationFn: ([offers, autoStop]: [boolean, boolean]) =>
+      meetingAutomationApi.set(offers, autoStop),
+    onMutate: async (next) => {
+      await qc.cancelQueries({ queryKey: AUTOMATION_KEY });
+      const previous = qc.getQueryData<[boolean, boolean]>(AUTOMATION_KEY);
+      qc.setQueryData(AUTOMATION_KEY, next);
+      return { previous };
+    },
+    onError: (_error, _next, context) => {
+      if (context?.previous) qc.setQueryData(AUTOMATION_KEY, context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: AUTOMATION_KEY }),
+  });
+  const [offers, autoStop] = saved.data ?? [true, true];
+  const disabled = saved.isPending || saved.isError;
+  return (
+    <div className="space-y-3 border-t border-border pt-3">
+      <label className="flex items-center justify-between gap-4 text-sm">
+        <span>Offer to record calls</span>
+        <Switch
+          checked={offers}
+          disabled={disabled}
+          onCheckedChange={(v) => change.mutate([v, autoStop])}
+        />
+      </label>
+      <p className="text-xs text-text-muted">
+        When Zoom, Teams, FaceTime, Slack or a browser starts using the
+        microphone, a small window asks whether to record. Nothing records
+        until you choose Record.
+      </p>
+      <label className="flex items-center justify-between gap-4 text-sm">
+        <span>Stop when the meeting ends</span>
+        <Switch
+          checked={autoStop}
+          disabled={disabled}
+          onCheckedChange={(v) => change.mutate([offers, v])}
+        />
+      </label>
+      <p className="text-xs text-text-muted">
+        Stops when the call ends, after 3 minutes of silence, or 5 minutes
+        after the calendar event ends. A 15-second countdown lets you keep
+        recording.
+      </p>
+      {(saved.error || change.error) && (
+        <p role="alert" className="text-sm text-danger-c">
+          {errorMessage(saved.error || change.error)}
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** Names and terms Whisper should expect, so they are spelt the right way. */
 function Vocabulary() {
@@ -117,6 +178,7 @@ export function RecordingSettings() {
           {errorMessage(saved.error || change.error)}
         </p>
       )}
+      <Automation />
       <Vocabulary />
     </div>
   );

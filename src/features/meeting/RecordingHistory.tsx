@@ -195,6 +195,11 @@ export function RecordingHistory() {
                         {new Date(m.started_at).toLocaleString("en-AU")} ·{" "}
                         {Math.ceil(m.duration_ms / 60000)} min
                       </p>
+                      {m.stop_reason && (
+                        <p className="mt-1 text-xs text-text-faint">
+                          {m.stop_reason}
+                        </p>
+                      )}
                       {m.transcript_error && (
                         <p className="mt-2 max-w-xl text-sm text-danger-c">
                           {m.transcript_error}

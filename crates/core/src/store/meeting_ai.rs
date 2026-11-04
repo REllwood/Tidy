@@ -341,8 +341,11 @@ pub fn save_summary(
     if snapshot(&tx, id)?.0 != hash {
         return Ok(false);
     }
+    // Marked moments come straight from the transcript, not the model.
+    let mut summary = summary.clone();
+    summary.moments = crate::store::meeting_notes::marked_moments(&tx, id)?;
     tx.execute("UPDATE meeting_ai SET summary=?2,source_hash=?3,state='indexing',error=NULL,regenerate=0,updated_at=?4 WHERE page_id=?1",
-        params![id,serde_json::to_string(summary)?,hash,now_ms()])?;
+        params![id,serde_json::to_string(&summary)?,hash,now_ms()])?;
     tx.commit()?;
     Ok(true)
 }
@@ -1658,7 +1661,7 @@ mod tests {
             action_items: vec!["Alex will send the revised budget.".into()],
             decisions: vec!["The budget stays at $500.".into()],
             sections: vec![SummarySection { heading: "Budget".into(), points: vec!["Costs rose in March.".into()] }],
-            open_questions: vec![],
+            ..Default::default()
         });
         let newer = job("b", "Client handovers", 2_000, MeetingSummary {
             // Earlier notes repeated their first point as the overview.
@@ -1667,6 +1670,7 @@ mod tests {
             decisions: vec![],
             sections: vec![SummarySection { heading: "Handover".into(), points: vec!["Priya takes over Acme.".into()] }],
             open_questions: vec!["Who owns billing?".into()],
+            ..Default::default()
         });
         let jobs = [&newer, &older];
         let items = note_items(&jobs, Intent::Actions);

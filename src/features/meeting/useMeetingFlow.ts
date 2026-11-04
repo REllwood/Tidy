@@ -9,6 +9,8 @@ import {
   recordingPreferencesApi,
   recordingHistoryKey,
   pagesApi,
+  meetingHudApi,
+  type MeetingHud,
 } from "@/lib/api";
 import { localAi } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
@@ -44,6 +46,12 @@ export interface MeetingState {
   error: string | null;
   /** True when the recorder adopted a recording that was already running (webview reload). */
   resumed: boolean;
+  /** Moments marked during this recording. */
+  marks: number;
+  /** Why Tidy stopped the recording itself, if it did. */
+  stopReason: string | null;
+  /** An automatic stop counting down, which "Keep recording" cancels. */
+  countdown: { reason: string; deadline_ms: number } | null;
 }
 
 const initial: MeetingState = {
@@ -59,6 +67,9 @@ const initial: MeetingState = {
   client: "",
   error: null,
   resumed: false,
+  marks: 0,
+  stopReason: null,
+  countdown: null,
 };
 
 const quiet = { mic: 0, system: 0 };
@@ -138,6 +149,21 @@ export function useMeetingFlow() {
     unlisten.current.push(
       await listen<string>("live-transcript", (e) =>
         patch({ liveTranscript: e.payload }),
+      ),
+    );
+    unlisten.current.push(
+      await listen<{ count: number }>("moment-marked", (e) =>
+        patch({ marks: e.payload.count }),
+      ),
+    );
+    unlisten.current.push(
+      await listen<MeetingHud>("meeting-hud", (e) =>
+        patch({
+          countdown:
+            e.payload.kind === "countdown"
+              ? { reason: e.payload.reason, deadline_ms: e.payload.deadline_ms }
+              : null,
+        }),
       ),
     );
   }, []);
@@ -222,7 +248,8 @@ export function useMeetingFlow() {
   }, [startMockMeters, subscribe]);
 
   const stopping = useRef(false);
-  const stop = useCallback(async () => {
+  /** `reason` is set when Tidy stops the recording itself. */
+  const stop = useCallback(async (reason?: string) => {
     if (stopping.current) return;
     stopping.current = true;
     // (i) A stop pressed during "starting" waits for the start to settle first.
@@ -236,13 +263,19 @@ export function useMeetingFlow() {
     let progressUnlisten: UnlistenFn | null = null;
     let savedPage: string | null = null;
     try {
-      patch({ phase: "transcribing", transcribeProgress: 0, levels: quiet });
+      patch({
+        phase: "transcribing",
+        transcribeProgress: 0,
+        levels: quiet,
+        countdown: null,
+        stopReason: reason ?? null,
+      });
       if (isTauri()) {
         progressUnlisten = await listen<number>("transcribe-progress", (e) =>
           patch({ transcribeProgress: e.payload }),
         );
       }
-      const rec = await recordingApi.stop(clientRef.current);
+      const rec = await recordingApi.stop(clientRef.current, reason);
       if (!rec.page_id)
         throw new Error(
           "Recording saved, but its meeting page could not be opened. Check Recording history.",
@@ -301,6 +334,22 @@ export function useMeetingFlow() {
     setState(initial);
   }, [cleanup]);
 
+  /** Mark this moment in the recording. */
+  const mark = useCallback(async () => {
+    try {
+      await recordingApi.mark();
+      if (!isTauri()) setState((s) => ({ ...s, marks: s.marks + 1 }));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  }, []);
+
+  /** Cancel an automatic stop that is counting down. */
+  const keepRecording = useCallback(async () => {
+    patch({ countdown: null });
+    await meetingHudApi.respond("keep").catch((e) => toast.error(errorMessage(e)));
+  }, []);
+
   /** Give up on a start that has not finished yet, and hand the AI gate back. */
   const cancelStart = useCallback(async () => {
     reset();
@@ -317,5 +366,7 @@ export function useMeetingFlow() {
     cancelStart,
     reconcile,
     setClient,
+    mark,
+    keepRecording,
   };
 }

@@ -229,6 +229,8 @@ export interface Recording {
   page_id: string | null;
   audio_path: string;
   duration_ms: number;
+  /** Moments marked while recording, in ms from the start. */
+  marks?: number[];
 }
 export interface ModelInfo {
   description: string;
@@ -255,12 +257,37 @@ export interface MeetingSummary {
   decisions: string[];
   sections?: { heading: string; points: string[] }[];
   open_questions?: string[];
+  /** Moments marked while recording, each with what was being said then. */
+  moments?: string[];
 }
 
 export const recordingApi = {
   start: () => invoke<boolean>("start_recording"),
-  stop: (client = "") => invoke<Recording>("stop_recording", { client }),
+  /** `stopReason` is set when Tidy stopped the recording itself. */
+  stop: (client = "", stopReason?: string) =>
+    invoke<Recording>("stop_recording", { client, stopReason }),
   isRecording: () => invoke<boolean>("is_recording"),
+  /** Mark this moment. Resolves to how far into the recording it is, in ms. */
+  mark: () => invoke<number>("mark_moment"),
+};
+
+/** What the small floating meeting window shows. */
+export type MeetingHud =
+  | { kind: "none" }
+  | { kind: "offer"; app: string }
+  | { kind: "countdown"; reason: string; deadline_ms: number };
+
+export const meetingHudApi = {
+  state: () => invoke<MeetingHud>("meeting_hud_state"),
+  respond: (action: "record" | "dismiss" | "keep") =>
+    invoke<void>("meeting_hud_respond", { action }),
+};
+
+/** Offering to record calls, and stopping recordings that have finished. */
+export const meetingAutomationApi = {
+  get: () => invoke<[boolean, boolean]>("get_meeting_automation"),
+  set: (offers: boolean, autoStop: boolean) =>
+    invoke<void>("set_meeting_automation", { offers, autoStop }),
 };
 
 export const modelsApi = {
@@ -402,6 +429,8 @@ export interface SavedRecording {
   model_used: string | null;
   transcript_state: string;
   transcript_error: string | null;
+  /** Why Tidy stopped the recording itself, such as the call ending. */
+  stop_reason?: string | null;
 }
 export interface TranscriptVersion {
   id: string;

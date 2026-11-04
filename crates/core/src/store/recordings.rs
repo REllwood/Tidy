@@ -20,6 +20,8 @@ pub struct SavedMeeting {
     pub model_used: Option<String>,
     pub transcript_state: String,
     pub transcript_error: Option<String>,
+    /// Why Tidy stopped the recording itself, such as the call ending.
+    pub stop_reason: Option<String>,
 }
 #[derive(Serialize)]
 pub struct Version {
@@ -34,7 +36,7 @@ pub struct Version {
 pub fn list(c: &Connection) -> AppResult<Vec<SavedMeeting>> {
     let mut q = c.prepare("SELECT m.id,m.page_id,coalesce(p.title,'Recovered recording'),
       (SELECT cp.title FROM link l JOIN page cp ON cp.id=l.target_page_id WHERE l.source_page_id=p.id AND l.kind='task_of' LIMIT 1),
-      m.started_at,m.duration,m.audio_path,m.model_used,m.transcript_state,m.transcript_error,m.retain_audio
+      m.started_at,m.duration,m.audio_path,m.model_used,m.transcript_state,m.transcript_error,m.retain_audio,m.stop_reason
       FROM meeting m LEFT JOIN page p ON p.id=m.page_id ORDER BY m.started_at DESC")?;
     let rows = q.query_map([], |r| {
         Ok(SavedMeeting {
@@ -49,6 +51,7 @@ pub fn list(c: &Connection) -> AppResult<Vec<SavedMeeting>> {
             transcript_state: r.get(8)?,
             transcript_error: r.get(9)?,
             retain_audio: r.get(10)?,
+            stop_reason: r.get(11)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -155,6 +158,37 @@ pub fn save_result(
     Ok(applied)
 }
 
+/// Record how a recording ended and the moments marked during it.
+pub fn set_stop_details(
+    c: &Connection,
+    page: &str,
+    reason: Option<&str>,
+    marks: &[i64],
+) -> AppResult<()> {
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+    let marks = (!marks.is_empty()).then(|| serde_json::to_string(marks)).transpose()?;
+    c.execute(
+        "UPDATE meeting SET stop_reason=?2, marks=?3 WHERE page_id=?1",
+        params![page, reason, marks],
+    )?;
+    Ok(())
+}
+
+/// The moments marked while a meeting was recorded, in ms from its start.
+pub fn marks(c: &Connection, page: &str) -> AppResult<Vec<i64>> {
+    let raw: Option<String> = c
+        .query_row(
+            "SELECT marks FROM meeting WHERE page_id=?1 ORDER BY started_at DESC LIMIT 1",
+            [page],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(raw
+        .and_then(|r| serde_json::from_str::<Vec<i64>>(&r).ok())
+        .unwrap_or_default())
+}
+
 /// The setting holding the person's own list of names and terms for Whisper.
 pub const VOCABULARY: &str = "transcription.vocabulary";
 
@@ -222,6 +256,20 @@ mod tests {
         assert!(!save_result(&c, &page, revised, "[]", "medium", "en").unwrap());
         assert_eq!(documents::core::get(&c, &page).unwrap(), original);
         assert_eq!(versions(&c, &page).unwrap().len(), 4);
+    }
+    #[test]
+    fn how_a_recording_stopped_and_its_marks_are_kept() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let page = register(&c, "/recordings/a.wav", 1000, 42, "").unwrap();
+        assert!(marks(&c, &page).unwrap().is_empty());
+        set_stop_details(&c, &page, Some("Stopped automatically when Zoom ended the call"), &[61_000, 125_500]).unwrap();
+        assert_eq!(marks(&c, &page).unwrap(), vec![61_000, 125_500]);
+        let saved = list(&c).unwrap();
+        assert_eq!(saved[0].stop_reason.as_deref(), Some("Stopped automatically when Zoom ended the call"));
+        set_stop_details(&c, &page, Some("  "), &[]).unwrap();
+        assert!(list(&c).unwrap()[0].stop_reason.is_none());
+        assert!(marks(&c, &page).unwrap().is_empty());
     }
     #[test]
     fn whisper_hears_the_client_and_the_persons_own_terms() {

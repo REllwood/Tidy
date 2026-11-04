@@ -19,6 +19,7 @@ import type {
 } from "@/lib/api";
 
 // ---- mock meeting state (browser preview only) ----
+let mockMarks = 0;
 let mockRecording = false;
 let mockRecordingKeepAudio = false;
 const cancelledTranscriptions = new Set<string>();
@@ -983,7 +984,26 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
     case "start_recording":
       mockRecordingKeepAudio = d.settings["recording.keep_audio"] === "true";
       mockRecording = true;
+      mockMarks = 0;
       return mockRecordingKeepAudio as T;
+    case "mark_moment":
+      if (!mockRecording) throw new Error("There is no recording to mark.");
+      mockMarks++;
+      return (mockMarks * 30_000) as T;
+    case "meeting_hud_state":
+      return { kind: "none" } as T;
+    case "meeting_hud_respond":
+      return undefined as T;
+    case "get_meeting_automation":
+      return [
+        d.settings["recording.offer_calls"] !== "false",
+        d.settings["recording.auto_stop"] !== "false",
+      ] as T;
+    case "set_meeting_automation":
+      d.settings["recording.offer_calls"] = args.offers ? "true" : "false";
+      d.settings["recording.auto_stop"] = args.autoStop ? "true" : "false";
+      commit();
+      return undefined as T;
     case "stop_recording": {
       mockRecording = false;
       const note = await mockInvoke<{ page_id: string }>("ingest_note", {
@@ -1011,6 +1031,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         model_used: null,
         transcript_state: "pending",
         transcript_error: null,
+        stop_reason: args.stopReason ?? null,
       };
       (d.recordings ??= []).push(rec);
       previewMeetings.add(note.page_id);

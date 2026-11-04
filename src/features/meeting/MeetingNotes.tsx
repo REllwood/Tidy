@@ -27,6 +27,7 @@ export function MeetingNotes({ summary }: { summary: MeetingSummary }) {
     { title: "Decisions", points: summary.decisions },
     { title: "Next steps", points: summary.action_items },
     { title: "Open questions", points: summary.open_questions ?? [] },
+    { title: "Marked moments", points: summary.moments ?? [] },
   ].filter((group) => group.points.length);
   return (
     <div className="space-y-6">

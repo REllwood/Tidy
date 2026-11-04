@@ -20,6 +20,9 @@ pub struct MeetingSummary {
     pub sections: Vec<SummarySection>,
     #[serde(default)]
     pub open_questions: Vec<String>,
+    /// Moments marked while recording, each with what was being said then.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moments: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

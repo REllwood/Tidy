@@ -44,3 +44,17 @@ export function sourceWarning(
     return "System audio is not being captured. Other participants will be missing from this transcript.";
   return null;
 }
+
+/**
+ * Why an automatic stop is counting down, as a short sentence: the call
+ * ended, the room went quiet, or the calendar event is over.
+ */
+export function countdownCause(reason: string): string {
+  const call = /^Stopped automatically when (.+) ended the call$/.exec(reason);
+  if (call) return `${call[1]} ended the call.`;
+  if (/after 3 minutes of silence$/.test(reason))
+    return "No one has spoken for 3 minutes.";
+  const event = /^Stopped automatically 5 minutes after (.+) ended$/.exec(reason);
+  if (event) return `${event[1]} ended 5 minutes ago.`;
+  return "This meeting looks finished.";
+}

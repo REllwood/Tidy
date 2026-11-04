@@ -4,7 +4,7 @@ use crate::{
     db::new_id,
     error::{AppError, AppResult},
     llm::MeetingSummary,
-    store::{documents, ingest, meeting_ai},
+    store::{documents, ingest, meeting_ai, recordings},
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -260,6 +260,74 @@ fn saved_summary(conn: &Connection, page_id: &str) -> AppResult<MeetingSummary> 
     Ok(serde_json::from_str(&saved)?)
 }
 
+/// "[hh:mm:ss] text" or "[mm:ss] text" as a time in ms and the words said.
+fn stamped(line: &str) -> Option<(i64, String)> {
+    let rest = line.trim_start().strip_prefix('[')?;
+    let (clock, said) = rest.split_once(']')?;
+    let mut ms = 0i64;
+    for part in clock.split(':') {
+        ms = ms * 60 + part.trim().parse::<i64>().ok()?;
+    }
+    Some((ms * 1000, said.trim().to_string()))
+}
+
+fn clock(ms: i64) -> String {
+    let s = ms.max(0) / 1000;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+    } else {
+        format!("{:02}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// The moments marked while recording, each with the transcript line being
+/// said at that point and who said it. Nothing is written by the model here,
+/// so these lines are exactly what the transcript holds.
+pub fn marked_moments(conn: &Connection, page_id: &str) -> AppResult<Vec<String>> {
+    let marks = recordings::marks(conn, page_id)?;
+    if marks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let blocks = blocks(&documents::core::get(conn, page_id)?)?;
+    let labels = label_blocks(&blocks);
+    let mut lines: Vec<(i64, Option<String>, String)> = Vec::new();
+    let mut in_transcript = false;
+    let mut speaker: Option<String> = None;
+    for (i, block) in blocks.iter().enumerate() {
+        if block["type"] == "heading" {
+            in_transcript = text(block).trim().eq_ignore_ascii_case("transcript");
+            continue;
+        }
+        if !in_transcript {
+            continue;
+        }
+        if let Some((_, label)) = labels.iter().find(|(at, _)| *at == i) {
+            speaker = Some(label.clone());
+            continue;
+        }
+        if let Some((ms, said)) = stamped(&text(block)) {
+            lines.push((ms, speaker.clone(), said));
+        }
+    }
+    Ok(marks
+        .iter()
+        .filter_map(|mark| {
+            // People mark a moment just after hearing it, so take the line
+            // that had started by then.
+            let (_, who, said) = lines
+                .iter()
+                .rev()
+                .find(|(ms, _, _)| *ms <= mark + 1_500)
+                .or_else(|| lines.first())?;
+            let said = ingest::shorten(said, 200);
+            Some(match who {
+                Some(who) => format!("[{}] {who}: {said}", clock(*mark)),
+                None => format!("[{}] {said}", clock(*mark)),
+            })
+        })
+        .collect())
+}
+
 /// The notes as page blocks: overview, topics, decisions, next steps (as
 /// tick boxes) and open questions.
 pub fn notes_blocks(summary: &MeetingSummary) -> Vec<Value> {
@@ -286,6 +354,10 @@ pub fn notes_blocks(summary: &MeetingSummary) -> Vec<Value> {
     if !summary.open_questions.is_empty() {
         out.push(heading("Open questions"));
         out.extend(summary.open_questions.iter().map(|p| bullet(p)));
+    }
+    if !summary.moments.is_empty() {
+        out.push(heading("Marked moments"));
+        out.extend(summary.moments.iter().map(|p| bullet(p)));
     }
     for block in &mut out {
         block["id"] = json!(new_id());
@@ -406,8 +478,38 @@ mod tests {
             action_items: vec!["Speaker 2 will send the report on Friday.".into()],
             decisions: vec![],
             sections: vec![SummarySection { heading: "Handover".into(), points: vec!["Speaker 1 opened the planning.".into()] }],
-            open_questions: vec![],
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn marked_moments_quote_the_line_being_said_and_who_said_it() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let id = meeting(&c);
+        // Marked just after the report was promised, and again near the end.
+        recordings::set_stop_details(&c, &id, None, &[6_000, 9_500]).unwrap();
+        save(&c, &id, &notes());
+        let summary = saved_summary(&c, &id).unwrap();
+        assert_eq!(
+            summary.moments,
+            vec!["[00:06] Speaker 2: I'll send the report on Friday.", "[00:09] Speaker 1: Thanks."]
+        );
+        let blocks = notes_blocks(&summary);
+        let texts: Vec<String> = blocks.iter().map(text).collect();
+        let at = texts.iter().position(|t| t == "Marked moments").expect("a Marked moments section");
+        assert_eq!(texts[at + 1], "[00:06] Speaker 2: I'll send the report on Friday.");
+    }
+
+    #[test]
+    fn meetings_without_marks_have_no_moments_section() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let id = meeting(&c);
+        save(&c, &id, &notes());
+        let summary = saved_summary(&c, &id).unwrap();
+        assert!(summary.moments.is_empty());
+        assert!(!notes_blocks(&summary).iter().any(|b| text(b) == "Marked moments"));
     }
 
     #[test]

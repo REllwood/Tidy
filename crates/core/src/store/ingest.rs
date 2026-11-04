@@ -51,7 +51,7 @@ pub const SUMMARY_PENDING: &str =
     "Tidy will add a summary here once local AI has read this note. It runs while Tidy is open.";
 
 /// Cut text at a word so it fits `max` characters, marking the cut.
-fn shorten(text: &str, max: usize) -> String {
+pub(crate) fn shorten(text: &str, max: usize) -> String {
     let text = text.trim();
     if text.chars().count() <= max {
         return text.to_string();

@@ -11,7 +11,7 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -30,6 +30,16 @@ const CHUNK: Duration = Duration::from_secs(5);
 const PREVIEW_SAMPLES: usize = WHISPER_RATE as usize * 15;
 /// How long `start` waits for both capture sources to be attempted.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// A level this loud on either side counts as someone speaking (about -42 dBFS).
+const VOICE_LEVEL: f32 = 0.008;
+
+/// When the current recording last heard someone, in ms since the epoch.
+static LAST_VOICE_MS: AtomicI64 = AtomicI64::new(0);
+
+/// When the current recording last heard someone speak, on either side.
+pub fn last_voice_ms() -> i64 {
+    LAST_VOICE_MS.load(Ordering::Relaxed)
+}
 
 #[derive(Serialize, Clone)]
 struct LevelEvent {
@@ -50,6 +60,9 @@ pub struct RecordingSession {
     keep_audio: bool,
     stop: Arc<AtomicBool>,
     started_at: i64,
+    /// When capture began, the zero point for marked moments.
+    began: Instant,
+    marks: Vec<i64>,
     path: PathBuf,
     partial: PathBuf,
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
@@ -73,6 +86,21 @@ pub struct Recording {
     pub duration_ms: i64,
     pub started_at: i64,
     pub page_id: Option<String>,
+    /// Moments marked while recording, in ms from the start.
+    pub marks: Vec<i64>,
+}
+
+impl RecordingSession {
+    /// Mark this moment. Returns how far into the recording it is, in ms.
+    pub fn mark(&mut self) -> i64 {
+        let at = self.began.elapsed().as_millis() as i64;
+        self.marks.push(at);
+        at
+    }
+
+    pub fn marks(&self) -> &[i64] {
+        &self.marks
+    }
 }
 
 pub fn start(
@@ -81,6 +109,7 @@ pub fn start(
     keep_audio: bool,
 ) -> AppResult<RecordingSession> {
     let started_at = now_ms();
+    LAST_VOICE_MS.store(started_at, Ordering::Relaxed);
     let dir = if keep_audio {
         app_recordings_dir(&app)?
     } else {
@@ -142,6 +171,8 @@ pub fn start(
         keep_audio,
         stop,
         started_at,
+        began: Instant::now(),
+        marks: Vec::new(),
         path,
         partial,
         outcome,
@@ -221,6 +252,9 @@ impl Capture {
             std::thread::sleep(Duration::from_millis(120));
             let mic_level = tail_rms(&self.mic_buf, &mut last_mic);
             let sys_level = tail_rms(&self.sys_buf, &mut last_sys);
+            if mic_level >= VOICE_LEVEL || sys_level >= VOICE_LEVEL {
+                LAST_VOICE_MS.store(now_ms(), Ordering::Relaxed);
+            }
             let _ = self.app.emit(
                 "audio-level",
                 LevelEvent {
@@ -360,6 +394,7 @@ pub fn stop(session: &mut RecordingSession) -> AppResult<Recording> {
         duration_ms: (frames as i64 * 1000) / WHISPER_RATE as i64,
         started_at: session.started_at,
         page_id: None,
+        marks: session.marks.clone(),
     };
     session.finished = Some(recording.clone());
     Ok(recording)

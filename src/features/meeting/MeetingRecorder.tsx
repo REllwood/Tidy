@@ -13,6 +13,8 @@ import {
   CircleDot,
   History,
   RefreshCw,
+  Bookmark,
+  Timer,
 } from "lucide-react";
 import {
   modelsApi,
@@ -31,6 +33,7 @@ import { invalidateMeetingQueries } from "./invalidation";
 import { languageLabels, type TranscriptionLanguage } from "./transcriptionLanguage";
 import {
   controlEnabled,
+  countdownCause,
   keepAudioNotice,
   sourceWarning,
 } from "./recorderPresentation";
@@ -48,8 +51,18 @@ export function MeetingRecorder() {
     queryKey: ["recording-preferences"],
     queryFn: recordingPreferencesApi.get,
   });
-  const { state, language, setLanguage, start, stop, reset, cancelStart, setClient } =
-    useSharedMeetingFlow();
+  const {
+    state,
+    language,
+    setLanguage,
+    start,
+    stop,
+    reset,
+    cancelStart,
+    setClient,
+    mark,
+    keepRecording,
+  } = useSharedMeetingFlow();
   const openPage = useUi((s) => s.openPage);
   const { data: models } = useQuery({
     queryKey: ["models"],
@@ -237,15 +250,38 @@ export function MeetingRecorder() {
                 />
               }
             />
-            <Button
-              variant="destructive"
-              className="mt-6 w-full"
-              size="lg"
-              disabled={!controlEnabled("stop", state.phase)}
-              onClick={() => void stop()}
-            >
-              <Square className="size-4" /> Stop &amp; transcribe
-            </Button>
+            {state.countdown && (
+              <StopCountdown
+                reason={state.countdown.reason}
+                deadline={state.countdown.deadline_ms}
+                onKeep={() => void keepRecording()}
+              />
+            )}
+            <div className="mt-6 flex gap-2">
+              <Button
+                variant="secondary"
+                size="lg"
+                className="shrink-0"
+                onClick={() => void mark()}
+                title="Mark this moment (Control-Option-M from any app)"
+              >
+                <Bookmark className="size-4" />
+                {state.marks > 0 ? `Marked ${state.marks}` : "Mark moment"}
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1"
+                size="lg"
+                disabled={!controlEnabled("stop", state.phase)}
+                onClick={() => void stop()}
+              >
+                <Square className="size-4" /> Stop &amp; transcribe
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-text-faint">
+              Press Control-Option-M in any app to mark a moment. Marked moments
+              are listed in the meeting notes.
+            </p>
             {state.liveTranscript && (
               <div className="mt-5 border-t border-border pt-4">
                 <div className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-text-faint">
@@ -277,6 +313,9 @@ export function MeetingRecorder() {
               Your transcript is saved. Summaries and search will process in the
               meeting library when local AI is enabled.
             </p>
+            {state.stopReason && (
+              <p className="mt-2 text-sm text-text-muted">{state.stopReason}.</p>
+            )}
             <div className="mt-5 flex flex-wrap justify-center gap-2">
               <Button
                 onClick={() => state.savedPageId && openPage(state.savedPageId)}
@@ -292,6 +331,38 @@ export function MeetingRecorder() {
 
         {state.phase === "error" && <RecorderError />}
       </div>
+    </div>
+  );
+}
+
+/** An automatic stop counting down, with the chance to keep recording. */
+function StopCountdown({
+  reason,
+  deadline,
+  onKeep,
+}: {
+  reason: string;
+  deadline: number;
+  onKeep: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.ceil((deadline - now) / 1000));
+  return (
+    <div
+      role="status"
+      className="mt-5 flex items-center gap-3 rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-bg-subtle px-3 py-2.5 text-sm"
+    >
+      <Timer className="size-4 shrink-0 text-warning" />
+      <span className="flex-1">
+        {countdownCause(reason)} Stopping in {seconds} s.
+      </span>
+      <Button size="sm" variant="outline" onClick={onKeep}>
+        Keep recording
+      </Button>
     </div>
   );
 }
