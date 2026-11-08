@@ -67,6 +67,17 @@ pub async fn meeting_next_steps_to_tasks(
 }
 
 /// The note layouts a meeting's notes can be rewritten as.
+/// Tick a next step off in a meeting's notes, or untick it.
+#[tauri::command]
+pub async fn set_next_step_done(
+    app: AppHandle,
+    page_id: String,
+    action: String,
+    done: bool,
+) -> AppResult<tidy_core::llm::MeetingSummary> {
+    run_db(&app, move |conn| tidy_core::store::meeting_ai::set_done(conn, &page_id, &action, done)).await
+}
+
 #[tauri::command]
 pub fn note_templates() -> &'static [tidy_core::store::note_templates::Template] {
     tidy_core::store::note_templates::TEMPLATES

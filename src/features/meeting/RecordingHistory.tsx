@@ -403,7 +403,7 @@ export function RecordingHistory() {
         <p className="mt-6 text-xs leading-relaxed text-text-muted">
           Transcripts are saved automatically. Audio is only kept when Keep
           meeting audio is on in Settings, or while a meeting still needs
-          transcribing. Saved audio uses about 115 MB per hour. Without audio, a
+          transcribing. Saved audio uses about 230 MB per hour. Without audio, a
           meeting cannot be transcribed again.
         </p>
       </div>

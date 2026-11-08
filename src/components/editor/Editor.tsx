@@ -449,6 +449,9 @@ function EditorInner({
             </Button>
           </div>
         )}
+        {/* The notes come first. The recording's tools fold away below them
+            once a transcript is saved. */}
+        <MeetingSummaryPanel pageId={pageId} />
         <MeetingRecordingPanel
           pageId={pageId}
           beforeTranscribe={() => flushRef.current()}
@@ -461,7 +464,6 @@ function EditorInner({
             }
           }}
         />
-        <MeetingSummaryPanel pageId={pageId} />
         <NoteSummaryStatus pageId={pageId} />
         <FeatureTip id="wikilinks">
           Type <Kbd>/</Kbd> for blocks, <Kbd>[[</Kbd> to link another page, or{" "}

@@ -33,11 +33,60 @@ let previewProgress: {
   origin: "user" | "worker";
 } | null = null;
 let previewAiEnabled = false;
+let previewCalendar = false;
 let previewSelected = 'qwen3-4b';
 let previewProvider: 'builtin' | 'ollama' = 'builtin';
 let previewOllamaModel = '';
 const previewDownloads = new Set<string>();
 const previewMeetings = new Set<string>();
+/** Next steps ticked off in the preview's meeting notes, by meeting. */
+const previewDone = new Map<string, string[]>();
+
+/** A made-up weekly meeting for the preview: who said what, and when. */
+const PREVIEW_TRANSCRIPT: [string, string, string][] = [
+  ["Ana", "00:00:02", "Okay, let's start with the beta. We have about forty teams signed up and the feedback is mostly about onboarding."],
+  ["Ana", "00:00:09", "People get stuck on the empty state when they first open the app."],
+  ["You", "00:00:16", "Right. I think the empty state is the real problem. I'll send the new onboarding mockups by Thursday."],
+  ["Ben", "00:00:26", "Can we move the launch to the twelfth?"],
+  ["Ana", "00:00:31", "Yes, let's lock the twelfth. Ben owns the release notes."],
+  ["Ben", "00:00:36", "Sure, I'll draft them this week and share them on Friday."],
+  ["You", "00:00:46", "Maybe we could do a webinar at some point, but that's just an idea."],
+  ["Ana", "00:00:52", "Last thing. We keep the price at twenty five dollars, one time."],
+  ["You", "00:00:58", "Agreed. I'll update the pricing page before the launch."],
+  ["Ben", "00:01:07", "Do we know who answers support during launch week?"],
+  ["Ana", "00:01:12", "Not yet. I'll ask the support lead and come back to you."],
+  ["You", "00:01:20", "And the analytics question can wait for next week."],
+  ["Ana", "00:01:26", "Great, thanks everyone."],
+];
+
+const PREVIEW_NOTES = {
+  summary:
+    "A weekly check-in on the beta and the launch. The team agreed to launch on the 12th at $25 one time, and to fix the empty state that is slowing onboarding. Support cover for launch week is still open.",
+  sections: [
+    { heading: "Beta feedback", points: ["About 40 teams are in the beta, and most feedback is about onboarding.", "Teams get stuck on the empty state when they first open the app."] },
+    { heading: "Launch and pricing", points: ["The launch is locked for the 12th, and Ben owns the release notes.", "A webinar came up as an idea for later, not a plan."] },
+  ],
+  decisions: ["Launch on the 12th.", "Keep the price at $25, one time."],
+  action_items: [
+    "You will send the new onboarding mockups by Thursday.",
+    "Ben will draft and share the release notes by Friday.",
+    "You will update the pricing page before the launch.",
+  ],
+  open_questions: ["Who answers support during launch week? Ana is asking the support lead."],
+  moments: ["[00:00:31] Ana: Yes, let's lock the twelfth. Ben owns the release notes."],
+  times: {
+    "About 40 teams are in the beta, and most feedback is about onboarding.": "00:00:02",
+    "Teams get stuck on the empty state when they first open the app.": "00:00:09",
+    "The launch is locked for the 12th, and Ben owns the release notes.": "00:00:31",
+    "A webinar came up as an idea for later, not a plan.": "00:00:46",
+    "Launch on the 12th.": "00:00:31",
+    "Keep the price at $25, one time.": "00:00:52",
+    "You will send the new onboarding mockups by Thursday.": "00:00:16",
+    "Ben will draft and share the release notes by Friday.": "00:00:36",
+    "You will update the pricing page before the launch.": "00:00:58",
+    "Who answers support during launch week? Ana is asking the support lead.": "00:01:07",
+  } as Record<string, string>,
+};
 const previewModels = catalogue.ai;
 const MODEL_DEFS = catalogue.transcription;
 const MODEL_KEY = "tidy-mock-models";
@@ -1002,13 +1051,18 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         open_questions: [],
       } as T;
     case "calendar_status":
-      return { enabled: false, access: "not_determined" } as T;
+      return { enabled: previewCalendar, access: previewCalendar ? "granted" : "not_determined" } as T;
     case "calendar_connect":
-      return { enabled: false, access: "denied" } as T;
+      previewCalendar = true;
+      return { enabled: true, access: "granted" } as T;
     case "calendar_disconnect":
+      previewCalendar = false;
       return undefined as T;
-    case "calendar_events":
-      return [] as T;
+    case "calendar_events": {
+      // One made-up meeting starting soon, so the preview shows what is next.
+      const start = Math.ceil((Date.now() + 12 * 60_000) / 60_000) * 60_000;
+      return [{ title: "Weekly product sync", start_ms: start, end_ms: start + 30 * 60_000, attendees: ["Ana Ruiz", "Ben Ito"], series: "preview-weekly" }] as T;
+    }
     case "note_templates":
       return [
         { id: "general", name: "General", sections: [] },
@@ -1016,7 +1070,16 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       ] as T;
     case "set_meeting_template":
       return undefined as T;
-    case "meeting_last_time":
+    case "meeting_last_time": {
+      const id = [...previewMeetings].pop();
+      if (!id || !previewAiEnabled) return null as T;
+      const done = previewDone.get(id) ?? [];
+      return {
+        meetings: [{ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? "Meeting", started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now() }],
+        points: PREVIEW_NOTES.decisions,
+        open_actions: PREVIEW_NOTES.action_items.filter(a => !done.includes(a)),
+      } as T;
+    }
     case "meeting_event":
       return null as T;
     case "meeting_hud_respond":
@@ -1051,7 +1114,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         title: "Saved meeting",
         client: args.client || null,
         started_at: now(),
-        duration_ms: 142000,
+        duration_ms: 92000,
         audio_path: `mock://${note.page_id}.wav`,
         audio_available: true,
         audio_temporary: !mockRecordingKeepAudio,
@@ -1097,12 +1160,15 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         commit();
         throw new Error(m.transcript_error);
       }
+      void segments;
       const body = JSON.stringify([
         { type: "heading", props: { level: 2 }, content: "Transcript" },
-        ...segments.map((s) => ({
-          type: "paragraph",
-          content: `[00:${String(Math.floor(s.start_ms / 1000)).padStart(2, "0")}] ${s.text}`,
-        })),
+        ...PREVIEW_TRANSCRIPT.flatMap(([speaker, at, said], i) => [
+          ...(PREVIEW_TRANSCRIPT[i - 1]?.[0] === speaker
+            ? []
+            : [{ type: "paragraph", content: speaker }]),
+          { type: "paragraph", content: `[${at}] ${said}` },
+        ]),
       ]);
       const versions = (d.transcriptVersions ??= {})[args.pageId] ?? [];
       versions.unshift(
@@ -1220,7 +1286,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return undefined as T;
     case "ai_end_recording": return undefined as T;
     case "meeting_ai_jobs":
-      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', template: 'general', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { summary: 'Preview: the team agreed to ship the recorder beta by Friday.', sections: [{ heading: 'Recorder beta', points: ['The team agreed to ship the recorder beta by Friday.'] }, { heading: 'Scope and ownership', points: ['The team will confirm the first release scope and owners this week.'] }], open_questions: [], action_items: ['Wire up the model manager'], decisions: ['Ship the beta by Friday'] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
+      return [...previewMeetings].map(id => ({ page_id: id, title: db?.pages.find(p => p.id === id)?.title ?? 'Meeting', template: 'general', client_id: d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id ?? null, client_name: d.pages.find(p => p.id === d.links.find(l => l.source_page_id === id && l.kind === 'task_of')?.target_page_id)?.title ?? null, started_at: d.pages.find(p => p.id === id)?.created_at ?? Date.now(), passage_count: previewAiEnabled ? 1 : 0, state: previewAiEnabled ? 'ready' : 'queued', error: null, summary: previewAiEnabled ? { ...PREVIEW_NOTES, done: previewDone.get(id) ?? [] } : null, indexed: previewAiEnabled && previewDownloads.has('nomic-embed') })) as T;
     case "meeting_ai_retry":
       // Background meeting notes: worker-origin progress, so settings stay usable.
       previewProgress = { label: 'Writing meeting notes in the background', model_id: previewSelected, completed: 0, total: 100, origin: 'worker' };
@@ -1238,8 +1304,8 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       const title = (id: string) => db?.pages.find(p => p.id === id)?.title ?? 'Meeting';
       const date = (id: string) => d.pages.find(p => p.id === id)?.created_at ?? Date.now();
       if (id && /action|next step|to-?do|follow/.test(question))
-        return { answer: `## ${title(id)} · ${new Date(date(id)).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} [1]\n- Wire up the model manager`, sources: [{ id: `notes:${id}`, page_id: id, title: title(id), block_id: null, timestamp: null, text: 'Preview: the team agreed to ship the recorder beta by Friday.', started_at: date(id), kind: 'notes' }], coverage: null, grounded: true, interpretation: [] } as T;
-      return { answer: id ? '- Preview answer: the team agreed to ship the recorder beta by Friday. [1]' : 'No meetings have been recorded in this preview.', sources: ids.map(id => ({ id: `preview-${id}`, page_id: id, title: title(id), block_id: null, timestamp: '00:14', text: 'We agreed to ship the recorder beta by Friday.', started_at: date(id), kind: 'transcript' })), coverage: null, grounded: true, interpretation: /last week/.test(question) ? ['Read “last week” in your local time.'] : [] } as T;
+        return { answer: `## ${title(id)} · ${new Date(date(id)).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} [1]\n${PREVIEW_NOTES.action_items.map(a => `- ${a}`).join('\n')}`, sources: [{ id: `notes:${id}`, page_id: id, title: title(id), block_id: null, timestamp: null, text: PREVIEW_NOTES.summary, started_at: date(id), kind: 'notes' }], coverage: null, grounded: true, interpretation: [] } as T;
+      return { answer: id ? '- Preview answer: the launch is on the 12th, the price stays at $25 one time, and Ben owns the release notes. [1]' : 'No meetings have been recorded in this preview.', sources: ids.slice(0, 3).map(id => ({ id: `preview-${id}`, page_id: id, title: title(id), block_id: null, timestamp: '00:00:31', text: "Yes, let's lock the twelfth. Ben owns the release notes.", started_at: date(id), kind: 'transcript' })), coverage: null, grounded: true, interpretation: /last week/.test(question) ? ['Read “last week” in your local time.'] : [] } as T;
     }
     // ---- Meeting notes (preview): speaker names, notes in the page, tasks ----
     case "meeting_speakers":
@@ -1294,6 +1360,12 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       d.documents[args.pageId] = JSON.stringify(blocks.filter(b => !text(b).startsWith("Transcript saved. Local AI")));
       commit();
       return (existing >= 0) as T;
+    }
+    case "set_next_step_done": {
+      const done = (previewDone.get(args.pageId) ?? []).filter((d) => d !== args.action);
+      if (args.done) done.push(args.action);
+      previewDone.set(args.pageId, done);
+      return { ...PREVIEW_NOTES, done } as T;
     }
     case "meeting_next_steps_to_tasks": {
       const mdb = dbById(args.databaseId);

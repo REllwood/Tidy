@@ -263,6 +263,8 @@ export interface MeetingSummary {
   moments?: string[];
   /** When each point was said ("00:12:34"), keyed by the point's text. */
   times?: Record<string, string>;
+  /** Next steps the person has ticked off, by their text. */
+  done?: string[];
 }
 
 /** One line of the live transcript shown while recording. */
@@ -513,6 +515,9 @@ export const meetingNotesApi = {
     invoke<boolean>("add_meeting_notes_to_page", { pageId }),
   nextStepsToTasks: (pageId: string, databaseId: string) =>
     invoke<TasksAdded>("meeting_next_steps_to_tasks", { pageId, databaseId }),
+  /** Ticks a next step off in the notes, or unticks it. */
+  setDone: (pageId: string, action: string, done: boolean) =>
+    invoke<MeetingSummary>("set_next_step_done", { pageId, action, done }),
 };
 
 /** The calendar event a meeting was recorded for. */

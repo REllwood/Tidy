@@ -10,7 +10,6 @@ import {
   Loader2,
   AlertCircle,
   AlertTriangle,
-  CircleDot,
   History,
   RefreshCw,
   Bookmark,
@@ -39,7 +38,7 @@ import {
 } from "./recorderPresentation";
 
 import { AudioLevelMeter } from "./AudioLevelMeter";
-import { MeetingNow } from "./MeetingNow";
+import { EventHeader, LastTimeCard, useMeetingNow } from "./MeetingNow";
 import { LivePanel } from "./LivePanel";
 import { clientOptions } from "./meetingLibrary";
 
@@ -77,174 +76,202 @@ export function MeetingRecorder() {
   const clients = useQuery({ queryKey: meetingJobsKey, queryFn: localAi.jobs });
   const selected = models?.find((m) => m.selected && m.downloaded);
   const keepAudio = keepAudioNotice(state.phase, state.keepAudio, retention.data);
+  const now = useMeetingNow(state.client);
   const blocked = retention.isPending || (!selected && !retention.data);
 
+  const idle = state.phase === "idle" || state.phase === "starting";
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10 sm:px-10">
         <p className="page-eyebrow">Capture a conversation</p>
-        <h1 className="page-title">Meeting recorder</h1>
-        <p className="page-description mb-7">
-          Your transcript is saved on this Mac. Keeping the audio is optional.
-        </p>
-
-        <p className="mb-5 text-sm text-text-muted">
-          {keepAudio
-            ? "Meeting audio will be kept for re-transcription."
-            : "Audio is discarded after processing. Turn on Keep meeting audio in Settings if you want to re-transcribe later."}
-        </p>
-        {(state.phase === "idle" || state.phase === "starting") && (
-          <div className="workspace-panel p-6 sm:p-7">
-            <MeetingNow client={state.client} />
-            <SourceRow
-              icon={<Mic className="size-4" />}
-              name="Microphone"
-              sub="Your voice"
-            />
-            <SourceRow
-              icon={<Volume2 className="size-4" />}
-              name="System audio"
-              sub="Meeting participants and shared audio"
-            />
-            <div className="mt-4 rounded-lg bg-bg-subtle px-3 py-2 text-note text-text-muted">
-              Transcription:{" "}
-              {selected ? (
-                <b className="text-text">{selected.name} · on-device</b>
+        {idle && (
+          <div className="mt-4 space-y-4">
+            <div className="workspace-panel p-6 sm:p-8">
+              {now.picked ? (
+                <EventHeader picked={now.picked} />
               ) : (
-                <span className="text-warning">
+                <div>
+                  <h1 className="font-editorial text-[clamp(30px,3.6vw,40px)] leading-tight tracking-[-0.03em]">
+                    Record a meeting
+                  </h1>
+                  <p className="mt-2 text-sm text-text-muted">
+                    Your microphone and the other side of the call, transcribed on
+                    this Mac.
+                  </p>
+                </div>
+              )}
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                {state.phase === "starting" ? (
+                  <>
+                    <Button size="lg" className="rounded-full px-6" disabled>
+                      <Loader2 className="size-4 animate-spin" /> Preparing…
+                    </Button>
+                    <Button
+                      size="lg"
+                      variant="secondary"
+                      className="rounded-full"
+                      onClick={() => void cancelStart()}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="lg"
+                    className="rounded-full px-6"
+                    onClick={() => void start()}
+                    disabled={!controlEnabled("start", state.phase) || blocked}
+                  >
+                    {retention.isPending ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <span className="size-2.5 rounded-full bg-rec" aria-hidden />
+                    )}
+                    {retention.isPending ? "Loading recording settings…" : "Start recording"}
+                  </Button>
+                )}
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2 text-xs">
+                <Chip icon={<Mic className="size-3" />}>Microphone</Chip>
+                <Chip icon={<Volume2 className="size-3" />}>Mac audio</Chip>
+                <Chip>
+                  {selected ? `${selected.name} on this Mac` : "No transcription model"}
+                </Chip>
+                <Chip>
+                  {ai?.ready
+                    ? `Notes by ${ai.config.provider === "builtin" ? "Tidy local AI" : ai.config.ollama_model}`
+                    : "Notes need local AI"}
+                </Chip>
+                <Chip>{keepAudio ? "Audio kept" : "Audio not kept"}</Chip>
+              </div>
+              {!selected && (
+                <p className="mt-3 flex items-start gap-2 text-sm text-warning">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                   Download a transcription model in Settings. To record without
                   one, turn on Keep meeting audio.
-                </span>
+                </p>
               )}
-              <br />
-              Summaries:{" "}
-              {ai?.ready ? (
-                <b className="text-text">
-                  {ai.config.provider === "builtin"
-                    ? "Tidy local AI"
-                    : ai.config.ollama_model}{" "}
-                  (local)
-                </b>
-              ) : (
-                <span className="text-text-faint">
-                  Set up local AI in Settings (transcript still saves)
-                </span>
-              )}
+              <div className="mt-6 grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-text-faint">
+                    Client (optional)
+                  </span>
+                  <input
+                    list="meeting-clients"
+                    disabled={!controlEnabled("start", state.phase) || blocked}
+                    value={state.client}
+                    onChange={(e) => setClient(e.target.value)}
+                    placeholder="e.g. Acme Corp"
+                    className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-brand disabled:opacity-60"
+                  />
+                  <datalist id="meeting-clients">
+                    {clientOptions(clients.data ?? []).map(([id, name]) => (
+                      <option key={id} value={name} />
+                    ))}
+                  </datalist>
+                  <span className="block text-xs leading-relaxed text-text-faint">
+                    Meetings for the same client can be searched together.
+                  </span>
+                </label>
+                <LanguageChoice
+                  value={language}
+                  onChange={setLanguage}
+                  disabled={!controlEnabled("start", state.phase)}
+                />
+              </div>
             </div>
-            <label className="mt-4 block space-y-1">
-              <span className="text-xs font-medium text-text-faint">
-                Client (optional)
-              </span>
-              <input
-                list="meeting-clients"
-                disabled={!controlEnabled("start", state.phase) || blocked}
-                value={state.client}
-                onChange={(e) => setClient(e.target.value)}
-                placeholder="e.g. Acme Corp"
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-brand disabled:opacity-60"
-              />
-              <datalist id="meeting-clients">
-                {clientOptions(clients.data ?? []).map(([id, name]) => (
-                  <option key={id} value={name} />
-                ))}
-              </datalist>
-              <span className="block text-xs leading-relaxed text-text-faint">
-                Choose an existing client or enter a new name. Meetings for the
-                same client can be searched together.
-              </span>
-            </label>
-            <LanguageChoice
-              value={language}
-              onChange={setLanguage}
-              disabled={!controlEnabled("start", state.phase)}
-            />
-            {state.phase === "starting" && (
-              <p
-                role="status"
-                className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
-              >
-                <Loader2 className="size-4 shrink-0 animate-spin" />
-                Preparing recording…
-              </p>
-            )}
-            {state.phase === "starting" ? (
-              <Button
-                className="mt-4 w-full"
-                size="lg"
-                variant="secondary"
-                onClick={() => void cancelStart()}
-              >
-                Cancel
-              </Button>
-            ) : (
-              <Button
-                className="mt-4 w-full"
-                size="lg"
-                onClick={() => void start()}
-                disabled={!controlEnabled("start", state.phase) || blocked}
-              >
-                {retention.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <CircleDot className="size-4" />
-                )}{" "}
-                {retention.isPending
-                  ? "Loading recording settings…"
-                  : "Start recording"}
-              </Button>
-            )}
-            <p className="mt-3 flex items-start gap-2 text-xs text-text-faint">
+            {now.last && <LastTimeCard last={now.last} />}
+            <p className="flex items-start gap-2 px-1 text-xs leading-relaxed text-text-faint">
               <Lock className="mt-0.5 size-3.5 shrink-0" />
-              Everything runs on your Mac. macOS will ask for microphone and
-              system audio permission the first time.
+              Everything runs on your Mac. macOS asks for microphone and system
+              audio permission the first time.
+              {keepAudio
+                ? " Meeting audio is kept so you can play it back or transcribe it again."
+                : " Audio is discarded once the transcript is saved. Turn on Keep meeting audio in Settings to keep it."}
             </p>
           </div>
         )}
 
         {state.phase === "recording" && (
-          <div className="workspace-panel p-6 sm:p-7">
-            <div className="mb-5 flex items-center gap-3">
-              <span
-                className="size-3.5 animate-pulse rounded-full bg-rec"
-                aria-hidden
-              />
-              <span className="font-semibold text-rec-text">Recording</span>
+          <div className="workspace-panel mt-4 p-6 sm:p-8">
+            <div className="flex items-center gap-2.5">
+              <span className="size-2.5 animate-pulse rounded-full bg-rec" aria-hidden />
+              <span className="text-2xs font-semibold uppercase tracking-[0.14em] text-rec-text">
+                Recording
+              </span>
+              <span className="ml-auto text-xs text-text-faint">
+                On this Mac · nothing is uploaded
+              </span>
             </div>
-            <div
-              className="mb-1 font-mono text-5xl font-bold tabular-nums"
-              role="timer"
-            >
-              {mmss(state.elapsedMs)}
-            </div>
-            <div className="mb-5 inline-flex items-center gap-1.5 rounded-full bg-[color-mix(in_srgb,var(--success)_14%,transparent)] px-2.5 py-1 text-xs font-semibold text-success">
-              <CircleDot className="size-3" /> On-device · nothing is uploaded
+            <div className="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+              <div
+                className="font-mono text-6xl font-semibold tabular-nums tracking-tight"
+                role="timer"
+              >
+                {mmss(state.elapsedMs)}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  className="rounded-full"
+                  onClick={() => void mark()}
+                  title="Mark this moment (Control-Option-M from any app)"
+                >
+                  <Bookmark className="size-4" />
+                  {state.marks > 0 ? `Marked ${state.marks}` : "Mark moment"}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="lg"
+                  className="rounded-full"
+                  disabled={!controlEnabled("stop", state.phase)}
+                  onClick={() => void stop()}
+                >
+                  <Square className="size-3.5 fill-current" /> Stop and transcribe
+                </Button>
+              </div>
             </div>
             {state.resumed && (
               <p
                 role="status"
-                className="mb-4 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
+                className="mt-5 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
               >
                 Reconnected to a recording that was already running. Stop it
                 here when the meeting finishes.
               </p>
             )}
             <SourceStatus sources={state.sources} />
-            <SourceRow
-              icon={<Mic className="size-4" />}
-              name="Microphone"
-              sub={state.sources.mic ? "Capturing" : "Unavailable"}
-              meter={
-                <AudioLevelMeter
-                  label="Microphone"
-                  value={state.levels.mic}
-                  available={state.sources.mic}
-                />
-              }
-            />
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <SourceTile
+                icon={<Mic className="size-4" />}
+                name="You"
+                sub={state.sources.mic ? "Microphone" : "Microphone unavailable"}
+                meter={
+                  <AudioLevelMeter
+                    label="Microphone"
+                    value={state.levels.mic}
+                    available={state.sources.mic}
+                  />
+                }
+              />
+              <SourceTile
+                icon={<Volume2 className="size-4" />}
+                name="Others"
+                sub={state.sources.system ? "Mac audio" : "Mac audio unavailable"}
+                meter={
+                  <AudioLevelMeter
+                    label="System audio"
+                    value={state.levels.system}
+                    available={state.sources.system}
+                  />
+                }
+              />
+            </div>
             {state.systemSilent && (
               <p
                 role="status"
-                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
+                className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted"
               >
                 <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
                 No system audio yet. If others are speaking, allow Tidy under
@@ -252,18 +279,6 @@ export function MeetingRecorder() {
                 Recording.
               </p>
             )}
-            <SourceRow
-              icon={<Volume2 className="size-4" />}
-              name="System audio"
-              sub={state.sources.system ? "Capturing" : "Unavailable"}
-              meter={
-                <AudioLevelMeter
-                  label="System audio"
-                  value={state.levels.system}
-                  available={state.sources.system}
-                />
-              }
-            />
             {state.countdown && (
               <StopCountdown
                 reason={state.countdown.reason}
@@ -271,28 +286,7 @@ export function MeetingRecorder() {
                 onKeep={() => void keepRecording()}
               />
             )}
-            <div className="mt-6 flex gap-2">
-              <Button
-                variant="secondary"
-                size="lg"
-                className="shrink-0"
-                onClick={() => void mark()}
-                title="Mark this moment (Control-Option-M from any app)"
-              >
-                <Bookmark className="size-4" />
-                {state.marks > 0 ? `Marked ${state.marks}` : "Mark moment"}
-              </Button>
-              <Button
-                variant="destructive"
-                className="flex-1"
-                size="lg"
-                disabled={!controlEnabled("stop", state.phase)}
-                onClick={() => void stop()}
-              >
-                <Square className="size-4" /> Stop &amp; transcribe
-              </Button>
-            </div>
-            <p className="mt-2 text-xs text-text-faint">
+            <p className="mt-3 text-xs text-text-faint">
               Press Control-Option-M in any app to mark a moment. Marked moments
               are listed in the meeting notes.
             </p>
@@ -305,29 +299,31 @@ export function MeetingRecorder() {
         )}
 
         {state.phase === "done" && (
-          <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-7 text-center shadow-sm">
-            <div className="mx-auto mb-3 grid size-12 place-items-center rounded-full bg-success text-white">
+          <div className="workspace-panel mt-4 p-8 text-center">
+            <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full bg-brand text-brand-fg">
               <Check className="size-6" />
             </div>
-            <div className="text-lg font-semibold">
+            <div className="font-editorial text-2xl tracking-[-0.02em]">
               {state.client.trim()
                 ? `Filed under ${state.client.trim()}`
                 : "Saved to Recording history"}
             </div>
-            <p className="mt-1 text-sm text-text-muted">
-              Your transcript is saved. Summaries and search will process in the
-              meeting library when local AI is enabled.
+            <p className="mx-auto mt-2 max-w-sm text-sm text-text-muted">
+              {ai?.ready
+                ? "Your transcript is saved. The notes are being written on this Mac and will appear on the meeting's page."
+                : "Your transcript is saved. Turn on local AI in Settings to get notes and search for it."}
             </p>
             {state.stopReason && (
               <p className="mt-2 text-sm text-text-muted">{state.stopReason}.</p>
             )}
             <div className="mt-5 flex flex-wrap justify-center gap-2">
               <Button
+                className="rounded-full"
                 onClick={() => state.savedPageId && openPage(state.savedPageId)}
               >
-                Open note
+                Open the meeting
               </Button>
-              <Button variant="secondary" onClick={reset}>
+              <Button variant="secondary" className="rounded-full" onClick={reset}>
                 New recording
               </Button>
             </div>
@@ -382,7 +378,7 @@ function LanguageChoice({
   disabled?: boolean;
 }) {
   return (
-    <label className="mt-4 block space-y-1">
+    <label className="block space-y-1">
       <span className="text-xs font-medium text-text-faint">
         Spoken language
       </span>
@@ -397,8 +393,8 @@ function LanguageChoice({
         <option value="auto">{languageLabels.auto}</option>
       </select>
       <span className="block text-xs leading-relaxed text-text-faint">
-        Detect automatically suits meetings in another language. Transcription
-        keeps the spoken language; it does not translate.
+        Choose Detect automatically for a meeting in another language. It is
+        transcribed, not translated.
       </span>
     </label>
   );
@@ -507,17 +503,11 @@ function SourceStatus({
   sources: { mic: boolean; system: boolean };
 }) {
   const warning = sourceWarning(sources);
-  if (!warning)
-    return (
-      <p className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2.5 text-sm text-text-muted">
-        <CircleDot className="size-4 shrink-0 text-success" />
-        Microphone and system audio are both being captured.
-      </p>
-    );
+  if (!warning) return null;
   return (
     <p
       role="alert"
-      className="mb-4 flex items-start gap-2 rounded-lg border border-warning/40 bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] px-3 py-2.5 text-sm text-text"
+      className="mt-5 flex items-start gap-2 rounded-lg border border-warning/40 bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] px-3 py-2.5 text-sm text-text"
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
       {warning}
@@ -525,7 +515,17 @@ function SourceStatus({
   );
 }
 
-function SourceRow({
+function Chip({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-subtle px-2.5 py-1 text-text-muted">
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+/** One side of the call while recording, with its level. */
+function SourceTile({
   icon,
   name,
   sub,
@@ -534,12 +534,12 @@ function SourceRow({
   icon: React.ReactNode;
   name: string;
   sub: string;
-  meter?: React.ReactNode;
+  meter: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3 border-t border-border py-3 first:border-t-0">
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-bg-subtle/60 px-3.5 py-2.5">
       <span className="text-text-muted">{icon}</span>
-      <span>
+      <span className="min-w-0">
         <span className="block text-sm font-medium">{name}</span>
         <span className="block text-xs text-text-faint">{sub}</span>
       </span>
@@ -564,7 +564,7 @@ function Step({
       <span
         className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full border text-sm ${
           status === "done"
-            ? "border-success bg-success text-white"
+            ? "border-brand bg-brand text-brand-fg"
             : status === "active"
               ? "border-brand text-brand"
               : "border-border-strong text-text-faint"

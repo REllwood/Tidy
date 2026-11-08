@@ -146,7 +146,9 @@ pub fn last_time(
 
     let mut open_actions = Vec::new();
     for c in &matched {
-        let done = ticked(conn, &c.page_id)?;
+        // Ticked off in the page, or in the notes themselves.
+        let mut done = ticked(conn, &c.page_id)?;
+        done.extend(c.summary.done.iter().cloned());
         for action in &c.summary.action_items {
             if open_actions.len() >= ACTIONS {
                 break;
@@ -249,6 +251,11 @@ mod tests {
         assert_eq!(brief.points[..2], ["Budget stays at $500.".to_string(), "Launch moves to 28 October.".to_string()]);
         assert_eq!(brief.points.len(), 3);
         assert_eq!(brief.open_actions, vec!["Priya chases photos.", "Mia sends the timeline."]);
+
+        // Ticked off in the notes instead of the page.
+        meeting_ai::set_done(&c, &newer, "Priya chases photos.", true).unwrap();
+        let brief = last_time(&c, "Acme weekly", Some("s1"), None, 3_000).unwrap().unwrap();
+        assert_eq!(brief.open_actions, vec!["Mia sends the timeline."]);
     }
 
     #[test]

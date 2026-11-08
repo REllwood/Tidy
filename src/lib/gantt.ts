@@ -29,7 +29,7 @@ const rawValue: ValueResolver = (row, field) => row.cells[field.id];
 export function colorFor(color?: string): string {
   switch (color) {
     case "blue":
-      return "#3b6fb0";
+      return "var(--info)";
     case "green":
       return "var(--success)";
     case "amber":

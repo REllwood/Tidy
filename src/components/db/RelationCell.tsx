@@ -111,7 +111,7 @@ export function RelationCell({
                 >
                   <span
                     className={`grid size-4 shrink-0 place-items-center rounded border ${
-                      on ? "border-brand bg-brand text-white" : "border-border"
+                      on ? "border-brand bg-brand text-brand-fg" : "border-border"
                     }`}
                   >
                     {on && <Check className="size-3" />}

@@ -19,6 +19,7 @@ import { TaskRow } from "@/components/planner/TaskRow";
 import { Button } from "@/components/ui/button";
 import type { Page } from "@/lib/api";
 import { MeetingMemory } from "./MeetingMemory";
+import { NextMeeting } from "./NextMeeting";
 
 export function HomeDashboard() {
   const openPage = useUi((s) => s.openPage);
@@ -233,6 +234,7 @@ export function HomeDashboard() {
             </section>
           </div>
           <div className="min-w-0 space-y-7">
+            <NextMeeting />
             <MeetingMemory />
             <section aria-label="Favourite pages">
               <div className="mb-3 flex items-center gap-2">

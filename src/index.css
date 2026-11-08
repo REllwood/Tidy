@@ -32,6 +32,15 @@
   --danger-c: #a83a30;
   --rec: #d23b30;
   --rec-text: #bf3529;
+  /* Text on a coloured fill, such as a timeline bar. */
+  --on-colour: #ffffff;
+  /* Speakers on a meeting's map and people list. */
+  --speaker-1: #3b6fb0;
+  --speaker-2: #b26d22;
+  --speaker-3: #85549f;
+  --speaker-4: #b9493e;
+  --speaker-5: #2f8580;
+  --speaker-6: #6f7428;
 
   /* shadcn/ui contract → Tidy palette */
   --background: var(--bg);
@@ -81,30 +90,45 @@
   --shadow-md: 0 4px 16px rgba(20, 20, 18, 0.1);
 }
 
+/* Dark: warm charcoal ("Ink"). Neutral layers, so the green reads as the
+   accent rather than tinting everything: the sidebar sits below the page,
+   cards a step above it, and insets and chips a step above the cards. */
 .dark {
-  --bg: #14201a;
-  --bg-subtle: #1c2b22;
-  --sidebar-bg: #101a15;
-  --surface: #19271f;
-  --surface-hover: #25362b;
-  --border-c: #2c3b30;
-  --border-strong: #445548;
-  --text: #eff2e9;
-  --text-muted: #b0bdae;
-  --text-faint: #96a791;
-  --brand: #a4ceb0;
-  --brand-fg: #173622;
-  --brand-soft: #273f2e;
-  --info: #6f9fd8;
-  --success: #5fae84;
-  --warning: #d6a13e;
-  --danger-c: #e0796d;
-  --rec: #e0796d;
-  --rec-text: #e0796d;
+  --bg: #171614;
+  --bg-subtle: #22211e;
+  --sidebar-bg: #12110f;
+  --surface: #1f1e1b;
+  --surface-hover: #2b2a26;
+  --border-c: #302e2a;
+  --border-strong: #45423c;
+  --text: #efece6;
+  --text-muted: #b3afa6;
+  --text-faint: #8f8b82;
+  --brand: #7ad6a0;
+  --brand-fg: #08210f;
+  --brand-soft: #233a2c;
+  --on-colour: #14130f;
+  --info: #7eaaf0;
+  --success: #6fcf97;
+  --warning: #e8b35c;
+  --danger-c: #f38d82;
+  --rec: #ff6052;
+  --rec-text: #ff8c80;
+  --speaker-1: #7fb2ff;
+  --speaker-2: #f2b45f;
+  --speaker-3: #c69cf4;
+  --speaker-4: #ff8e7e;
+  --speaker-5: #5ed0c4;
+  --speaker-6: #cdd36c;
+  --chart-1: #7ad6a0;
+  --chart-2: #7eaaf0;
+  --chart-3: #e8b35c;
+  --chart-4: #a9a59c;
+  --chart-5: #f38d82;
 
-  --destructive-foreground: #14201a;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.5);
+  --destructive-foreground: #2b0c08;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
 /* Expose tokens as Tailwind theme colors/radii so utilities resolve them. */
@@ -160,6 +184,7 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-rec: var(--rec);
+  --color-on-colour: var(--on-colour);
   --color-rec-text: var(--rec-text);
 
   --radius-xs: var(--radius-xs);
@@ -257,9 +282,21 @@
     @apply rounded-xl border border-border bg-surface;
     box-shadow: 0 2px 3px rgb(20 35 25 / 0.02);
   }
+  /* In the dark, a faint top edge lifts a card off the page. */
+  .dark .workspace-panel {
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.035),
+      0 1px 2px rgb(0 0 0 / 0.45);
+  }
 }
 :root {
   color-scheme: light;
+}
+/* The window follows the theme once this stylesheet loads. index.html
+   paints the same two colours before then, so nothing flashes. */
+html,
+html.dark {
+  background-color: var(--bg);
 }
 .dark {
   color-scheme: dark;
@@ -292,9 +329,8 @@ button:not(:disabled),
   }
 }
 
-/* A transcript line someone jumped to from the notes. */
-.transcript-line-found {
-  background: var(--brand-soft);
-  border-radius: 4px;
-  transition: background 0.4s;
+/* A transcript line someone jumped to from the notes or the map. A text
+   highlight, because the editor redraws any line whose markup is changed. */
+::highlight(transcript-line-found) {
+  background-color: var(--brand-soft);
 }

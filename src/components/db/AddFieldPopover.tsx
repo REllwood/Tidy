@@ -454,7 +454,7 @@ export function AddFieldPopover({
         <button
           disabled={!valid}
           onClick={submit}
-          className="mt-3 w-full rounded bg-brand px-2 py-1.5 text-sm font-medium text-white hover:bg-brand/90 disabled:opacity-40"
+          className="mt-3 w-full rounded bg-brand px-2 py-1.5 text-sm font-medium text-brand-fg hover:bg-brand/90 disabled:opacity-40"
         >
           Create field
         </button>

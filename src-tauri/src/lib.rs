@@ -245,6 +245,7 @@ pub fn run() {
             commands::meeting_notes::rename_meeting_speakers,
             commands::meeting_notes::add_meeting_notes_to_page,
             commands::meeting_notes::meeting_next_steps_to_tasks,
+            commands::meeting_notes::set_next_step_done,
             commands::recording_history::export_recording_audio,
             whisper::models::list_models,
             whisper::models::download_model,

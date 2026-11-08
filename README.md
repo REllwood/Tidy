@@ -50,7 +50,7 @@ Tidy checks for updates automatically, and you choose when to download, install 
 - **Both sides, kept apart.** Your microphone and the other side of the call are recorded separately. Your words are labelled **You**, and only the other side is split into speakers, so their voice coming back through your speakers is not transcribed as yours.
 - **It stops by itself.** A recording stops when the call ends, after 3 minutes of silence, or 5 minutes after its calendar event ends. A 15-second countdown lets you choose **Keep recording**, and the meeting notes why it stopped.
 - **Mark a moment.** Press **Control-Option-M** in any app, or **Mark moment**, and the moment is listed in the notes.
-- **Help during the call.** A live transcript, **Recap so far**, and answers from past meetings without leaving the call.
+- **Help during the call.** A live transcript with You and Others side by side, **Recap so far**, and answers from past meetings without leaving the call.
 
 Transcription runs on your Mac with Whisper. It skips silence, leaves out lines Whisper invents (such as "thanks for watching") and spells names the way you do, using the meeting's client, its invitees and **Settings → Recording → Names and terms**.
 
@@ -62,7 +62,9 @@ Transcription runs on your Mac with Whisper. It skips silence, leaves out lines 
 2. Record, then stop to transcribe on your Mac, with optional speaker labels.
 3. With local AI enabled, Tidy reads the whole meeting and writes an overview, topic sections, decisions, next steps and open questions. Every point is checked against what was said when it was said: its names, numbers and the person given a task must be there. Points it cannot back up are left out.
 
-Notes follow a layout chosen from the meeting title: 1:1, Standup, Customer call, Interview, Planning or Retro. **Rewrite notes as** changes it. Every note point shows when it was said. Click the time to jump to that line of the transcript and, when the audio was kept, to play from there.
+A meeting opens on its notes. A map along the top shows who spoke when, where each topic starts and where decisions were made, with each person's share of the talking below it. Then come the overview, decisions, next steps with who is doing them and by when, open questions and the topics. Tick a next step off when it is done. The recording's own tools fold away below the notes.
+
+Notes follow a layout chosen from the meeting title: 1:1, Standup, Customer call, Interview, Planning or Retro. **Rewrite notes as** changes it. Every note point shows when it was said. Click the time, or anywhere on the map, to jump to that line of the transcript and, when the audio was kept, to play from there.
 
 Your transcript is saved before AI processing. If AI is disabled, it remains available and the meeting waits in the preparation queue. Editing the page keeps the notes, and they are only written again if the transcript itself changes.
 
@@ -74,7 +76,7 @@ From the meeting notes you can:
 
 ## Your calendar
 
-Turn on **Settings → Calendar → Use my calendar** to name recordings after their event, suggest invitees as speaker names and, before a meeting, see what earlier meetings like it decided and left open. Tidy reads the calendar through macOS on your Mac, and only after you turn it on.
+Turn on **Settings → Calendar → Use my calendar** to see your next meeting on Home with a Record button, name recordings after their event, suggest invitees as speaker names and, before a meeting, see what earlier meetings like it decided and left open. Tidy reads the calendar through macOS on your Mac, and only after you turn it on.
 
 ## Ask across the same client's meetings
 
@@ -82,7 +84,7 @@ Turn on **Settings → Calendar → Use my calendar** to name recordings after t
   <img src="docs/screenshots/ask-meetings.gif" alt="Ask meetings with Acme selected, two ready meetings, a sample answer and transcript sources" width="1000" />
 </p>
 
-Choose a client in **Ask meetings**, optionally narrow the dates, and ask about their recordings together. You can also name them in the question: Tidy reads dates such as "last week" or "in March", a client's name, a meeting's title and "our last meeting", and says how it read the question. Reuse the same client when recording follow-ups so they belong to the same history.
+Type in **Ask meetings** and the meetings whose notes mention those words appear straight away, by date, with the words marked. Press **Ask** for an answer with its sources. Choose a client, optionally narrow the dates, and ask about their recordings together. You can also name them in the question: Tidy reads dates such as "last week" or "in March", a client's name, a meeting's title and "our last meeting", and says how it read the question. Reuse the same client when recording follow-ups so they belong to the same history.
 
 Questions to try when the information is in your transcripts:
 
@@ -161,6 +163,6 @@ npm run build
 cargo test --workspace --locked
 ```
 
-The source passes 202 front-end, 110 shared-core and 104 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
+The source passes 211 front-end, 111 shared-core and 105 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
 
 Built with Tauri, React, TypeScript, SQLite, whisper.cpp, sherpa-onnx and llama.cpp. Distributed under AGPL-3.0-or-later. Maintainers can follow the [local signing and release guide](docs/RELEASING.md).
