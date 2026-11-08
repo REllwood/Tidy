@@ -564,7 +564,7 @@ function Step({
       <span
         className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full border text-sm ${
           status === "done"
-            ? "border-success bg-success text-white"
+            ? "border-brand bg-brand text-brand-fg"
             : status === "active"
               ? "border-brand text-brand"
               : "border-border-strong text-text-faint"

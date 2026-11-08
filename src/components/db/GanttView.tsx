@@ -224,7 +224,7 @@ export function GanttView({
                   >
                     <div
                       title={t.name}
-                      className="absolute top-1.5 flex items-center rounded-md px-2 text-xs font-medium text-white"
+                      className="absolute top-1.5 flex items-center rounded-md px-2 text-xs font-medium text-on-colour"
                       style={{
                         left: left + 3,
                         width: w,

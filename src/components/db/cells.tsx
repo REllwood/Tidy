@@ -3,14 +3,14 @@ import { parseLocalDate } from "@/lib/dates";
 
 const CHIP_COLORS: Record<string, string> = {
   grey: "color-mix(in srgb, var(--text-muted) 16%, transparent)",
-  blue: "color-mix(in srgb, #3b6fb0 18%, transparent)",
+  blue: "color-mix(in srgb, var(--info) 18%, transparent)",
   green: "color-mix(in srgb, var(--success) 18%, transparent)",
   amber: "color-mix(in srgb, var(--warning) 20%, transparent)",
   red: "color-mix(in srgb, var(--danger-c) 18%, transparent)",
 };
 const CHIP_TEXT: Record<string, string> = {
   grey: "var(--text-muted)",
-  blue: "#3b6fb0",
+  blue: "var(--info)",
   green: "var(--success)",
   amber: "var(--warning)",
   red: "var(--danger-c)",

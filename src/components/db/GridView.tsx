@@ -179,7 +179,7 @@ export function GridView({
                 action={
                   <button
                     onClick={addRow}
-                    className="flex items-center gap-1.5 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white hover:bg-brand/90"
+                    className="flex items-center gap-1.5 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg hover:bg-brand/90"
                   >
                     <Plus className="size-4" /> New row
                   </button>

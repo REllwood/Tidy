@@ -244,7 +244,7 @@ export function FieldHeaderCell({
             <button
               disabled={panel === "options" && !optionsValid}
               onClick={panel === "rename" ? saveName : saveOptions}
-              className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white hover:bg-brand/90 disabled:opacity-40"
+              className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg hover:bg-brand/90 disabled:opacity-40"
             >
               Save
             </button>
@@ -268,7 +268,7 @@ export function FieldHeaderCell({
                 onDelete();
                 setConfirm(false);
               }}
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
             </AlertDialogAction>
