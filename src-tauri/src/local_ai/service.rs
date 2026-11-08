@@ -780,6 +780,7 @@ fn assemble_notes(overview: String, parts: Vec<Checked>, layout: &Template) -> M
         sections,
         moments: Vec::new(),
         times,
+        done: Vec::new(),
     }
 }
 

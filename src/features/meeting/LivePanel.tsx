@@ -46,14 +46,14 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
 
   return (
     <div className="mt-5 border-t border-border pt-4">
-      <div role="tablist" className="mb-3 flex gap-1">
+      <div role="tablist" className="mb-4 inline-flex rounded-full bg-bg-subtle p-0.5">
         {tabs.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             role="tab"
             aria-selected={tab === id}
             onClick={() => setTab(id)}
-            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium ${tab === id ? "bg-brand-soft text-text" : "text-text-muted hover:bg-surface-hover"}`}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${tab === id ? "bg-surface text-text shadow-sm" : "text-text-muted hover:text-text"}`}
           >
             <Icon className="size-3.5" />
             {label}
@@ -62,22 +62,28 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
       </div>
 
       {tab === "transcript" && (
-        <div className="max-h-64 space-y-1.5 overflow-y-auto text-sm leading-relaxed">
+        <div className="max-h-72 space-y-1 overflow-y-auto">
           {sorted.length === 0 && (
-            <p className="text-text-faint">
+            <p className="text-sm text-text-faint">
               Lines appear here a moment after someone finishes speaking.
             </p>
           )}
           {sorted.map((line, i) => {
             const who = liveSpeaker(line, sorted);
+            const same = i > 0 && liveSpeaker(sorted[i - 1], sorted) === who;
             return (
-              <p key={`${line.source}-${line.start_ms}-${i}`} className="text-text-muted">
-                <span className="mr-1.5 font-mono text-2xs text-text-faint">
-                  {clock(line.start_ms)}
+              <div
+                key={`${line.source}-${line.start_ms}-${i}`}
+                className={`grid grid-cols-[4rem_1fr] gap-x-3 ${same ? "" : "pt-1.5"}`}
+                title={clock(line.start_ms)}
+              >
+                <span
+                  className={`pt-0.5 text-xs font-medium ${who === "You" ? "text-brand" : "text-text-faint"}`}
+                >
+                  {same ? "" : (who ?? clock(line.start_ms))}
                 </span>
-                {who && <span className="font-medium text-text">{who}: </span>}
-                {line.text}
-              </p>
+                <p className="text-sm leading-6 text-text">{line.text}</p>
+              </div>
             );
           })}
           <div ref={end} />

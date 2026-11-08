@@ -29,6 +29,9 @@ pub struct MeetingSummary {
     /// line its supporting quote came from, keyed by the point's text.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub times: BTreeMap<String, String>,
+    /// Next steps the person has ticked off, by their text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub done: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

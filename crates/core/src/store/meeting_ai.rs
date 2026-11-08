@@ -4,7 +4,7 @@ use crate::{
     error::{AppError, AppResult},
     llm::MeetingSummary,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -356,10 +356,40 @@ pub fn save_summary(
     // Marked moments come straight from the transcript, not the model.
     let mut summary = summary.clone();
     summary.moments = crate::store::meeting_notes::marked_moments(&tx, id)?;
+    // Next steps ticked off before the notes were written again stay ticked
+    // when the new notes still list them.
+    let ticked = stored_summary(&tx, id)?.map(|s| s.done).unwrap_or_default();
+    summary.done = ticked.into_iter().filter(|d| summary.action_items.contains(d)).collect();
     tx.execute("UPDATE meeting_ai SET summary=?2,source_hash=?3,state='indexing',error=NULL,regenerate=0,updated_at=?4 WHERE page_id=?1",
         params![id,serde_json::to_string(&summary)?,hash,now_ms()])?;
     tx.commit()?;
     Ok(true)
+}
+
+fn stored_summary(conn: &Connection, id: &str) -> AppResult<Option<MeetingSummary>> {
+    let raw: Option<String> = conn
+        .query_row("SELECT summary FROM meeting_ai WHERE page_id=?1", [id], |r| r.get(0))
+        .optional()?
+        .flatten();
+    Ok(raw.and_then(|raw| serde_json::from_str(&raw).ok()))
+}
+
+/// Tick a next step off, or untick it. Returns the notes as saved.
+pub fn set_done(conn: &Connection, id: &str, action: &str, done: bool) -> AppResult<MeetingSummary> {
+    let mut summary = stored_summary(conn, id)?
+        .ok_or_else(|| AppError::Invalid("This meeting has no notes yet.".into()))?;
+    if !summary.action_items.iter().any(|a| a == action) {
+        return Err(AppError::Invalid("That next step is no longer in the notes.".into()));
+    }
+    summary.done.retain(|d| d != action);
+    if done {
+        summary.done.push(action.to_string());
+    }
+    conn.execute(
+        "UPDATE meeting_ai SET summary=?2 WHERE page_id=?1",
+        params![id, serde_json::to_string(&summary)?],
+    )?;
+    Ok(summary)
 }
 
 /// Keep the saved notes and move straight on to rebuilding the search index.
@@ -1507,6 +1537,34 @@ mod tests {
         assert!(!save_summary(&c, &id, &hash, &MeetingSummary::default()).unwrap());
         assert!(!replace_index(&mut c, &id, &hash, &chunks, &[vector]).unwrap());
     }
+    #[test]
+    fn ticked_next_steps_stay_ticked_when_the_notes_are_written_again() {
+        let (db, id) = fixture();
+        let c = db.conn.lock().unwrap();
+        c.execute("INSERT OR IGNORE INTO meeting_ai(page_id,state,updated_at) VALUES(?1,'queued',0)", [&id]).unwrap();
+        let (hash, _) = snapshot(&c, &id).unwrap();
+        let notes = |actions: &[&str]| MeetingSummary {
+            action_items: actions.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        };
+        assert!(set_done(&c, &id, "Mia sends the timeline.", true).is_err(), "no notes yet");
+        assert!(save_summary(&c, &id, &hash, &notes(&["Mia sends the timeline.", "Sam books the room."])).unwrap());
+        let saved = set_done(&c, &id, "Mia sends the timeline.", true).unwrap();
+        assert_eq!(saved.done, vec!["Mia sends the timeline."]);
+        assert!(set_done(&c, &id, "Someone else's task.", true).is_err());
+        let job = list(&c).unwrap().into_iter().find(|j| j.page_id == id).unwrap();
+        assert_eq!(job.summary.unwrap().done, vec!["Mia sends the timeline."]);
+
+        // Rewritten notes keep the tick while the step is still there.
+        assert!(save_summary(&c, &id, &hash, &notes(&["Mia sends the timeline.", "Priya chases photos."])).unwrap());
+        assert_eq!(stored_summary(&c, &id).unwrap().unwrap().done, vec!["Mia sends the timeline."]);
+        assert!(save_summary(&c, &id, &hash, &notes(&["Priya chases photos."])).unwrap());
+        assert!(stored_summary(&c, &id).unwrap().unwrap().done.is_empty());
+
+        assert!(set_done(&c, &id, "Priya chases photos.", true).is_ok());
+        assert!(set_done(&c, &id, "Priya chases photos.", false).unwrap().done.is_empty());
+    }
+
     #[test]
     fn client_search_spans_meetings_without_leaking_other_clients() {
         let (db, first) = fixture();

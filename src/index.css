@@ -32,6 +32,13 @@
   --danger-c: #a83a30;
   --rec: #d23b30;
   --rec-text: #bf3529;
+  /* Speakers on a meeting's map and people list. */
+  --speaker-1: #3b6fb0;
+  --speaker-2: #b26d22;
+  --speaker-3: #85549f;
+  --speaker-4: #b9493e;
+  --speaker-5: #2f8580;
+  --speaker-6: #6f7428;
 
   /* shadcn/ui contract → Tidy palette */
   --background: var(--bg);
@@ -101,6 +108,12 @@
   --danger-c: #e0796d;
   --rec: #e0796d;
   --rec-text: #e0796d;
+  --speaker-1: #7ea8de;
+  --speaker-2: #e0a35c;
+  --speaker-3: #b892d4;
+  --speaker-4: #e88a7d;
+  --speaker-5: #6fc0b9;
+  --speaker-6: #b8bd6a;
 
   --destructive-foreground: #14201a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
@@ -292,9 +305,8 @@ button:not(:disabled),
   }
 }
 
-/* A transcript line someone jumped to from the notes. */
-.transcript-line-found {
-  background: var(--brand-soft);
-  border-radius: 4px;
-  transition: background 0.4s;
+/* A transcript line someone jumped to from the notes or the map. A text
+   highlight, because the editor redraws any line whose markup is changed. */
+::highlight(transcript-line-found) {
+  background-color: var(--brand-soft);
 }

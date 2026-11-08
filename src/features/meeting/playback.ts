@@ -37,6 +37,9 @@ export const usePlayback = create<Playback>((set) => ({
     set({ request: { pageId, seconds, nonce: Date.now() + Math.random() } }),
 }));
 
+const FOUND = "transcript-line-found";
+let foundTimer: ReturnType<typeof setTimeout> | undefined;
+
 /** Scroll the page to the transcript line said at `stamp`, briefly marked. */
 export function revealLine(stamp: string) {
   const seconds = stampSeconds(stamp);
@@ -46,8 +49,16 @@ export function revealLine(stamp: string) {
     const found = lineStamp(line.textContent ?? "");
     if (found && stampSeconds(found) === seconds) {
       line.scrollIntoView({ block: "center", behavior: "smooth" });
-      line.classList.add("transcript-line-found");
-      setTimeout(() => line.classList.remove("transcript-line-found"), 1600);
+      // Marked as a text highlight: the editor redraws a line whose markup
+      // changes, which would drop a class at once.
+      const highlights = (globalThis.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights;
+      if (highlights && typeof Highlight !== "undefined") {
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        highlights.set(FOUND, new Highlight(range));
+        clearTimeout(foundTimer);
+        foundTimer = setTimeout(() => highlights.delete(FOUND), 1800);
+      }
       return;
     }
   }
@@ -67,4 +78,17 @@ export function stampUnder(x: number, y: number): string | null {
   before.setStart(line, 0);
   before.setEnd(caret.startContainer, caret.startOffset);
   return before.toString().length <= stamp.length + 2 ? stamp : null;
+}
+
+/** Scroll the page to its "Transcript" heading. */
+export function revealTranscript() {
+  const headings = document.querySelectorAll<HTMLElement>(
+    ".tidy-editor [data-content-type='heading'] .bn-inline-content",
+  );
+  for (const heading of headings) {
+    if (heading.textContent?.trim().toLowerCase() === "transcript") {
+      heading.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+  }
 }
