@@ -8,11 +8,13 @@ The browser preview simulates recording, transcription, model downloads and AI a
 
 | Animation | What it shows |
 | --- | --- |
-| [Workspace tour](tour.gif) | Home, planner, tables, structured notes, library readiness and an answer with sources |
+| [Workspace tour](tour.gif) | Home with the next meeting, the planner, a roadmap as a table and a board, last week's notes with a next step ticked off, a question answered from a meeting, and dark mode |
 | [Meeting capture](meeting.gif) | Selecting a client, audio meters, transcription progress and saved notes |
 | [Ask meetings](ask-meetings.gif) | Selecting Acme, asking a question, waiting for an answer and reviewing two meeting sources |
 
-The animations are edited walkthroughs assembled from actual interface captures. Frames are held for readability; their duration is not a measurement of recording, download or inference speed. A permanent caption identifies the simulated preview.
+The meeting capture and Ask meetings animations are edited walkthroughs assembled from actual interface captures. Frames are held for readability; their duration is not a measurement of recording, download or inference speed. A permanent caption identifies the simulated preview.
+
+The workspace tour was recorded in one continuous take from the v0.6.0 browser preview on 9 November 2026. It has no caption bar, so the note beneath it in the main README identifies the simulated preview.
 
 ## Still images
 

@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/tour.gif" alt="Tidy: home, planner, tables, meeting notes and client meeting search" width="1000" />
+  <img src="docs/screenshots/tour.gif" alt="A tour of Tidy: the home screen with the next meeting, the planner, a roadmap as a table and a board, last week's meeting notes with a next step ticked off, a question answered from a meeting, and dark mode." width="1000" />
 </p>
 
-*Captured from an earlier browser preview with made-up sample data. Recording, model setup and AI answers in these demonstrations are simulated, and timings do not represent desktop performance. [Still images and capture details](docs/screenshots/README.md).*
+*Recorded from the v0.6.0 browser preview with made-up sample data. Recording, model setup and AI answers in these demonstrations are simulated, and timings do not represent desktop performance. [Still images and capture details](docs/screenshots/README.md).*
 
 ## Meet Tidy
 
