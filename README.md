@@ -43,7 +43,7 @@ Tidy checks for updates automatically, and you choose when to download, install 
 ## Recording a call
 
 <p align="center">
-  <img src="docs/screenshots/meeting.gif" alt="Sample meeting flow: choose Acme, record with audio meters, transcribe locally, and open structured meeting notes" width="1000" />
+  <img src="docs/screenshots/meeting.gif" alt="Recording the next calendar meeting: audio meters for you and the other side, a marked moment, transcription on the Mac, then the meeting notes with a map of who spoke when, decisions and next steps." width="1000" />
 </p>
 
 - **Tidy offers to record.** When Zoom, Teams, FaceTime, Slack or a browser starts using the microphone, a small window asks whether to record and reminds you to tell everyone. Nothing records until you choose **Record**. Turn this off under **Settings → Recording → Offer to record calls**.
@@ -81,7 +81,7 @@ Turn on **Settings → Calendar → Use my calendar** to see your next meeting o
 ## Ask across the same client's meetings
 
 <p align="center">
-  <img src="docs/screenshots/ask-meetings.gif" alt="Ask meetings with Acme selected, two ready meetings, a sample answer and transcript sources" width="1000" />
+  <img src="docs/screenshots/ask-meetings.gif" alt="Ask meetings with Acme Corp chosen: two meetings mention the question as it is typed, then an answer with its two transcript sources." width="1000" />
 </p>
 
 Type in **Ask meetings** and the meetings whose notes mention those words appear straight away, by date, with the words marked. Press **Ask** for an answer with its sources. Choose a client, optionally narrow the dates, and ask about their recordings together. You can also name them in the question: Tidy reads dates such as "last week" or "in March", a client's name, a meeting's title and "our last meeting", and says how it read the question. Reuse the same client when recording follow-ups so they belong to the same history.
