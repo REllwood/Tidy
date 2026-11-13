@@ -66,6 +66,10 @@ pub struct RecordingSession {
     marks: Vec<i64>,
     /// The calendar event this recording is for, when there is one.
     pub event: Option<tidy_core::store::recordings::MeetingEvent>,
+    /// Reading the Teams or Meet window, when the person allowed it.
+    pub call_watch: Option<crate::call_window::Watch>,
+    /// What the call window showed, once the recording has stopped.
+    pub call_seen: Option<tidy_core::store::recordings::CallRecord>,
     path: PathBuf,
     partial: PathBuf,
     outcome: Arc<Mutex<Option<CaptureOutcome>>>,
@@ -107,6 +111,12 @@ impl RecordingSession {
 
     pub fn marks(&self) -> &[i64] {
         &self.marks
+    }
+
+    /// When capture began: the zero point for marks, transcript times and
+    /// who the call window showed speaking.
+    pub fn began(&self) -> Instant {
+        self.began
     }
 
     /// The live transcript so far, in the order lines finished.
@@ -181,6 +191,8 @@ pub fn start(
         began: Instant::now(),
         marks: Vec::new(),
         event: None,
+        call_watch: None,
+        call_seen: None,
         path,
         partial,
         outcome,
@@ -406,7 +418,12 @@ pub fn stop(session: &mut RecordingSession) -> AppResult<Recording> {
         started_at: session.started_at,
         page_id: None,
         marks: session.marks.clone(),
-        title: session.event.as_ref().map(|e| e.title.clone()),
+        // The calendar's name for the meeting, or else the call window's.
+        title: session
+            .event
+            .as_ref()
+            .map(|e| e.title.clone())
+            .or_else(|| session.call_seen.as_ref().and_then(|c| c.title.clone())),
     };
     session.finished = Some(recording.clone());
     Ok(recording)

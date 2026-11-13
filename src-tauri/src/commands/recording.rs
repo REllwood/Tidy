@@ -117,6 +117,8 @@ pub async fn start_recording(
         );
         if let Some(session) = state.lock().as_mut() {
             session.event = event;
+            // Names from the Teams or Meet window, when the person allowed it.
+            session.call_watch = crate::call_window::start(&app, session.began());
         }
     }
     if result.is_err() {
@@ -138,6 +140,9 @@ fn finish(
     client: &str,
     stop_reason: Option<&str>,
 ) -> (Option<RecordingSession>, AppResult<Recording>) {
+    if let Some(watch) = session.call_watch.take() {
+        session.call_seen = Some(watch.finish());
+    }
     let mut recording = match recorder::stop(&mut session) {
         Ok(recording) => recording,
         Err(error) => return (Some(session), Err(error)),
@@ -156,6 +161,9 @@ fn finish(
         tidy_core::store::recordings::set_stop_details(&conn, &page, stop_reason, &recording.marks)?;
         if let Some(event) = &session.event {
             tidy_core::store::recordings::set_event(&conn, &page, event)?;
+        }
+        if let Some(call) = session.call_seen.as_ref().filter(|c| !c.is_empty()) {
+            tidy_core::store::recordings::set_call(&conn, &page, call)?;
         }
         Ok(page)
     })();

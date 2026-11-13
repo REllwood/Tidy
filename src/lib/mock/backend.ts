@@ -1050,6 +1050,20 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         actions: ["You will send the release notes."],
         open_questions: [],
       } as T;
+    case "call_names_status":
+      return { enabled: d.settings["call_names.enabled"] === "true", allowed: true, supported: true } as T;
+    case "call_names_enable":
+      d.settings["call_names.enabled"] = "true";
+      commit();
+      return { enabled: true, allowed: true, supported: true } as T;
+    case "call_names_disable":
+      d.settings["call_names.enabled"] = "false";
+      commit();
+      return undefined as T;
+    case "call_names_open_settings":
+      return undefined as T;
+    case "meeting_people":
+      return [] as T;
     case "calendar_status":
       return { enabled: previewCalendar, access: previewCalendar ? "granted" : "not_determined" } as T;
     case "calendar_connect":

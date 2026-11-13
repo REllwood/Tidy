@@ -99,22 +99,27 @@ fn transcript_turns(blocks: &[Value]) -> Vec<speaker_guess::Turn> {
     turns
 }
 
-/// People invited to the meeting, by name, from its calendar event.
-fn invitees(conn: &Connection, page_id: &str) -> AppResult<Vec<String>> {
-    Ok(recordings::event(conn, page_id)?
-        .map(|e| e.attendees.into_iter().filter(|a| !a.contains('@')).collect())
-        .unwrap_or_default())
+/// Names for the speaker labels: from who the call window showed speaking,
+/// when Tidy read it, and from the conversation, where people say each
+/// other's names.
+fn guesses(conn: &Connection, page_id: &str, turns: &[speaker_guess::Turn]) -> AppResult<Vec<speaker_guess::Guess>> {
+    let talk = speaker_guess::guess(turns, &recordings::people(conn, page_id)?);
+    let call = recordings::call(conn, page_id)?
+        .map(|c| speaker_guess::from_call(turns, &c.speaking, &c.app))
+        .unwrap_or_default();
+    Ok(speaker_guess::combine(call, talk))
 }
 
-/// Names the conversation points to for the meeting's speaker labels.
+/// Names the call window and the conversation point to for the meeting's
+/// speaker labels.
 pub fn name_suggestions(conn: &Connection, page_id: &str) -> AppResult<Vec<speaker_guess::Guess>> {
     let blocks = blocks(&documents::core::get(conn, page_id)?)?;
-    Ok(speaker_guess::guess(&transcript_turns(&blocks), &invitees(conn, page_id)?))
+    guesses(conn, page_id, &transcript_turns(&blocks))
 }
 
-/// Give speakers the names the conversation makes certain, such as someone
-/// introducing themselves or being asked a question by name and answering,
-/// more than once. Returns the names given.
+/// Give speakers the names that are certain, such as someone the call window
+/// clearly showed speaking, someone introducing themselves, or someone asked
+/// a question by name who answers, more than once. Returns the names given.
 pub fn apply_certain_names(conn: &Connection, page_id: &str) -> AppResult<Vec<speaker_guess::Guess>> {
     let certain: Vec<speaker_guess::Guess> =
         name_suggestions(conn, page_id)?.into_iter().filter(|g| g.certain).collect();
@@ -133,7 +138,7 @@ pub fn apply_certain_names(conn: &Connection, page_id: &str) -> AppResult<Vec<sp
 pub fn speakers(conn: &Connection, page_id: &str) -> AppResult<Vec<Speaker>> {
     let blocks = blocks(&documents::core::get(conn, page_id)?)?;
     let turns = transcript_turns(&blocks);
-    let guesses = speaker_guess::guess(&turns, &invitees(conn, page_id)?);
+    let guesses = guesses(conn, page_id, &turns)?;
     let mut speakers: Vec<Speaker> = Vec::new();
     for turn in &turns {
         let speaker = match speakers.iter_mut().find(|s| s.label == turn.label) {

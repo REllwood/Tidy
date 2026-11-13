@@ -38,4 +38,15 @@ describe("namedMessage", () => {
       ]),
     ).toBe("Named Speaker 1 as Priya, Speaker 2 as Tom and Speaker 3 as Mia from the conversation.");
   });
+  it("says when names came from the call window", () => {
+    expect(namedMessage([{ label: "Speaker 2", name: "Tom", from_app: "Teams" }])).toBe(
+      "Named Speaker 2 as Tom from the Teams call.",
+    );
+    expect(
+      namedMessage([
+        { label: "Speaker 1", name: "Priya", from_app: "Google Meet" },
+        { label: "Speaker 2", name: "Tom", from_app: null },
+      ]),
+    ).toBe("Named Speaker 1 as Priya and Speaker 2 as Tom from the Google Meet call and the conversation.");
+  });
 });

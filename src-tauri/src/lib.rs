@@ -1,6 +1,7 @@
 mod model_catalogue;
 mod audio;
 mod calendar;
+mod call_window;
 mod commands;
 mod lifecycle;
 mod local_ai;
@@ -222,10 +223,15 @@ pub fn run() {
             calendar::calendar_connect,
             calendar::calendar_disconnect,
             calendar::calendar_events,
+            call_window::call_names_status,
+            call_window::call_names_enable,
+            call_window::call_names_disable,
+            call_window::call_names_open_settings,
             commands::meeting_notes::note_templates,
             commands::meeting_notes::set_meeting_template,
             commands::meeting_notes::meeting_last_time,
             commands::meeting_notes::meeting_event,
+            commands::meeting_notes::meeting_people,
             commands::recording_preferences::set_transcription_vocabulary,
             commands::recording_preferences::finish_recording,
             commands::recording_preferences::discard_recording_audio,

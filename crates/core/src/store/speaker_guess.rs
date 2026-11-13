@@ -9,6 +9,8 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+use crate::store::recordings::Spoken;
+
 /// One speaker's turn: their label and what they said, with times in ms.
 #[derive(Debug, Clone)]
 pub struct Turn {
@@ -29,6 +31,9 @@ pub struct Guess {
     pub at_ms: i64,
     /// Strong enough to apply without asking.
     pub certain: bool,
+    /// The call app that showed this person speaking, such as "Teams", when
+    /// the guess comes from the call window rather than the conversation.
+    pub from_app: Option<String>,
 }
 
 const ADDRESSED: f32 = 2.0;
@@ -243,6 +248,7 @@ pub fn guess(turns: &[Turn], invitees: &[String]) -> Vec<Guess> {
                 because: best.because.clone(),
                 at_ms: best.at_ms,
                 certain: best.score >= APPLY && runner_up == 0.0,
+                from_app: None,
             })
         })
         .collect();
@@ -255,6 +261,110 @@ pub fn guess(turns: &[Turn], invitees: &[String]) -> Vec<Guess> {
         free
     });
     guesses
+}
+
+/// A turn runs until the next one starts, but no further than this past its
+/// last line, so a long pause does not count as talking.
+const TURN_TAIL_MS: i64 = 15_000;
+/// Shown speaking for this long during a voice's turns, and for most of the
+/// time anyone was shown, suggests that name.
+const CALL_SUGGEST_MS: i64 = 3_000;
+const CALL_SUGGEST_SHARE: f64 = 0.6;
+/// Longer and clearer still, and the name is applied without asking.
+const CALL_APPLY_MS: i64 = 8_000;
+const CALL_APPLY_SHARE: f64 = 0.75;
+
+fn overlap(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.1.min(b.1) - a.0.max(b.0)).max(0)
+}
+
+/// Names for the placeholder labels from who the call window showed
+/// speaking during each voice's turns. Several voices may get the same name,
+/// as one person is sometimes split into two voices.
+pub fn from_call(turns: &[Turn], speaking: &[Spoken], app: &str) -> Vec<Guess> {
+    // Each line, from when it starts until the next line or turn starts.
+    let mut spans: Vec<(&str, i64, i64, &str)> = Vec::new();
+    for (index, turn) in turns.iter().enumerate() {
+        let next_turn = turns.get(index + 1).and_then(|t| t.lines.first()).map(|(at, _)| *at);
+        let Some(&(last, _)) = turn.lines.last() else { continue };
+        let turn_end = next_turn.filter(|n| *n > last).unwrap_or(i64::MAX).min(last + TURN_TAIL_MS);
+        for (i, (at, line)) in turn.lines.iter().enumerate() {
+            let end = turn.lines.get(i + 1).map_or(turn_end, |(next, _)| *next).max(at + 1_000);
+            spans.push((&turn.label, *at, end, line));
+        }
+    }
+
+    // How long each name was shown speaking during each label's lines.
+    let mut shown: HashMap<(&str, &str), i64> = HashMap::new();
+    let mut best_line: HashMap<(&str, &str), (i64, i64, &str)> = HashMap::new();
+    for &(label, start, end, line) in &spans {
+        if !guessable(label) {
+            continue;
+        }
+        for s in speaking {
+            let ms = overlap((start, end), (s.from_ms, s.to_ms));
+            if ms == 0 {
+                continue;
+            }
+            *shown.entry((label, &s.name)).or_default() += ms;
+            let best = best_line.entry((label, &s.name)).or_insert((0, start, line));
+            if ms > best.0 {
+                *best = (ms, start, line);
+            }
+        }
+    }
+
+    let mut by_label: HashMap<&str, Vec<(&str, i64)>> = HashMap::new();
+    for (&(label, name), &ms) in &shown {
+        by_label.entry(label).or_default().push((name, ms));
+    }
+    let mut guesses: Vec<Guess> = by_label
+        .into_iter()
+        .filter_map(|(label, mut names)| {
+            names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            let total: i64 = names.iter().map(|(_, ms)| ms).sum();
+            let (name, ms) = *names.first()?;
+            let share = ms as f64 / total as f64;
+            if ms < CALL_SUGGEST_MS || share < CALL_SUGGEST_SHARE {
+                return None;
+            }
+            let (_, at_ms, because) = best_line[&(label, name)];
+            Some(Guess {
+                label: label.to_string(),
+                name: name.to_string(),
+                score: ms as f32 / 1000.0,
+                because: because.to_string(),
+                at_ms,
+                certain: ms >= CALL_APPLY_MS && share >= CALL_APPLY_SHARE,
+                from_app: Some(app.to_string()),
+            })
+        })
+        .collect();
+    guesses.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.label.cmp(&b.label)));
+    guesses
+}
+
+/// One guess per label, from the call window where it saw enough, otherwise
+/// from the conversation. A name the call window gave a voice is not also
+/// given to another voice from the conversation.
+pub fn combine(call: Vec<Guess>, talk: Vec<Guess>) -> Vec<Guess> {
+    let mut out: Vec<Guess> = Vec::new();
+    for g in &call {
+        let spoken = talk.iter().find(|t| t.label == g.label);
+        // A certain name from the conversation beats a mere suggestion here.
+        if g.certain || !spoken.is_some_and(|t| t.certain) {
+            out.push(g.clone());
+        }
+    }
+    for t in talk {
+        let label_free = !out.iter().any(|g| g.label == t.label);
+        let name_free = !out.iter().any(|g| g.name == t.name);
+        if label_free && name_free {
+            out.push(t);
+        }
+    }
+    out.sort_by(|a, b| b.certain.cmp(&a.certain).then(b.score.total_cmp(&a.score)).then(a.label.cmp(&b.label)));
+    out
 }
 
 #[cfg(test)]
@@ -331,6 +441,95 @@ mod tests {
         assert!(guesses.iter().all(|g| g.label != "Speaker 2"), "Tom or Mia is unclear: {guesses:?}");
         assert!(guesses.iter().all(|g| g.label != "Others"), "Others may be several people");
         assert!(guessable("Speaker 12") && !guessable("You") && !guessable("Others") && !guessable("Tom"));
+    }
+
+    fn line(label: &str, at_s: &[i64]) -> Turn {
+        Turn { label: label.into(), lines: at_s.iter().map(|s| (s * 1000, format!("{label} at {s}s."))).collect() }
+    }
+
+    fn shown(name: &str, from_s: i64, to_s: i64) -> Spoken {
+        Spoken { from_ms: from_s * 1000, to_ms: to_s * 1000, name: name.into() }
+    }
+
+    #[test]
+    fn the_call_window_names_who_was_speaking_during_each_voice() {
+        let turns = vec![
+            line("Speaker 1", &[0, 5]),
+            line("You", &[10]),
+            line("Speaker 2", &[14, 18]),
+            line("Speaker 1", &[25]),
+        ];
+        let speaking = vec![
+            shown("Priya Shah", 0, 10),
+            shown("Tom Baker", 14, 22),
+            shown("Priya Shah", 25, 31),
+            // A blip of Tom highlighted while Priya talks is outweighed.
+            shown("Tom Baker", 26, 27),
+        ];
+        let guesses = from_call(&turns, &speaking, "Teams");
+        let priya = guesses.iter().find(|g| g.label == "Speaker 1").unwrap();
+        assert_eq!(priya.name, "Priya Shah");
+        assert!(priya.certain, "{priya:?}");
+        assert_eq!(priya.from_app.as_deref(), Some("Teams"));
+        assert_eq!(priya.at_ms, 25_000, "the line shown speaking longest");
+        let tom = guesses.iter().find(|g| g.label == "Speaker 2").unwrap();
+        assert_eq!(tom.name, "Tom Baker");
+        assert!(tom.certain, "8 s with nobody else shown: {tom:?}");
+        assert!(guesses.iter().all(|g| g.label != "You"), "the person recording is never guessed");
+    }
+
+    #[test]
+    fn little_or_mixed_evidence_is_only_a_suggestion_or_nothing() {
+        let turns = vec![line("Speaker 1", &[0]), line("Speaker 2", &[20]), line("Speaker 3", &[40])];
+        let speaking = vec![
+            // Speaker 1: four seconds of Priya, a suggestion only.
+            shown("Priya Shah", 0, 4),
+            // Speaker 2: Tom and Mia shown about equally, so no name.
+            shown("Tom Baker", 20, 25),
+            shown("Mia Chen", 25, 30),
+        ];
+        let guesses = from_call(&turns, &speaking, "Google Meet");
+        let priya = guesses.iter().find(|g| g.label == "Speaker 1").unwrap();
+        assert!(!priya.certain);
+        assert!(guesses.iter().all(|g| g.label != "Speaker 2"), "{guesses:?}");
+        assert!(guesses.iter().all(|g| g.label != "Speaker 3"), "nobody shown");
+    }
+
+    #[test]
+    fn one_person_split_into_two_voices_gets_their_name_twice() {
+        let turns = vec![line("Speaker 1", &[0]), line("Speaker 2", &[12]), line("Speaker 1", &[24])];
+        let speaking = vec![shown("Priya Shah", 0, 36)];
+        let guesses = from_call(&turns, &speaking, "Teams");
+        assert_eq!(guesses.len(), 2);
+        assert!(guesses.iter().all(|g| g.name == "Priya Shah" && g.certain));
+    }
+
+    #[test]
+    fn the_call_window_wins_but_a_certain_conversation_keeps_a_weak_call() {
+        let call = |label: &str, name: &str, certain: bool| Guess {
+            label: label.into(),
+            name: name.into(),
+            score: 5.0,
+            because: String::new(),
+            at_ms: 0,
+            certain,
+            from_app: Some("Teams".into()),
+        };
+        let talk = |label: &str, name: &str, certain: bool| Guess { from_app: None, ..call(label, name, certain) };
+        let combined = combine(
+            vec![call("Speaker 1", "Priya Shah", true), call("Speaker 2", "Tom Baker", false)],
+            vec![
+                talk("Speaker 1", "Mia", true),
+                talk("Speaker 2", "Sam", true),
+                talk("Speaker 3", "Priya Shah", true),
+                talk("Speaker 4", "Jo", false),
+            ],
+        );
+        let named = |label: &str| combined.iter().find(|g| g.label == label).map(|g| g.name.as_str());
+        assert_eq!(named("Speaker 1"), Some("Priya Shah"), "a certain call beats the conversation");
+        assert_eq!(named("Speaker 2"), Some("Sam"), "a certain conversation beats a call suggestion");
+        assert_eq!(named("Speaker 3"), None, "Priya is already Speaker 1");
+        assert_eq!(named("Speaker 4"), Some("Jo"));
     }
 
     #[test]
