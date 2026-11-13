@@ -192,6 +192,83 @@ pub fn event(c: &Connection, page: &str) -> AppResult<Option<MeetingEvent>> {
     Ok(raw.and_then(|r| serde_json::from_str(&r).ok()))
 }
 
+/// Someone the call window showed speaking, from one moment to another, in
+/// ms from the start of the recording.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Spoken {
+    pub from_ms: i64,
+    pub to_ms: i64,
+    pub name: String,
+}
+
+/// What the Teams or Google Meet window showed while a meeting was recorded.
+/// Only names and times are kept, never caption text.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CallRecord {
+    /// The app the call ran in, such as "Teams" or "Google Meet".
+    pub app: String,
+    /// The meeting's title, when the window showed one.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Everyone else seen in the call, without the person recording.
+    #[serde(default)]
+    pub people: Vec<String>,
+    /// Who was shown speaking when, one person at a time.
+    #[serde(default)]
+    pub speaking: Vec<Spoken>,
+}
+
+impl CallRecord {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none() && self.people.is_empty() && self.speaking.is_empty()
+    }
+}
+
+pub fn set_call(c: &Connection, page: &str, call: &CallRecord) -> AppResult<()> {
+    c.execute(
+        "UPDATE meeting SET call=?2 WHERE page_id=?1",
+        params![page, serde_json::to_string(call)?],
+    )?;
+    Ok(())
+}
+
+pub fn call(c: &Connection, page: &str) -> AppResult<Option<CallRecord>> {
+    let raw: Option<String> = c
+        .query_row(
+            "SELECT call FROM meeting WHERE page_id=?1 ORDER BY started_at DESC LIMIT 1",
+            [page],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(raw.and_then(|r| serde_json::from_str(&r).ok()))
+}
+
+/// The people expected in a meeting: those invited to its calendar event,
+/// by name, then anyone else the call window showed, without repeats.
+pub fn people(c: &Connection, page: &str) -> AppResult<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    let invited = event(c, page)?.map(|e| e.attendees).unwrap_or_default();
+    let seen = call(c, page)?.map(|r| r.people).unwrap_or_default();
+    for name in invited.into_iter().chain(seen) {
+        // Email addresses are not names anyone is called by.
+        if !name.contains('@') && !names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
+/// How many voices could be on the other side of the call: everyone invited
+/// or everyone seen in the call, whichever is more, and one spare. Zero when
+/// neither is known.
+pub fn voices_at_most(c: &Connection, page: &str) -> AppResult<i32> {
+    let invited = event(c, page)?.map_or(0, |e| e.attendees.len());
+    let seen = call(c, page)?.map_or(0, |r| r.people.len());
+    let most = invited.max(seen);
+    Ok(if most == 0 { 0 } else { most as i32 + 1 })
+}
+
 /// Record how a recording ended and the moments marked during it.
 pub fn set_stop_details(
     c: &Connection,
@@ -235,8 +312,8 @@ pub fn split_terms(text: &str) -> Vec<String> {
 }
 
 /// Names and terms Whisper should expect in this meeting: the client it is
-/// filed under, the people invited to its calendar event, then the person's
-/// own list from Settings.
+/// filed under, the people invited to its calendar event or seen in the
+/// call, then the person's own list from Settings.
 pub fn vocabulary(c: &Connection, page: &str) -> AppResult<Vec<String>> {
     let mut terms = Vec::new();
     let client = c
@@ -247,10 +324,7 @@ pub fn vocabulary(c: &Connection, page: &str) -> AppResult<Vec<String>> {
         )
         .optional()?;
     terms.extend(client.filter(|t| !t.trim().is_empty()));
-    if let Some(event) = event(c, page)? {
-        // Email addresses are not words anyone says.
-        terms.extend(event.attendees.into_iter().filter(|a| !a.contains('@')));
-    }
+    terms.extend(people(c, page)?);
     terms.extend(split_terms(&crate::db::get_setting(c, VOCABULARY)?.unwrap_or_default()));
     Ok(terms)
 }
@@ -326,6 +400,33 @@ mod tests {
         set_event(&c, &page, &invite).unwrap();
         assert_eq!(event(&c, &page).unwrap(), Some(invite));
         assert_eq!(vocabulary(&c, &page).unwrap(), vec!["Acme", "Priya Shah"]);
+    }
+    #[test]
+    fn people_seen_in_the_call_join_the_invitees() {
+        let db = Db::open_in_memory().unwrap();
+        let c = db.conn.lock().unwrap();
+        let page = register(&c, "/recordings/a.wav", 1000, 42, "").unwrap();
+        assert!(call(&c, &page).unwrap().is_none());
+        assert_eq!(voices_at_most(&c, &page).unwrap(), 0, "nobody known, no cap");
+        let invite = MeetingEvent {
+            title: "Acme weekly".into(),
+            attendees: vec!["Priya Shah".into(), "jo@acme.test".into()],
+            ..Default::default()
+        };
+        set_event(&c, &page, &invite).unwrap();
+        assert_eq!(voices_at_most(&c, &page).unwrap(), 3);
+        let seen = CallRecord {
+            app: "Teams".into(),
+            title: None,
+            people: vec!["priya shah".into(), "Tom Baker".into(), "Mia Chen".into()],
+            speaking: vec![Spoken { from_ms: 1_000, to_ms: 4_000, name: "Tom Baker".into() }],
+        };
+        set_call(&c, &page, &seen).unwrap();
+        assert_eq!(call(&c, &page).unwrap(), Some(seen));
+        // The invitee's spelling wins and the email address is left out.
+        assert_eq!(people(&c, &page).unwrap(), vec!["Priya Shah", "Tom Baker", "Mia Chen"]);
+        assert_eq!(voices_at_most(&c, &page).unwrap(), 4, "three seen beats two invited");
+        assert_eq!(vocabulary(&c, &page).unwrap(), vec!["Priya Shah", "Tom Baker", "Mia Chen"]);
     }
     #[test]
     fn whisper_hears_the_client_and_the_persons_own_terms() {

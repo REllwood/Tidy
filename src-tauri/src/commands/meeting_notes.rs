@@ -104,6 +104,13 @@ pub async fn meeting_last_time(
     .await
 }
 
+/// The people expected in a meeting, to offer as speaker names: those
+/// invited to its calendar event and anyone else seen in the call window.
+#[tauri::command]
+pub async fn meeting_people(app: AppHandle, page_id: String) -> AppResult<Vec<String>> {
+    run_db(&app, move |conn| tidy_core::store::recordings::people(conn, &page_id)).await
+}
+
 /// The calendar event a meeting was recorded for, if it had one.
 #[tauri::command]
 pub async fn meeting_event(

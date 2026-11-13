@@ -51,6 +51,7 @@ Tidy checks for updates automatically, and you choose when to download, install 
 - **It stops by itself.** A recording stops when the call ends, after 3 minutes of silence, or 5 minutes after its calendar event ends. A 15-second countdown lets you choose **Keep recording**, and the meeting notes why it stopped.
 - **Mark a moment.** Press **Control-Option-M** in any app, or **Mark moment**, and the moment is listed in the notes.
 - **Help during the call.** A live transcript with You and Others side by side, **Recap so far**, and answers from past meetings without leaving the call.
+- **Names from Teams and Google Meet.** Optionally, Tidy reads the call window while it records to see who joined and who is shown speaking, then names the voices in the transcript after them. Google Meet needs captions turned on. Only names and times are kept, never caption text. Turn it on under **Settings → Recording → Names from Teams and Google Meet**, and allow Tidy under **Accessibility** in macOS Privacy and Security settings.
 
 Transcription runs on your Mac with Whisper. It skips silence, leaves out lines Whisper invents (such as "thanks for watching") and spells names the way you do, using the meeting's client, its invitees and **Settings → Recording → Names and terms**.
 
@@ -70,7 +71,7 @@ Your transcript is saved before AI processing. If AI is disabled, it remains ava
 
 From the meeting notes you can:
 
-- **Name speakers**, so "Speaker 2" becomes "Priya" in the transcript, the notes and answers. Tidy works names out from the conversation, for example someone asked "What do you think, Tom?" who then answers. Clear ones are applied before the notes are written, and others are suggested, with lines from each speaker that you can play.
+- **Name speakers**, so "Speaker 2" becomes "Priya" in the transcript, the notes and answers. Tidy works names out from the conversation, for example someone asked "What do you think, Tom?" who then answers, and from who Teams or Google Meet showed speaking when names from the call are turned on. Clear ones are applied before the notes are written, and others are suggested, with lines from each speaker that you can play.
 - **Add notes to page**, to put the notes above the transcript where exports, your vault and search include them.
 - **Send next steps to planner**, to add them as dated tasks in a table you choose. Nothing is added unless you ask.
 
@@ -163,6 +164,6 @@ npm run build
 cargo test --workspace --locked
 ```
 
-The source passes 211 front-end, 111 shared-core and 105 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
+The source passes 212 front-end, 116 shared-core and 113 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
 
 Built with Tauri, React, TypeScript, SQLite, whisper.cpp, sherpa-onnx and llama.cpp. Distributed under AGPL-3.0-or-later. Maintainers can follow the [local signing and release guide](docs/RELEASING.md).

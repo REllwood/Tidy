@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Play, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { meetingBriefApi, meetingNotesApi } from "@/lib/api";
+import { meetingNotesApi } from "@/lib/api";
 import { meetingJobsKey } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
 import { flushPendingEdits } from "@/lib/pendingEdits";
@@ -46,13 +46,13 @@ export function SpeakerNamesDialog({
     queryFn: () => meetingNotesApi.speakers(pageId),
     enabled: open,
   });
-  // People invited to the meeting, offered as names to pick from.
-  const event = useQuery({
-    queryKey: ["meeting-event", pageId],
-    queryFn: () => meetingBriefApi.event(pageId),
+  // People invited to the meeting or seen in the call, offered as names.
+  const people = useQuery({
+    queryKey: ["meeting-people", pageId],
+    queryFn: () => meetingNotesApi.people(pageId),
     enabled: open,
   });
-  const invited = (event.data?.attendees ?? []).filter((a) => !a.includes("@"));
+  const invited = people.data ?? [];
   const [names, setNames] = useState<Record<string, string>>({});
   useEffect(() => {
     if (open) setNames({});
@@ -158,10 +158,18 @@ export function SpeakerNamesDialog({
               {speaker.suggestion && (
                 <span className="flex items-start gap-1.5 text-xs text-text-faint">
                   <Sparkles className="mt-0.5 size-3 shrink-0 text-brand" />
-                  <span>
-                    Suggested {speaker.suggestion.name} from “{speaker.suggestion.because}” at{" "}
-                    {stamp(speaker.suggestion.at_ms)}.
-                  </span>
+                  {speaker.suggestion.from_app ? (
+                    <span>
+                      Suggested {speaker.suggestion.name}: {speaker.suggestion.from_app} showed
+                      them speaking while this voice talked, as in “{speaker.suggestion.because}” at{" "}
+                      {stamp(speaker.suggestion.at_ms)}.
+                    </span>
+                  ) : (
+                    <span>
+                      Suggested {speaker.suggestion.name} from “{speaker.suggestion.because}” at{" "}
+                      {stamp(speaker.suggestion.at_ms)}.
+                    </span>
+                  )}
                 </span>
               )}
             </label>

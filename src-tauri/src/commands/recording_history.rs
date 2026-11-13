@@ -261,8 +261,8 @@ pub async fn retranscribe_meeting(
    let name=model.file_stem().and_then(|s|s.to_str()).unwrap_or("Whisper").to_owned();
    let expected=documents::core::get(&c,&id)?;
    let terms=recordings::vocabulary(&c,&id)?;
-   // No more voices than people invited (and the person recording).
-   let invited=recordings::event(&c,&id)?.map(|e| e.attendees.len() as i32 + 1).unwrap_or(0);
+   // No more voices than people invited or seen in the call, and one spare.
+   let invited=recordings::voices_at_most(&c,&id)?;
    c.execute("UPDATE meeting SET transcript_state='transcribing',transcript_error=NULL WHERE page_id=?1",[&id])?;
    (audio,model,name,expected,terms,invited)
   };
@@ -280,7 +280,7 @@ pub async fn retranscribe_meeting(
   // Names the conversation makes certain go in before the notes are written,
   // so the notes say who will do what. A failure here keeps the transcript.
   let named=if applied {
-    tidy_core::store::meeting_notes::apply_certain_names(&c,&id).unwrap_or_else(|error|{log::warn!("Speakers were not named from the conversation: {error}");Vec::new()})
+    tidy_core::store::meeting_notes::apply_certain_names(&c,&id).unwrap_or_else(|error|{log::warn!("Speakers were not named automatically: {error}");Vec::new()})
   } else { Vec::new() };
   let body_json=if named.is_empty() {body_json} else {documents::core::get(&c,&id)?};
   if applied { use tauri::Emitter; let _=h.emit("meeting-transcript-updated",serde_json::json!({"page_id":id,"body_json":body_json})); }

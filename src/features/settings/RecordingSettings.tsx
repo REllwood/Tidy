@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { meetingAutomationApi, recordingPreferencesApi } from "@/lib/api";
+import { callNamesApi, meetingAutomationApi, recordingPreferencesApi } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 const KEY = ["recording-preferences"] as const;
 const VOCABULARY_KEY = ["transcription-vocabulary"] as const;
 const AUTOMATION_KEY = ["meeting-automation"] as const;
+const CALL_NAMES_KEY = ["call-names"] as const;
 
 /** Offering to record calls, and stopping recordings once a meeting ends. */
 function Automation() {
@@ -66,6 +67,76 @@ function Automation() {
       {(saved.error || change.error) && (
         <p role="alert" className="text-sm text-danger-c">
           {errorMessage(saved.error || change.error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Reading names from the Teams or Google Meet window while recording. */
+function CallNames() {
+  const qc = useQueryClient();
+  const status = useQuery({
+    queryKey: CALL_NAMES_KEY,
+    queryFn: callNamesApi.status,
+    // Notice when the person comes back from System Settings.
+    refetchInterval: (query) =>
+      query.state.data?.enabled && !query.state.data.allowed ? 2000 : false,
+  });
+  const change = useMutation({
+    mutationFn: async (on: boolean) => {
+      if (on) await callNamesApi.enable();
+      else await callNamesApi.disable();
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: CALL_NAMES_KEY }),
+  });
+  const openSettings = useMutation({ mutationFn: callNamesApi.openSettings });
+  const data = status.data;
+  if (data && !data.supported) return null;
+  const on = data?.enabled ?? false;
+  return (
+    <div className="space-y-3 border-t border-border pt-3">
+      <label className="flex items-center justify-between gap-4 text-sm">
+        <span>Names from Teams and Google Meet</span>
+        <Switch
+          checked={on}
+          disabled={status.isPending || status.isError || change.isPending}
+          onCheckedChange={(v) => change.mutate(v)}
+        />
+      </label>
+      <p className="text-xs text-text-muted">
+        While you record, Tidy reads the Teams or Google Meet window to see who
+        joined and who is shown speaking, then names the voices in the
+        transcript after them. In Google Meet, turn on captions so Tidy can
+        see who is speaking. Only names and times are kept, never what the
+        captions say. Other apps and browser tabs are not read.
+      </p>
+      {on && data && !data.allowed && (
+        <div role="status" className="space-y-2 rounded-md border border-border p-3 text-xs">
+          <p>
+            macOS needs to allow this first. In System Settings, open Privacy
+            and Security, then Accessibility, and turn on Tidy. macOS describes
+            this as letting Tidy control your computer. Tidy only reads the call
+            window while it records.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={openSettings.isPending}
+            onClick={() => openSettings.mutate()}
+          >
+            Open Accessibility settings
+          </Button>
+        </div>
+      )}
+      {on && data?.allowed && (
+        <p role="status" className="text-xs text-text-muted">
+          Allowed. Names are read during your next recording.
+        </p>
+      )}
+      {(status.error || change.error || openSettings.error) && (
+        <p role="alert" className="text-sm text-danger-c">
+          {errorMessage(status.error || change.error || openSettings.error)}
         </p>
       )}
     </div>
@@ -179,6 +250,7 @@ export function RecordingSettings() {
         </p>
       )}
       <Automation />
+      <CallNames />
       <Vocabulary />
     </div>
   );

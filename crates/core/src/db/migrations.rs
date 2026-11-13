@@ -327,6 +327,15 @@ pub fn migrations() -> Migrations<'static> {
         ALTER TABLE meeting_ai ADD COLUMN template TEXT;
         "#,
     ),
+    // ---- v11 (names from the call window) ----
+    M::up(
+        r#"
+        -- What the Teams or Google Meet window showed during the recording,
+        -- when the person allowed Tidy to read it: JSON with the app, the
+        -- meeting's title, the names seen and who was shown speaking when.
+        ALTER TABLE meeting ADD COLUMN call TEXT;
+        "#,
+    ),
     ])
 }
 

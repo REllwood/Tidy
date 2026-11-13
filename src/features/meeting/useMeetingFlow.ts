@@ -80,14 +80,19 @@ const initial: MeetingState = {
 
 const quiet = { mic: 0, system: 0 };
 
-/** "Named Speaker 2 as Tom from the conversation." */
-export function namedMessage(named: { label: string; name: string }[]): string {
+/** "Named Speaker 2 as Tom from the conversation." or "… from the Teams call." */
+export function namedMessage(
+  named: { label: string; name: string; from_app?: string | null }[],
+): string {
   const parts = named.map((n) => `${n.label} as ${n.name}`);
   const list =
     parts.length > 1
       ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
       : parts[0];
-  return `Named ${list} from the conversation.`;
+  const apps = [...new Set(named.map((n) => n.from_app).filter((a): a is string => !!a))];
+  const call = apps.length ? `the ${apps.join(" and ")} call` : "";
+  const talk = named.some((n) => !n.from_app) ? "the conversation" : "";
+  return `Named ${list} from ${[call, talk].filter(Boolean).join(" and ")}.`;
 }
 
 /** Releasing the AI gate is best effort: it must never mask the real failure. */

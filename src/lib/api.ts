@@ -309,6 +309,24 @@ export const meetingHudApi = {
 };
 
 /** Offering to record calls, and stopping recordings that have finished. */
+export interface CallNamesStatus {
+  /** The person turned the option on. */
+  enabled: boolean;
+  /** macOS allows Tidy to read other apps' windows. */
+  allowed: boolean;
+  /** This Mac can do it at all. */
+  supported: boolean;
+}
+/** Reading names from the Teams or Google Meet window while recording. */
+export const callNamesApi = {
+  status: () => invoke<CallNamesStatus>("call_names_status"),
+  /** Turns it on and asks macOS for the Accessibility permission. */
+  enable: () => invoke<CallNamesStatus>("call_names_enable"),
+  disable: () => invoke<void>("call_names_disable"),
+  /** Opens the Accessibility list in System Settings. */
+  openSettings: () => invoke<void>("call_names_open_settings"),
+};
+
 export const meetingAutomationApi = {
   get: () => invoke<[boolean, boolean]>("get_meeting_automation"),
   set: (offers: boolean, autoStop: boolean) =>
@@ -489,6 +507,9 @@ export interface NameGuess {
   at_ms: number;
   /** Strong enough that Tidy applies it after transcription. */
   certain: boolean;
+  /** The call app that showed this person speaking, such as "Teams", when
+   * the name comes from the call window rather than the conversation. */
+  from_app?: string | null;
 }
 export interface MeetingSpeaker {
   label: string;
@@ -510,6 +531,8 @@ export const meetingNotesApi = {
     invoke<MeetingSpeaker[]>("meeting_speakers", { pageId }),
   renameSpeakers: (pageId: string, names: { from: string; to: string }[]) =>
     invoke<boolean>("rename_meeting_speakers", { pageId, names }),
+  /** People invited to the meeting or seen in the call, to offer as names. */
+  people: (pageId: string) => invoke<string[]>("meeting_people", { pageId }),
   /** Resolves to true when an earlier copy in the page was replaced. */
   addToPage: (pageId: string) =>
     invoke<boolean>("add_meeting_notes_to_page", { pageId }),
