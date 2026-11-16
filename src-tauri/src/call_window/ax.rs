@@ -101,6 +101,7 @@ extern "C" {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     static kAXTrustedCheckOptionPrompt: CFTypeRef;
+    fn AXUIElementGetTypeID() -> CFTypeID;
     fn AXIsProcessTrusted() -> u8;
     fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> u8;
     fn AXUIElementCreateApplication(pid: c_int) -> CFTypeRef;
@@ -124,16 +125,23 @@ extern "C" {
 struct Cf(CFTypeRef);
 
 impl Cf {
-    /// Take over an object returned by a Create or Copy call.
+    /// Take over an object returned by a Create or Copy call. Nothing is
+    /// made for a null pointer: releasing null stops the whole app.
     fn owned(ptr: CFTypeRef) -> Option<Cf> {
-        (!ptr.is_null()).then_some(Cf(ptr))
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Cf(ptr))
+        }
     }
 }
 
 impl Drop for Cf {
     fn drop(&mut self) {
-        // SAFETY: this holds one reference, given up exactly once.
-        unsafe { CFRelease(self.0) }
+        if !self.0.is_null() {
+            // SAFETY: this holds one reference, given up exactly once.
+            unsafe { CFRelease(self.0) }
+        }
     }
 }
 
@@ -185,10 +193,17 @@ impl Clone for Element {
 }
 
 impl Element {
-    /// Hold on to an element read out of another object.
+    /// Hold on to an element read out of another object. Anything that is
+    /// not an element, such as an error value in a list, is left alone.
     fn retain(ptr: CFTypeRef) -> Option<Element> {
-        // SAFETY: a live object borrowed from its container.
-        (!ptr.is_null()).then(|| Element(Cf(unsafe { CFRetain(ptr) })))
+        // SAFETY: a live object borrowed from its container, checked to be
+        // an element before it is kept.
+        unsafe {
+            if ptr.is_null() || CFGetTypeID(ptr) != AXUIElementGetTypeID() {
+                return None;
+            }
+            Cf::owned(CFRetain(ptr)).map(Element)
+        }
     }
 
     pub fn application(pid: i32) -> Option<Element> {
@@ -203,7 +218,9 @@ impl Element {
         unsafe {
             AXUIElementSetMessagingTimeout(self.0 .0, CALL_TIMEOUT);
             if AXUIElementCopyAttributeValue(self.0 .0, name.0, &mut value) != AX_SUCCESS {
-                return Cf::owned(value).and(None);
+                // Release anything handed back with the error.
+                drop(Cf::owned(value));
+                return None;
             }
         }
         Cf::owned(value)
@@ -414,6 +431,50 @@ fn main_app(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_value_is_nothing_and_is_never_released() {
+        // Releasing a null reference stops the process, so this test would
+        // take the whole test run down with it.
+        assert!(Cf::owned(null()).is_none());
+        assert!(Element::retain(null()).is_none());
+        // SAFETY: null is handled before anything is read.
+        unsafe {
+            assert!(string(null()).is_none());
+            assert!(items(null()).is_empty());
+        }
+        drop(Cf(null()));
+    }
+
+    #[test]
+    fn an_app_that_gives_no_answer_reads_as_empty() {
+        // No process has this id, so every call fails and hands back nothing.
+        let app = Element::application(i32::MAX - 7).expect("an element is made for any id");
+        assert!(app.windows().is_empty());
+        assert_eq!(app.bool("AXManualAccessibility"), None);
+        assert!(!app.set_bool("AXManualAccessibility", true));
+        let (changed, put_back) = share_web_tree(&app);
+        assert!(!changed && put_back.is_empty());
+        let mut reader = Reader::new(Duration::from_millis(500), 100);
+        let tree = reader.tree(&app);
+        assert!(tree.role.is_empty() && tree.children.is_empty());
+    }
+
+    #[test]
+    fn only_elements_are_kept_as_elements() {
+        let text = cf_string("not an element");
+        assert!(Element::retain(text.0).is_none());
+        assert!(Element::retain(null()).is_none());
+        let app = Element::application(i32::MAX - 7).expect("an element");
+        assert!(Element::retain(app.0 .0).is_some());
+    }
+
+    #[test]
+    fn strings_come_back_whole() {
+        let made = cf_string("Zoë Müller, video is on");
+        // SAFETY: a string made just above.
+        assert_eq!(unsafe { string(made.0) }.as_deref(), Some("Zoë Müller, video is on"));
+    }
 
     #[test]
     fn only_an_apps_main_program_counts() {
