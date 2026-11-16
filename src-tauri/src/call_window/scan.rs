@@ -209,10 +209,12 @@ pub fn clean_name(text: &str) -> Option<String> {
     looks.then(|| name.to_string())
 }
 
-/// The person recording, as their own name is marked.
+/// The person recording, as their own name is marked. Only ASCII letters are
+/// lowered, here and below, so a position found in the lowered copy is the
+/// same position in the original text.
 fn yourself(text: &str) -> Option<String> {
     let trimmed = text.trim();
-    let lower = trimmed.to_lowercase();
+    let lower = trimmed.to_ascii_lowercase();
     let at = lower.rfind("(you)")?;
     clean_name(&trimmed[..at])
 }
@@ -252,7 +254,7 @@ impl Look {
 /// whether their video is on.
 fn tile_name(node: &Node) -> Option<Option<String>> {
     let label = node.label();
-    let lower = label.to_lowercase();
+    let lower = label.to_ascii_lowercase();
     let at = lower.find(", video is ")?;
     // The person recording's own tile.
     if lower.starts_with("myself") {
@@ -276,7 +278,7 @@ fn tile_speaking(node: &Node) -> bool {
 /// "Priya Shah is speaking" or "Priya Shah, speaking" on anything else.
 fn speaking_label(node: &Node) -> Option<String> {
     let label = node.label();
-    let lower = label.to_lowercase();
+    let lower = label.to_ascii_lowercase();
     let at = lower.find(", speaking").or_else(|| lower.find(" is speaking"))?;
     clean_name(&label[..at])
 }
@@ -592,6 +594,16 @@ mod tests {
             "So the launch moves to March.", "", "Leave", "Share screen", "Live captions"] {
             assert_eq!(clean_name(not), None, "{not}");
         }
+    }
+
+    #[test]
+    fn letters_that_change_length_when_lowered_do_not_break_a_label() {
+        // "İ" is two bytes and lowers to three, which once shifted the cut.
+        let tile = el("AXMenuItem", "İİİİ Kaya, video is on", vec![]);
+        assert_eq!(look(&tile).people, vec!["İİİİ Kaya"]);
+        let speaking = el("AXGroup", "ẞẞẞ Groß is speaking", vec![]);
+        assert_eq!(look(&speaking).speaking, vec!["ẞẞẞ Groß"]);
+        assert_eq!(yourself("İİİİ Kaya (You)").as_deref(), Some("İİİİ Kaya"));
     }
 
     #[test]
