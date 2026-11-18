@@ -18,8 +18,10 @@ const FULL_EVERY: Duration = Duration::from_secs(8);
 const RETRY_EVERY: Duration = Duration::from_secs(3);
 /// After asking an app to share its page, how long before reading it.
 const WAKE_SETTLE: Duration = Duration::from_millis(2_500);
-/// How often to ask again while an app keeps its page hidden.
+/// How often to ask again while an app keeps its page hidden, and how many
+/// times in a row before giving up on it for this recording.
 const WAKE_EVERY: Duration = Duration::from_secs(10);
+const WAKE_TRIES: u32 = 3;
 /// Each window's read: how long it may take and how many elements it visits.
 const WINDOW_BUDGET: Duration = Duration::from_millis(1_500);
 const WINDOW_ELEMENTS: usize = 6_000;
@@ -73,6 +75,8 @@ struct Watched {
     browser: bool,
     switches: ax::Switches,
     woken: Option<Instant>,
+    /// Times asked since the app last showed its page.
+    tries: u32,
     /// Call windows seen so far. A call that goes full screen or moves to
     /// another Space leaves the app's window list but can still be read.
     windows: Vec<Element>,
@@ -128,16 +132,16 @@ struct Report {
 }
 
 impl Report {
-    fn read(&mut self, window: &Element, bundle: &str, call: Call, title: &str, tree: &scan::Node, found: Option<&Look>) {
+    #[allow(clippy::too_many_arguments)]
+    fn read(&mut self, window: &Element, bundle: &str, call: Call, title: &str, tree: &scan::Node, page: bool, found: &Look) {
         self.full_reads += 1;
-        if let Some(found) = found {
-            self.people = self.people.max(found.people.len());
-            self.captions = self.captions.max(found.captions.len());
-            self.tiles = self.tiles.max(found.hot.len());
-        } else {
+        if !page {
             self.hidden_reads += 1;
         }
-        let header = format!("{bundle}, read as {}, title \"{}\", page shown: {}", call.app(), scan::shape(title), found.is_some());
+        self.people = self.people.max(found.people.len());
+        self.captions = self.captions.max(found.captions.len());
+        self.tiles = self.tiles.max(found.hot.len());
+        let header = format!("{bundle}, read as {}, title \"{}\", page shown: {page}", call.app(), scan::shape(title));
         if let Some(entry) = self.windows.iter_mut().find(|(w, _, _)| w == window) {
             entry.1 = header;
             entry.2 = tree.clone();
@@ -146,8 +150,16 @@ impl Report {
         }
     }
 
-    /// Written only on this Mac, over the last one, and only when the
-    /// recording found no one speaking. Every word in it is replaced.
+    /// Whether a recording is worth a report: a call window was read but no
+    /// one was found in it, or Teams showed no one speaking. Google Meet
+    /// shows who is speaking only through its captions, so a Meet call with
+    /// people but no speaking is expected.
+    fn wanted(&self, record: &CallRecord) -> bool {
+        self.full_reads > 0 && (record.people.is_empty() || record.app == Call::Teams.app() && record.speaking.is_empty())
+    }
+
+    /// Written only on this Mac, over the last one. Every word in it is
+    /// replaced.
     fn write(&self, path: &Path, record: &CallRecord, seconds: u64) {
         let mut text = format!(
             "Tidy call window report\n\nRecording length: {seconds} seconds\nApps with a call window: {}\nWindow reads: {}, of which the page was hidden: {}\nTimes an app was asked to share its page: {}\nMost seen at once: {} people, {} caption lines, {} tiles\nKept: {} people, {} stretches of speaking\n",
@@ -198,12 +210,13 @@ pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>) -> CallR
                     None => {
                         report.apps.push(bundle.clone());
                         let switches = ax::switches(&app);
-                        watched.push(Watched { pid, app, browser: !teams, switches, woken: None, windows: Vec::new() });
+                        watched.push(Watched { pid, app, browser: !teams, switches, woken: None, tries: 0, windows: Vec::new() });
                         watched.len() - 1
                     }
                 };
                 let entry = &mut watched[at];
-                let mut hidden = false;
+                let mut shown = false;
+                let mut read = false;
                 for (window, call, title) in entry.windows_now(listed, teams) {
                     let mut reader = ax::Reader::new(WINDOW_BUDGET, WINDOW_ELEMENTS);
                     let tree = reader.tree(&window);
@@ -212,13 +225,11 @@ pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>) -> CallR
                         entry.windows.retain(|w| w != &window);
                         continue;
                     }
-                    if !scan::shows_page(&tree) {
-                        report.read(&window, &bundle, call, &title, &tree, None);
-                        hidden = true;
-                        continue;
-                    }
+                    read = true;
+                    let page = scan::shows_page(&tree);
+                    shown |= page;
                     let found = scan::look(call, entry.browser, &tree);
-                    report.read(&window, &bundle, call, &title, &tree, Some(&found));
+                    report.read(&window, &bundle, call, &title, &tree, page, &found);
                     let (meeting, named) = scan::window_title(call, &title);
                     // A Teams window counts only once it shows a call.
                     if call == Call::Meet || !found.is_empty() {
@@ -227,9 +238,16 @@ pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>) -> CallR
                     hot.extend(found.hot.iter().filter_map(|i| reader.elements.get(*i).cloned()).map(|e| (e, call)));
                     look.add(found);
                 }
-                if hidden && entry.woken.map_or(true, |at| at.elapsed() >= WAKE_EVERY) {
-                    ax::wake_web_tree(&entry.app);
+                if shown {
+                    entry.tries = 0;
+                } else if read
+                    && entry.tries < WAKE_TRIES
+                    && entry.woken.map_or(true, |at| at.elapsed() >= WAKE_EVERY)
+                {
+                    // No window of this app shows its page: ask it to share.
+                    ax::wake_web_tree(&entry.app, entry.tries > 0);
                     entry.woken = Some(Instant::now());
+                    entry.tries += 1;
                     report.wakes += 1;
                     woke = true;
                 }
@@ -261,7 +279,7 @@ pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>) -> CallR
         ax::put_back(&w.app, &w.switches);
     }
     let record = tracker.finish();
-    if let Some(path) = report_to.filter(|_| record.speaking.is_empty()) {
+    if let Some(path) = report_to.filter(|_| report.wanted(&record)) {
         report.write(path, &record, began.elapsed().as_secs());
     }
     record

@@ -241,6 +241,19 @@ pub fn clean_name(text: &str) -> Option<String> {
     looks.then(|| name.to_string())
 }
 
+/// Small words that may start in lower case inside a name, as in "Ana de
+/// Souza" or "Jan van der Berg".
+const NAME_PARTICLES: &[&str] = &["de", "da", "do", "dos", "das", "di", "del", "della", "du", "la", "le", "van", "von", "der", "den", "ter", "ten", "bin", "binti", "al", "el", "y", "e"];
+
+/// Every word of a name starts with a capital, apart from small words such
+/// as "de". Text on a call's main area that is not a name, such as "No one
+/// else is here", has words in lower case.
+fn capitalised(name: &str) -> bool {
+    name.split_whitespace().all(|w| {
+        w.chars().next().is_some_and(|c| !c.is_lowercase()) || NAME_PARTICLES.contains(&w.to_lowercase().as_str())
+    })
+}
+
 /// The person recording, as their own name is marked. Only ASCII letters are
 /// lowered, here and below, so a position found in the lowered copy is the
 /// same position in the original text.
@@ -432,7 +445,13 @@ pub fn look(call: Call, browser: bool, root: &Node) -> Look {
     if browser {
         let mut areas = Vec::new();
         web_areas(root, &mut areas);
-        for area in areas.into_iter().filter(|a| browser_call(&a.title) == Some(call)) {
+        let mut calls: Vec<&Node> = areas.iter().copied().filter(|a| browser_call(&a.title) == Some(call)).collect();
+        // A browser that does not title its page: the window's only page,
+        // as the window's own title already showed the call.
+        if calls.is_empty() && areas.len() == 1 && areas[0].title.trim().is_empty() {
+            calls = areas;
+        }
+        for area in calls {
             visit(call, false, area, &mut look);
         }
     } else {
@@ -476,7 +495,7 @@ fn visit(call: Call, stage: bool, node: &Node, look: &mut Look) {
     if stage && call == Call::Meet && node.is_text() {
         if let Some(me) = yourself(node.shown()) {
             look.me.push(me);
-        } else if let Some(name) = clean_name(node.shown()) {
+        } else if let Some(name) = clean_name(node.shown()).filter(|n| capitalised(n)) {
             look.people.push(name);
         }
         return;
@@ -869,6 +888,29 @@ mod tests {
             look_part(Call::Meet, &several).captions,
             vec![("You".to_string(), "Sounds good.".to_string()), ("Priya Shah".to_string(), "Yes, and the pilot".to_string())]
         );
+    }
+
+    #[test]
+    fn words_on_meets_main_area_that_are_not_names_are_left_out() {
+        let stage = sub("AXGroup", "AXLandmarkMain", "", vec![
+            meet_tile("Ana de Souza"),
+            group(vec![text("No one else is here")]),
+            group(vec![text("You're the only one here")]),
+            group(vec![text("Tom Baker joined")]),
+            meet_tile("Rhys Ellwood (Presentation)"),
+        ]);
+        let window = Node { title: "Meet - abc-defg-hij".into(), ..el("AXWebArea", "", vec![stage]) };
+        assert_eq!(look(Call::Meet, true, &window).people, vec!["Ana de Souza", "Rhys Ellwood"]);
+    }
+
+    #[test]
+    fn a_browser_that_does_not_title_its_page_is_still_read() {
+        let page = |title: &str| Node { title: title.into(), ..el("AXWebArea", "", vec![sub("AXGroup", "AXLandmarkMain", "", vec![meet_tile("Tom Baker")])]) };
+        let untitled = el("AXWindow", "", vec![page("")]);
+        assert_eq!(look(Call::Meet, true, &untitled).people, vec!["Tom Baker"]);
+        // Two pages and neither is the call: neither is read.
+        let split = el("AXWindow", "", vec![page(""), page("Inbox - Gmail")]);
+        assert!(look(Call::Meet, true, &split).people.is_empty());
     }
 
     #[test]

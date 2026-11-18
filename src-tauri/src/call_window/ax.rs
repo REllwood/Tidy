@@ -307,14 +307,17 @@ pub fn switches(app: &Element) -> Switches {
 }
 
 /// Ask a Chromium-based app to share its web page's elements, as it does for
-/// VoiceOver. Chrome stops sharing on its own after a while although the
-/// switch still reads as on, and it only notices the switch changing, so
-/// each switch is turned off and on again. Chrome answers with an error even
-/// when it listens, so the answer is not trusted: whether the page appears
-/// on the next read is what counts. The page takes a second or two.
-pub fn wake_web_tree(app: &Element) {
+/// VoiceOver. Chrome can stop sharing while its switch still reads as on,
+/// and setting it on again brings the page back. When that has not worked,
+/// `firmly` turns each switch off first, so the app sees it change. Chrome
+/// answers with an error even when it listens, so the answer is not
+/// trusted: whether the page appears on the next read is what counts. The
+/// page takes a second or two.
+pub fn wake_web_tree(app: &Element, firmly: bool) {
     for name in SWITCHES {
-        app.set_bool(name, false);
+        if firmly {
+            app.set_bool(name, false);
+        }
         app.set_bool(name, true);
     }
 }
@@ -410,11 +413,15 @@ impl Reader {
 /// Chrome does.
 pub fn running_apps() -> Vec<(i32, String)> {
     use objc2_app_kit::NSWorkspace;
-    NSWorkspace::sharedWorkspace()
-        .runningApplications()
-        .iter()
-        .filter_map(|app| Some((app.processIdentifier(), app.bundleIdentifier()?.to_string())))
-        .collect()
+    // The watch runs on its own thread, which has no pool of its own for
+    // the objects macOS hands back.
+    objc2::rc::autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .runningApplications()
+            .iter()
+            .filter_map(|app| Some((app.processIdentifier(), app.bundleIdentifier()?.to_string())))
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -444,7 +451,8 @@ mod tests {
         assert!(!app.set_bool("AXManualAccessibility", true));
         let before = switches(&app);
         assert!(before.before.iter().all(|(_, value)| value.is_none()));
-        wake_web_tree(&app);
+        wake_web_tree(&app, false);
+        wake_web_tree(&app, true);
         put_back(&app, &before);
         assert!(app.title().is_empty());
         assert!(app == app.clone());

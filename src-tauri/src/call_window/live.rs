@@ -6,7 +6,7 @@
 //! - `dump_call_windows`: each call window as Tidy reads it, saved with its
 //!   words to TIDY_LIVE_OUT, which never leaves this Mac.
 //! - `watch_a_call`: the whole watch for TIDY_LIVE_SECONDS, and its report to
-//!   TIDY_LIVE_REPORT when no one is found speaking.
+//!   TIDY_LIVE_REPORT when it would write one.
 //!
 //! cargo test --lib call_window::live::watch_a_call -- --ignored --nocapture
 
@@ -77,7 +77,7 @@ fn dump_call_windows() {
         }
         println!("{bundle} ({pid}): {} call window(s)", windows.len());
         if !windows.iter().all(|(w, _, _)| scan::shows_page(&ax::Reader::new(Duration::from_secs(2), 6_000).tree(w))) {
-            ax::wake_web_tree(&app);
+            ax::wake_web_tree(&app, false);
             std::thread::sleep(Duration::from_secs(3));
         }
         for (n, (window, call, title)) in windows.into_iter().enumerate() {
