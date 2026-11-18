@@ -2678,6 +2678,7 @@ checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.0",
  "block2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -4877,7 +4878,7 @@ dependencies = [
 
 [[package]]
 name = "tidy"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -4892,6 +4893,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "objc2",
+ "objc2-app-kit",
  "objc2-core-audio",
  "objc2-core-audio-types",
  "objc2-core-foundation",

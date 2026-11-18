@@ -94,16 +94,40 @@ const BROWSERS: &[&str] = &[
     "Google Chrome", "Microsoft Edge", "Brave", "Arc", "Vivaldi", "Opera", "Safari", "Mozilla Firefox", "Firefox",
 ];
 
-/// A page title without the browser's name and profile after it.
+/// What Chrome adds to a window title while a tab plays sound, records or
+/// shares, as in "Meet - abc-defg-hij – Audio playing – Google Chrome".
+const TAB_STATES: &[&str] = &[
+    "Audio playing", "Audio muted", "Camera recording", "Microphone recording", "Camera and microphone recording",
+    "Sharing screen", "Sharing tab", "Sharing window", "Recording screen", "Picture in picture",
+    "Picture-in-picture", "Connected to a Bluetooth device", "Connected to a USB device", "Connected to a HID device",
+    "Connected to a serial port", "Network error",
+];
+
+/// A page title without the browser's name and profile after it, or the
+/// tab's sound and recording state.
 fn page_title(window: &str) -> &str {
-    for separator in [" - ", " – ", " — "] {
+    let mut page = window.trim();
+    'browser: for separator in [" - ", " – ", " — "] {
         for browser in BROWSERS {
-            if let Some(at) = window.find(&format!("{separator}{browser}")) {
-                return window[..at].trim();
+            if let Some(at) = page.find(&format!("{separator}{browser}")) {
+                page = page[..at].trim();
+                break 'browser;
             }
         }
     }
-    window.trim()
+    loop {
+        let before = page;
+        for separator in [" – ", " - ", " — "] {
+            if let Some((head, tail)) = page.rsplit_once(separator) {
+                if TAB_STATES.iter().any(|t| t.eq_ignore_ascii_case(tail.trim())) {
+                    page = head.trim();
+                }
+            }
+        }
+        if page == before {
+            return page;
+        }
+    }
 }
 
 /// The call a browser window shows, from its title.
@@ -126,6 +150,13 @@ const TEAMS_SECTIONS: &[&str] = &[
     "Chat", "Activity", "Calendar", "Teams", "Calls", "Files", "Apps", "Copilot", "OneDrive", "People", "Search",
     "Settings", "Assignments", "Communities", "Notifications", "Microsoft Teams", "Meet",
 ];
+
+/// Whether a Teams window is one of the app's own sections, such as Chat,
+/// rather than a meeting.
+pub fn is_teams_section(window: &str) -> bool {
+    let head = page_title(window).split(" | ").next().unwrap_or("").trim();
+    head.is_empty() || TEAMS_SECTIONS.iter().any(|s| s.eq_ignore_ascii_case(head))
+}
 
 /// A meeting window's title, and the people it names: Teams calls one-off
 /// calls after the people in them, "Priya Shah, Tom Baker | Microsoft Teams".
@@ -151,7 +182,8 @@ pub fn window_title(call: Call, window: &str) -> (Option<String>, Vec<String>) {
                 .unwrap_or("")
                 .trim_start_matches([' ', '-', '–', ':'])
                 .trim();
-            (Some(rest.to_string()).filter(|r| !r.is_empty() && !is_meet_code(r)), Vec::new())
+            let code = rest.split_whitespace().next().is_some_and(is_meet_code);
+            (Some(rest.to_string()).filter(|r| !r.is_empty() && !code), Vec::new())
         }
     }
 }
@@ -207,6 +239,19 @@ pub fn clean_name(text: &str) -> Option<String> {
         && !name.ends_with('.')
         && !words.iter().any(|w| NOT_PEOPLE.contains(&w.to_lowercase().trim_matches(|c: char| !c.is_alphabetic())));
     looks.then(|| name.to_string())
+}
+
+/// Small words that may start in lower case inside a name, as in "Ana de
+/// Souza" or "Jan van der Berg".
+const NAME_PARTICLES: &[&str] = &["de", "da", "do", "dos", "das", "di", "del", "della", "du", "la", "le", "van", "von", "der", "den", "ter", "ten", "bin", "binti", "al", "el", "y", "e"];
+
+/// Every word of a name starts with a capital, apart from small words such
+/// as "de". Text on a call's main area that is not a name, such as "No one
+/// else is here", has words in lower case.
+fn capitalised(name: &str) -> bool {
+    name.split_whitespace().all(|w| {
+        w.chars().next().is_some_and(|c| !c.is_lowercase()) || NAME_PARTICLES.contains(&w.to_lowercase().as_str())
+    })
 }
 
 /// The person recording, as their own name is marked. Only ASCII letters are
@@ -291,29 +336,50 @@ fn is_captions(node: &Node) -> bool {
     matches!(label.as_str(), "captions" | "live captions" | "closed captions" | "subtitles")
 }
 
-/// Caption lines: each line shows its speaker's name, then what they said.
+fn is_speaker(text: &str) -> bool {
+    text.eq_ignore_ascii_case("you") || clean_name(text).is_some() || yourself(text).is_some()
+}
+
+/// Caption lines: each block shows its speaker's name, then what they said,
+/// as Google Meet does, or a single line "Name: words".
 fn caption_lines(area: &Node) -> Vec<(String, String)> {
-    // Step through wrappers that hold a single element.
-    let mut rows = area;
-    while rows.children.len() == 1 && !rows.children[0].is_text() {
-        rows = &rows.children[0];
-    }
     let mut lines = Vec::new();
-    for row in &rows.children {
-        let mut texts = Vec::new();
-        row.texts(8, &mut texts);
-        if texts.len() >= 2 {
-            let speaker = &texts[0];
-            if speaker.eq_ignore_ascii_case("you") || clean_name(speaker).is_some() || yourself(speaker).is_some() {
-                lines.push((speaker.clone(), texts[1..].join(" ")));
-            }
-        } else if let Some((speaker, said)) = texts.first().and_then(|t| t.split_once(": ")) {
+    caption_blocks(area, &mut lines);
+    lines
+}
+
+fn caption_blocks(node: &Node, lines: &mut Vec<(String, String)>) {
+    if node.is_text() {
+        if let Some((speaker, said)) = node.shown().split_once(": ") {
             if clean_name(speaker).is_some() {
                 lines.push((speaker.to_string(), said.to_string()));
             }
         }
+        return;
     }
-    lines
+    // A block: the first part with text holds only the name, and the parts
+    // after it hold what was said.
+    let parts: Vec<Vec<String>> = node
+        .children
+        .iter()
+        .filter(|c| !c.is_control())
+        .map(|c| {
+            let mut texts = Vec::new();
+            c.texts(8, &mut texts);
+            texts
+        })
+        .filter(|texts| !texts.is_empty())
+        .collect();
+    if let [first, rest @ ..] = parts.as_slice() {
+        if first.len() == 1 && is_speaker(&first[0]) && !rest.is_empty() {
+            let said: Vec<&str> = rest.iter().flatten().map(String::as_str).collect();
+            lines.push((first[0].clone(), said.join(" ")));
+            return;
+        }
+    }
+    for child in &node.children {
+        caption_blocks(child, lines);
+    }
 }
 
 fn is_roster(node: &Node) -> bool {
@@ -356,14 +422,52 @@ fn roster_names(list: &Node, look: &mut Look) {
     }
 }
 
-/// Everything a window or part of one shows about who is in the call.
-pub fn look(root: &Node) -> Look {
+/// Whether a window shows its web page's elements. Chromium-based apps
+/// share them only when asked, and stop sharing after a while.
+pub fn shows_page(root: &Node) -> bool {
+    root.role == "AXWebArea" && !root.children.is_empty() || root.children.iter().any(shows_page)
+}
+
+fn web_areas<'a>(node: &'a Node, out: &mut Vec<&'a Node>) {
+    if node.role == "AXWebArea" {
+        out.push(node);
+        return;
+    }
+    for child in &node.children {
+        web_areas(child, out);
+    }
+}
+
+/// Everything a call window shows about who is in the call. In a browser,
+/// only the call's own page is read, never another tab beside it.
+pub fn look(call: Call, browser: bool, root: &Node) -> Look {
     let mut look = Look::default();
-    visit(root, &mut look);
+    if browser {
+        let mut areas = Vec::new();
+        web_areas(root, &mut areas);
+        let mut calls: Vec<&Node> = areas.iter().copied().filter(|a| browser_call(&a.title) == Some(call)).collect();
+        // A browser that does not title its page: the window's only page,
+        // as the window's own title already showed the call.
+        if calls.is_empty() && areas.len() == 1 && areas[0].title.trim().is_empty() {
+            calls = areas;
+        }
+        for area in calls {
+            visit(call, false, area, &mut look);
+        }
+    } else {
+        visit(call, false, root, &mut look);
+    }
     look
 }
 
-fn visit(node: &Node, look: &mut Look) {
+/// What one part of a call window shows, read again on its own.
+pub fn look_part(call: Call, node: &Node) -> Look {
+    let mut look = Look::default();
+    visit(call, false, node, &mut look);
+    look
+}
+
+fn visit(call: Call, stage: bool, node: &Node, look: &mut Look) {
     if let Some(tile) = tile_name(node) {
         if let Some(name) = tile {
             if tile_speaking(node) {
@@ -383,13 +487,106 @@ fn visit(node: &Node, look: &mut Look) {
         roster_names(node, look);
         return;
     }
+    if stage && call == Call::Meet && node.is_control() {
+        return;
+    }
+    // Google Meet labels its tiles with nothing but the person's name, as
+    // text on the call's main area.
+    if stage && call == Call::Meet && node.is_text() {
+        if let Some(me) = yourself(node.shown()) {
+            look.me.push(me);
+        } else if let Some(name) = clean_name(node.shown()).filter(|n| capitalised(n)) {
+            look.people.push(name);
+        }
+        return;
+    }
     if let Some(name) = speaking_label(node) {
         look.speaking.push(name.clone());
         look.people.push(name);
     }
+    let stage = stage || node.subrole == "AXLandmarkMain";
     for child in &node.children {
-        visit(child, look);
+        visit(call, stage, child, look);
     }
+}
+
+/// Words kept as they are in a report: the words call apps use for their
+/// own controls and states. Everything else is replaced letter by letter.
+const REPORT_WORDS: &[&str] = &[
+    "video", "is", "on", "off", "muted", "unmuted", "speaking", "myself", "you", "your", "the", "and", "for", "to",
+    "of", "with", "has", "pin", "main", "options", "more", "live", "turn", "microphone", "camera", "captions",
+    "caption", "people", "participants", "attendees", "meeting", "call", "chat", "share", "screen", "leave", "raise",
+    "raised", "hand", "presenting", "presentation", "guest", "external", "organiser", "organizer", "host",
+    "presenter", "attendee", "in", "this", "everyone", "audio", "notes", "reactions", "view", "join",
+    "lobby", "waiting", "admit", "spotlight", "pinned", "tile", "gallery", "speaker", "together", "mode", "microsoft",
+    "teams", "google", "meet", "chrome", "frame", "occlusion",
+];
+
+/// Text with every letter and digit replaced, keeping its shape and the
+/// words call apps use for their own controls: "Priya Shah, video is on"
+/// becomes "Aaaaa Aaaa, video is on".
+pub fn shape(text: &str) -> String {
+    let mut out = String::new();
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if REPORT_WORDS.contains(&word.to_lowercase().as_str()) {
+            out.push_str(word);
+        } else {
+            out.extend(word.chars().map(|c| match c {
+                c if c.is_numeric() => '0',
+                c if c.is_uppercase() => 'A',
+                _ => 'a',
+            }));
+        }
+        word.clear();
+    };
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(if c == '\n' { ' ' } else { c });
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// A call window's elements, one per line and indented, with every word
+/// shaped as above, for a report that shows how the window is built without
+/// what it says.
+pub fn outline(root: &Node, max_lines: usize) -> String {
+    fn line(node: &Node, depth: usize, out: &mut Vec<String>, max: usize) {
+        if out.len() >= max {
+            return;
+        }
+        let mut text = format!("{:indent$}{}", "", node.role, indent = depth * 2);
+        if !node.subrole.is_empty() {
+            text.push('/');
+            text.push_str(&node.subrole);
+        }
+        for (name, value) in [("title", &node.title), ("desc", &node.desc), ("value", &node.value)] {
+            if !value.is_empty() {
+                let value: String = shape(value).chars().take(120).collect();
+                text.push_str(&format!(" {name}=\"{value}\""));
+            }
+        }
+        // Class names are the page's own code words, not anything said.
+        if !node.classes.is_empty() {
+            let classes: String = node.classes.split_whitespace().take(8).collect::<Vec<_>>().join(".");
+            text.push_str(&format!(" .{classes}"));
+        }
+        out.push(text);
+        for child in &node.children {
+            line(child, depth + 1, out, max);
+        }
+    }
+    let mut out = Vec::new();
+    line(root, 0, &mut out, max_lines);
+    if out.len() >= max_lines {
+        out.push(format!("… stopped at {max_lines} lines"));
+    }
+    out.join("\n")
 }
 
 /// How long after someone speaks a tile shows it, and a caption line, in ms.
@@ -534,7 +731,7 @@ mod tests {
             el("AXButton", "Leave", vec![]),
         ]);
         stage.children[0].handle = Some(7);
-        let look = look(&group(vec![stage]));
+        let look = look_part(Call::Teams, &group(vec![stage]));
         assert_eq!(look.people, vec!["Priya Shah", "Baker, Tom"], "the tile's text keeps Last, First names");
         assert_eq!(look.speaking, vec!["Priya Shah"]);
         assert_eq!(look.hot, vec![7], "tiles are read again each second");
@@ -555,7 +752,7 @@ mod tests {
             ..Default::default()
         };
         let page = group(vec![el("AXButton", "Turn off captions", vec![]), captions]);
-        let look = look(&page);
+        let look = look_part(Call::Meet, &page);
         assert_eq!(
             look.captions,
             vec![
@@ -579,7 +776,7 @@ mod tests {
                 el("AXButton", "Invite people", vec![]),
             ],
         );
-        let look = look(&group(vec![list]));
+        let look = look_part(Call::Teams, &group(vec![list]));
         assert_eq!(look.people, vec!["Priya Shah", "Sam Okafor"]);
         assert_eq!(look.me, vec!["Rhys Ellwood"]);
     }
@@ -600,9 +797,9 @@ mod tests {
     fn letters_that_change_length_when_lowered_do_not_break_a_label() {
         // "İ" is two bytes and lowers to three, which once shifted the cut.
         let tile = el("AXMenuItem", "İİİİ Kaya, video is on", vec![]);
-        assert_eq!(look(&tile).people, vec!["İİİİ Kaya"]);
+        assert_eq!(look_part(Call::Teams, &tile).people, vec!["İİİİ Kaya"]);
         let speaking = el("AXGroup", "ẞẞẞ Groß is speaking", vec![]);
-        assert_eq!(look(&speaking).speaking, vec!["ẞẞẞ Groß"]);
+        assert_eq!(look_part(Call::Teams, &speaking).speaking, vec!["ẞẞẞ Groß"]);
         assert_eq!(yourself("İİİİ Kaya (You)").as_deref(), Some("İİİİ Kaya"));
     }
 
@@ -623,6 +820,143 @@ mod tests {
             window_title(Call::Teams, "Priya Shah, Tom Baker | Microsoft Teams"),
             (None, vec!["Priya Shah".to_string(), "Tom Baker".to_string()])
         );
+    }
+
+    fn sub(role: &str, subrole: &str, label: &str, children: Vec<Node>) -> Node {
+        Node { subrole: subrole.into(), ..el(role, label, children) }
+    }
+
+    /// A Meet tile as Chrome shows it: the name, alone, deep in groups.
+    fn meet_tile(name: &str) -> Node {
+        group(vec![group(vec![group(vec![]), group(vec![])]), group(vec![group(vec![group(vec![text(name)])])])])
+    }
+
+    /// Meet's captions as Chrome shows them: one block per speaker turn, the
+    /// name in one group and the words in the next.
+    fn meet_captions(blocks: &[(&str, &[&str])]) -> Node {
+        let blocks = blocks
+            .iter()
+            .map(|(who, said)| {
+                group(vec![group(vec![group(vec![text(who)])]), group(said.iter().map(|s| text(s)).collect())])
+            })
+            .collect();
+        Node { handle: Some(9), ..sub("AXGroup", "AXLandmarkRegion", "Captions", blocks) }
+    }
+
+    /// A Chrome window holding a Meet call, recorded from a real one.
+    fn chrome_meet_window(captions: Node, beside: Option<Node>) -> Node {
+        let stage = sub(
+            "AXGroup",
+            "AXLandmarkMain",
+            "",
+            vec![
+                meet_tile("Rhys Ellwood"),
+                meet_tile("Tom Baker"),
+                group(vec![meet_tile("Priya Shah"), group(vec![text("Others might still see your full video.")])]),
+                el("AXButton", "Others might see more of your background.", vec![text("Reframe")]),
+                captions,
+            ],
+        );
+        let meet = Node { title: "Meet - vsi-mkus-gjb".into(), ..el("AXWebArea", "", vec![group(vec![
+            sub("AXGroup", "AXLandmarkRegion", "Call feature notifications and actions", vec![text("3")]),
+            stage,
+            sub("AXGroup", "AXLandmarkRegion", "Call controls", vec![el("AXButton", "Leave call", vec![])]),
+        ])]) };
+        let mut contents = vec![group(vec![]), el("AXScrollArea", "", vec![meet])];
+        contents.extend(beside);
+        el("AXWindow", "", vec![
+            el("AXToolbar", "", vec![el("AXTextField", "Address and search bar", vec![]), el("AXButton", "You", vec![])]),
+            group(contents),
+            group(vec![el("AXRadioButton", "Meet - vsi-mkus-gjb - Memory usage - 430 MB", vec![])]),
+        ])
+    }
+
+    #[test]
+    fn a_meet_call_in_chrome_gives_its_people_and_captions() {
+        let window = chrome_meet_window(meet_captions(&[("Tom Baker", &["I think we should hold the hiring.", "Does anyone disagree?"])]), None);
+        assert!(shows_page(&window));
+        let look = look(Call::Meet, true, &window);
+        assert_eq!(look.people, vec!["Rhys Ellwood", "Tom Baker", "Priya Shah"]);
+        assert_eq!(
+            look.captions,
+            vec![("Tom Baker".to_string(), "I think we should hold the hiring. Does anyone disagree?".to_string())]
+        );
+        assert_eq!(look.hot, vec![9], "the captions are read again each second");
+
+        let several = meet_captions(&[("You", &["Sounds good."]), ("Priya Shah", &["Yes, and the pilot"])]);
+        assert_eq!(
+            look_part(Call::Meet, &several).captions,
+            vec![("You".to_string(), "Sounds good.".to_string()), ("Priya Shah".to_string(), "Yes, and the pilot".to_string())]
+        );
+    }
+
+    #[test]
+    fn words_on_meets_main_area_that_are_not_names_are_left_out() {
+        let stage = sub("AXGroup", "AXLandmarkMain", "", vec![
+            meet_tile("Ana de Souza"),
+            group(vec![text("No one else is here")]),
+            group(vec![text("You're the only one here")]),
+            group(vec![text("Tom Baker joined")]),
+            meet_tile("Rhys Ellwood (Presentation)"),
+        ]);
+        let window = Node { title: "Meet - abc-defg-hij".into(), ..el("AXWebArea", "", vec![stage]) };
+        assert_eq!(look(Call::Meet, true, &window).people, vec!["Ana de Souza", "Rhys Ellwood"]);
+    }
+
+    #[test]
+    fn a_browser_that_does_not_title_its_page_is_still_read() {
+        let page = |title: &str| Node { title: title.into(), ..el("AXWebArea", "", vec![sub("AXGroup", "AXLandmarkMain", "", vec![meet_tile("Tom Baker")])]) };
+        let untitled = el("AXWindow", "", vec![page("")]);
+        assert_eq!(look(Call::Meet, true, &untitled).people, vec!["Tom Baker"]);
+        // Two pages and neither is the call: neither is read.
+        let split = el("AXWindow", "", vec![page(""), page("Inbox - Gmail")]);
+        assert!(look(Call::Meet, true, &split).people.is_empty());
+    }
+
+    #[test]
+    fn only_the_calls_own_page_is_read() {
+        // Another tab shown beside the call, as Chrome's split view does.
+        let other = Node { title: "Inbox - Gmail".into(), ..el("AXWebArea", "", vec![sub("AXGroup", "AXLandmarkMain", "", vec![text("Sam Okafor")])]) };
+        let window = chrome_meet_window(meet_captions(&[]), Some(el("AXScrollArea", "", vec![other])));
+        assert_eq!(look(Call::Meet, true, &window).people, vec!["Rhys Ellwood", "Tom Baker", "Priya Shah"]);
+    }
+
+    #[test]
+    fn a_page_chrome_has_not_shared_is_told_apart() {
+        let hidden = el("AXWindow", "", vec![group(vec![group(vec![])]), el("AXToolbar", "", vec![])]);
+        assert!(!shows_page(&hidden));
+        assert!(!shows_page(&el("AXWindow", "", vec![el("AXWebArea", "", vec![])])));
+    }
+
+    #[test]
+    fn a_report_shows_the_shape_of_a_window_but_none_of_its_words() {
+        assert_eq!(shape("Priya Shah, video is on, muted"), "Aaaaa Aaaa, video is on, muted");
+        assert_eq!(shape("Zoë Müller (Guest)"), "Aaa Aaaaaa (Guest)");
+        assert_eq!(shape("Meet - abc-defg-hij"), "Meet - aaa-aaaa-aaa");
+        assert_eq!(shape("Room 42\nsecret plan"), "Aaaa 00 aaaaaa aaaa");
+        let mut tile = tile("Priya Shah", true);
+        tile.children[1].classes = "fui-1x8 vdi-frame-occlusion".into();
+        let text = outline(&group(vec![tile]), 100);
+        assert!(text.contains("AXMenuItem desc=\"Aaaaa Aaaa, video is off, muted\""), "{text}");
+        assert!(text.contains(".fui-1x8.vdi-frame-occlusion"), "{text}");
+        assert!(!text.contains("Priya") && !text.contains("Shah"), "{text}");
+        assert!(outline(&group(vec![group(vec![]), group(vec![])]), 2).ends_with("… stopped at 2 lines"));
+    }
+
+    #[test]
+    fn chrome_window_titles_with_the_tabs_state() {
+        let title = "Meet - vsi-mkus-gjb – Audio playing – Google Chrome Canary";
+        assert_eq!(browser_call(title), Some(Call::Meet));
+        assert_eq!(window_title(Call::Meet, title), (None, vec![]));
+        assert_eq!(browser_call("Meet – vsi-mkus-gjb"), Some(Call::Meet));
+        assert_eq!(
+            window_title(Call::Meet, "Meet - Acme weekly - Camera and microphone recording - Google Chrome – Rhys"),
+            (Some("Acme weekly".into()), vec![])
+        );
+        assert_eq!(browser_call("Channel dashboard - YouTube Studio - Google Chrome – Rhys"), None);
+        assert!(is_teams_section("Chat | Microsoft Teams"));
+        assert!(is_teams_section("Microsoft Teams"));
+        assert!(!is_teams_section("Acme weekly | Microsoft Teams"));
     }
 
     fn captions(lines: &[(&str, &str)]) -> Look {
