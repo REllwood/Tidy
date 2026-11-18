@@ -1,7 +1,7 @@
 //! The macOS Accessibility calls used to read a call window: the same
-//! information VoiceOver reads. Tidy only reads, apart from one switch that
+//! information VoiceOver reads. Tidy only reads, apart from the switches that
 //! Chromium-based apps (Chrome, Edge and Teams itself) need before they share
-//! a web page's elements, which is put back when the recording ends.
+//! a web page's elements, which are put back when the recording ends.
 //!
 //! Every call into another app waits for that app to answer, so each read
 //! has a short timeout, a time budget and a limit on how many elements it
@@ -64,6 +64,7 @@ extern "C" {
     fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
     fn CFRelease(cf: CFTypeRef);
     fn CFGetTypeID(cf: CFTypeRef) -> CFTypeID;
+    fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
     fn CFStringGetTypeID() -> CFTypeID;
     fn CFArrayGetTypeID() -> CFTypeID;
     fn CFBooleanGetTypeID() -> CFTypeID;
@@ -114,11 +115,6 @@ extern "C" {
     ) -> AXError;
     fn AXUIElementSetAttributeValue(element: CFTypeRef, attribute: CFTypeRef, value: CFTypeRef) -> AXError;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, seconds: f32) -> AXError;
-}
-
-extern "C" {
-    fn proc_listallpids(buffer: *mut c_void, size: c_int) -> c_int;
-    fn proc_pidpath(pid: c_int, buffer: *mut c_void, size: u32) -> c_int;
 }
 
 /// A Core Foundation object this code holds a reference to.
@@ -192,6 +188,14 @@ impl Clone for Element {
     }
 }
 
+/// Two handles to the same element of the same app.
+impl PartialEq for Element {
+    fn eq(&self, other: &Self) -> bool {
+        // SAFETY: both are live elements.
+        unsafe { CFEqual(self.0 .0, other.0 .0) != 0 }
+    }
+}
+
 impl Element {
     /// Hold on to an element read out of another object. Anything that is
     /// not an element, such as an error value in a list, is left alone.
@@ -242,6 +246,12 @@ impl Element {
         }
     }
 
+    /// A window's title, or nothing once it has closed.
+    pub fn title(&self) -> String {
+        // SAFETY: the copied title is a string or nothing.
+        self.copy("AXTitle").and_then(|t| unsafe { string(t.0) }).unwrap_or_default()
+    }
+
     /// The app's windows with their titles.
     pub fn windows(&self) -> Vec<(Element, String)> {
         let Some(list) = self.copy("AXWindows") else { return Vec::new() };
@@ -282,30 +292,40 @@ pub fn ask() -> bool {
     }
 }
 
-/// Ask a Chromium-based app to share its web page's elements, as it does for
-/// VoiceOver. Returns whether anything changed, and the switches to put back
-/// afterwards: only those that were readable as off beforehand.
-pub fn share_web_tree(app: &Element) -> (bool, Vec<&'static str>) {
-    let mut changed = false;
-    let mut put_back = Vec::new();
-    for name in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
-        let before = app.bool(name);
-        if before == Some(true) {
-            continue;
-        }
-        if app.set_bool(name, true) {
-            changed = true;
-            if before == Some(false) {
-                put_back.push(name);
-            }
-        }
-    }
-    (changed, put_back)
+/// The switches that ask an app to share its web page's elements: the one
+/// VoiceOver sets, which Chrome and Edge honour, and the one Electron apps
+/// and Teams honour.
+const SWITCHES: [&str; 2] = ["AXEnhancedUserInterface", "AXManualAccessibility"];
+
+/// How an app's switches were before Tidy touched them.
+pub struct Switches {
+    before: Vec<(&'static str, Option<bool>)>,
 }
 
-pub fn put_back(app: &Element, switches: &[&'static str]) {
-    for name in switches {
+pub fn switches(app: &Element) -> Switches {
+    Switches { before: SWITCHES.iter().map(|name| (*name, app.bool(name))).collect() }
+}
+
+/// Ask a Chromium-based app to share its web page's elements, as it does for
+/// VoiceOver. Chrome stops sharing on its own after a while although the
+/// switch still reads as on, and it only notices the switch changing, so
+/// each switch is turned off and on again. Chrome answers with an error even
+/// when it listens, so the answer is not trusted: whether the page appears
+/// on the next read is what counts. The page takes a second or two.
+pub fn wake_web_tree(app: &Element) {
+    for name in SWITCHES {
         app.set_bool(name, false);
+        app.set_bool(name, true);
+    }
+}
+
+/// Put an app's switches back as they were: off, unless something else,
+/// such as VoiceOver, had turned them on.
+pub fn put_back(app: &Element, switches: &Switches) {
+    for (name, before) in &switches.before {
+        if *before != Some(true) {
+            app.set_bool(name, false);
+        }
     }
 }
 
@@ -384,48 +404,17 @@ impl Reader {
     }
 }
 
-/// Running apps' main processes: process id and the app's name, such as
-/// "Google Chrome" for /Applications/Google Chrome.app/Contents/MacOS/….
+/// Running apps, as macOS lists them: process id and bundle identifier,
+/// such as "com.google.Chrome". The identifier holds however the app was
+/// started, even when it runs from a temporary copy while it updates, as
+/// Chrome does.
 pub fn running_apps() -> Vec<(i32, String)> {
-    // SAFETY: a null buffer asks only for the count.
-    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    if count <= 0 {
-        return Vec::new();
-    }
-    let mut pids = vec![0 as c_int; count as usize + 32];
-    // SAFETY: the buffer holds as many ids as its size in bytes says.
-    let found = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), (pids.len() * 4) as c_int) };
-    pids.truncate(found.max(0) as usize);
-    let mut apps = Vec::new();
-    for pid in pids {
-        let mut buffer = vec![0u8; 4096];
-        // SAFETY: the buffer is as large as the size passed.
-        let written = unsafe { proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
-        if written <= 0 {
-            continue;
-        }
-        let path = String::from_utf8_lossy(&buffer[..written as usize]).into_owned();
-        if let Some(name) = main_app(&path) {
-            apps.push((pid, name));
-        }
-    }
-    apps
-}
-
-/// The app a process is the main program of, from its path: helpers inside
-/// the bundle (such as Chrome's tab processes) are not.
-fn main_app(path: &str) -> Option<String> {
-    let at = path.find(".app/Contents/MacOS/")?;
-    let executable = &path[at + ".app/Contents/MacOS/".len()..];
-    if executable.contains('/') {
-        return None;
-    }
-    let bundle = &path[..at];
-    // A helper app inside another app's bundle is not a main program.
-    if bundle.contains(".app/") {
-        return None;
-    }
-    Some(bundle.rsplit('/').next()?.to_string())
+    use objc2_app_kit::NSWorkspace;
+    NSWorkspace::sharedWorkspace()
+        .runningApplications()
+        .iter()
+        .filter_map(|app| Some((app.processIdentifier(), app.bundleIdentifier()?.to_string())))
+        .collect()
 }
 
 #[cfg(test)]
@@ -453,8 +442,13 @@ mod tests {
         assert!(app.windows().is_empty());
         assert_eq!(app.bool("AXManualAccessibility"), None);
         assert!(!app.set_bool("AXManualAccessibility", true));
-        let (changed, put_back) = share_web_tree(&app);
-        assert!(!changed && put_back.is_empty());
+        let before = switches(&app);
+        assert!(before.before.iter().all(|(_, value)| value.is_none()));
+        wake_web_tree(&app);
+        put_back(&app, &before);
+        assert!(app.title().is_empty());
+        assert!(app == app.clone());
+        assert!(app != Element::application(i32::MAX - 8).unwrap());
         let mut reader = Reader::new(Duration::from_millis(500), 100);
         let tree = reader.tree(&app);
         assert!(tree.role.is_empty() && tree.children.is_empty());
@@ -474,19 +468,5 @@ mod tests {
         let made = cf_string("Zoë Müller, video is on");
         // SAFETY: a string made just above.
         assert_eq!(unsafe { string(made.0) }.as_deref(), Some("Zoë Müller, video is on"));
-    }
-
-    #[test]
-    fn only_an_apps_main_program_counts() {
-        assert_eq!(main_app("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").as_deref(), Some("Google Chrome"));
-        assert_eq!(
-            main_app("/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams").as_deref(),
-            Some("Microsoft Teams")
-        );
-        assert_eq!(
-            main_app("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/1/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"),
-            None
-        );
-        assert_eq!(main_app("/usr/sbin/coreaudiod"), None);
     }
 }

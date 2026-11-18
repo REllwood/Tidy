@@ -17,6 +17,9 @@ mod ax;
 #[cfg(target_os = "macos")]
 mod watch;
 
+#[cfg(all(test, target_os = "macos"))]
+mod live;
+
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tidy_core::store::recordings::CallRecord;
@@ -24,6 +27,11 @@ use tidy_core::store::recordings::CallRecord;
 use crate::error::AppResult;
 
 const ENABLED: &str = "call_names.enabled";
+
+/// Where a recording that found no one speaking leaves a report of what the
+/// call window looked like, with every word in it replaced.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const REPORT_FILE: &str = "call-window-report.txt";
 
 #[derive(Debug, Serialize)]
 pub struct CallNamesStatus {
@@ -117,9 +125,10 @@ pub fn start(app: &AppHandle, began: std::time::Instant) -> Option<Watch> {
     {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = stop.clone();
+        let report = crate::workspace::directory(app).join(REPORT_FILE);
         let handle = std::thread::Builder::new()
             .name("call-window".into())
-            .spawn(move || watch::run(began, &flag))
+            .spawn(move || watch::run(began, &flag, Some(&report)))
             .ok()?;
         Some(Watch { stop, handle: Some(handle) })
     }
