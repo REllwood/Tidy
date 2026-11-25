@@ -686,6 +686,12 @@ impl Tracker {
         }
     }
 
+    /// Who was shown speaking since `from_ms`, without the person recording,
+    /// for naming the live transcript as it goes.
+    pub fn speaking_since(&self, from_ms: i64) -> Vec<Spoken> {
+        self.speaking.iter().filter(|s| s.to_ms >= from_ms && !self.is_me(&s.name)).cloned().collect()
+    }
+
     /// What was seen, without the person recording.
     pub fn finish(self) -> CallRecord {
         let me = self.me;
@@ -989,6 +995,17 @@ mod tests {
     }
 
     #[test]
+    fn the_person_recording_is_left_out_of_the_live_view_once_known() {
+        let mut t = Tracker::default();
+        t.saw_window(Call::Teams, None, vec![]);
+        // Shown speaking before the window marked them as the person recording.
+        t.add(1_000, &Look { speaking: vec!["Rhys Ellwood".into()], ..Default::default() });
+        assert_eq!(t.speaking_since(0).len(), 1);
+        t.add(2_000, &Look { me: vec!["Rhys Ellwood".into()], ..Default::default() });
+        assert!(t.speaking_since(0).is_empty());
+    }
+
+    #[test]
     fn the_person_recording_is_left_out() {
         let mut t = Tracker::default();
         t.saw_window(Call::Teams, Some("Acme weekly".into()), vec![]);
@@ -1002,6 +1019,9 @@ mod tests {
         let priya = Look { speaking: vec!["Priya Shah".into()], ..Default::default() };
         t.add(2_000, &priya);
         t.add(3_000, &priya);
+        // The live transcript sees the same, as it goes.
+        assert_eq!(t.speaking_since(0), vec![Spoken { from_ms: 1_000, to_ms: 3_000, name: "Priya Shah".into() }]);
+        assert!(t.speaking_since(3_500).is_empty(), "only stretches still running after the time given");
         let record = t.finish();
         assert_eq!(record.title.as_deref(), Some("Acme weekly"));
         assert_eq!(record.people, vec!["Priya Shah"]);

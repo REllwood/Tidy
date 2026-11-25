@@ -2,9 +2,10 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tidy_core::store::recordings::CallRecord;
+use tidy_core::store::recordings::{CallRecord, Spoken};
 
 use super::ax::{self, Element};
 use super::scan::{self, Call, Look, Tracker};
@@ -27,6 +28,8 @@ const WINDOW_BUDGET: Duration = Duration::from_millis(1_500);
 const WINDOW_ELEMENTS: usize = 6_000;
 /// At most this many windows of one app are read each time.
 const MAX_WINDOWS: usize = 4;
+/// How far back the live transcript is told who was shown speaking.
+const SHARE_BACK_MS: i64 = 120_000;
 
 /// The Teams app, new or classic, by its bundle identifier.
 fn is_teams(bundle: &str) -> bool {
@@ -182,7 +185,10 @@ impl Report {
     }
 }
 
-pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>) -> CallRecord {
+/// Read the call window until `stop`, and return what it showed. Who is
+/// shown speaking is also put in `live` as it is seen, for the live
+/// transcript.
+pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>, live: Option<&Mutex<Vec<Spoken>>>) -> CallRecord {
     let mut report = Report::default();
     let mut tracker = Tracker::default();
     let mut hot: Vec<(Element, Call)> = Vec::new();
@@ -272,6 +278,9 @@ pub fn run(began: Instant, stop: &AtomicBool, report_to: Option<&Path>) -> CallR
             }
         }
         tracker.add(at_ms, &look);
+        if let Some(mut shared) = live.and_then(|l| l.lock().ok()) {
+            *shared = tracker.speaking_since(at_ms - SHARE_BACK_MS);
+        }
         pause(tick + EVERY, stop);
     }
 

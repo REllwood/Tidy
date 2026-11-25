@@ -18,6 +18,7 @@ import { localAi } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
 import { useUi } from "@/store/ui";
 import { invalidateMeetingQueries } from "./invalidation";
+import { withLiveLine } from "./LivePanel";
 import {
   readTranscriptionLanguage,
   writeTranscriptionLanguage,
@@ -169,7 +170,7 @@ export function useMeetingFlow() {
     );
     unlisten.current.push(
       await listen<LiveLine>("live-line", (e) =>
-        setState((s) => ({ ...s, liveLines: [...s.liveLines, e.payload] })),
+        setState((s) => ({ ...s, liveLines: withLiveLine(s.liveLines, e.payload) })),
       ),
     );
     unlisten.current.push(

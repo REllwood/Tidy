@@ -273,6 +273,8 @@ export interface LiveLine {
   start_ms: number;
   end_ms: number;
   text: string;
+  /** Who said a line from the call, when the call window showed them. */
+  speaker?: string | null;
 }
 /** "Recap so far" during a recording. */
 export interface LiveRecap {

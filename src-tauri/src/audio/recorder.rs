@@ -77,6 +77,8 @@ pub struct RecordingSession {
     live_handle: Option<JoinHandle<()>>,
     /// The live transcript so far.
     lines: Arc<Mutex<Vec<super::live::LiveLine>>>,
+    /// Who the call window shows speaking, for naming live lines.
+    call_shown: Arc<Mutex<Vec<tidy_core::store::recordings::Spoken>>>,
     finished: Option<Recording>,
 }
 
@@ -123,6 +125,11 @@ impl RecordingSession {
     pub fn live_lines(&self) -> Vec<super::live::LiveLine> {
         self.lines.lock().map(|l| l.clone()).unwrap_or_default()
     }
+
+    /// Where the call window puts who it shows speaking, as the call goes.
+    pub fn call_shown(&self) -> Arc<Mutex<Vec<tidy_core::store::recordings::Spoken>>> {
+        self.call_shown.clone()
+    }
 }
 
 pub fn start(
@@ -145,6 +152,7 @@ pub fn start(
     let stop = Arc::new(AtomicBool::new(false));
     let outcome = Arc::new(Mutex::new(None));
     let lines = Arc::new(Mutex::new(Vec::new()));
+    let call_shown = Arc::new(Mutex::new(Vec::new()));
     // Each chunk is also handed to the live transcript, when there is a model.
     let (live_tx, live_rx) = std::sync::mpsc::channel::<(Vec<f32>, Vec<f32>)>();
     let live_tx = model_path.is_some().then_some(live_tx);
@@ -181,7 +189,7 @@ pub fn start(
     // The live transcript, line by line. The saved transcript still comes
     // from the recorded file once it stops.
     let live_handle = model_path.map(|mp| {
-        super::live::spawn(app.clone(), stop.clone(), live_rx, lines.clone(), mp, language)
+        super::live::spawn(app.clone(), stop.clone(), live_rx, lines.clone(), call_shown.clone(), mp, language)
     });
 
     Ok(RecordingSession {
@@ -199,6 +207,7 @@ pub fn start(
         handle: Some(handle),
         live_handle,
         lines,
+        call_shown,
         finished: None,
     })
 }

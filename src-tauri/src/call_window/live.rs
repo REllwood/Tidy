@@ -122,7 +122,7 @@ fn watch_a_call() {
     let flag = stop.clone();
     let began = Instant::now();
     let report = std::env::var("TIDY_LIVE_REPORT").ok().map(std::path::PathBuf::from);
-    let handle = std::thread::spawn(move || super::watch::run(began, &flag, report.as_deref()));
+    let handle = std::thread::spawn(move || super::watch::run(began, &flag, report.as_deref(), None));
     std::thread::sleep(Duration::from_secs(seconds));
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     let record = handle.join().expect("the watch ends");

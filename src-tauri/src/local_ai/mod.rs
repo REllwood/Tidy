@@ -477,7 +477,8 @@ pub async fn ask_meetings(
     service::ask(&app, &question, from, until, client_id).await
 }
 /// The live transcript as text for the model: "[mm:ss] You: …", with the
-/// call's side as Others. Without a call, everyone is in the room.
+/// call's side named when the call window showed who spoke, otherwise
+/// Others. Without a call, everyone is in the room.
 fn live_text(lines: &[crate::audio::live::LiveLine]) -> String {
     let call = lines.iter().any(|l| l.source == "system");
     let mut lines: Vec<&crate::audio::live::LiveLine> = lines.iter().collect();
@@ -487,7 +488,7 @@ fn live_text(lines: &[crate::audio::live::LiveLine]) -> String {
         .map(|l| {
             let s = l.start_ms.max(0) / 1000;
             let who = match (l.source, call) {
-                ("system", _) => "Others",
+                ("system", _) => l.speaker.as_deref().unwrap_or("Others"),
                 (_, true) => "You",
                 _ => "Room",
             };
@@ -633,9 +634,17 @@ mod tests {
     #[test]
     fn the_live_transcript_reads_as_you_and_others_or_the_room() {
         use crate::audio::live::LiveLine;
-        let line = |source, start_ms, text: &str| LiveLine { source, start_ms, end_ms: start_ms + 1000, text: text.into() };
-        let call = vec![line("system", 5_000, "Shall we start?"), line("mic", 1_000, "Morning all.")];
+        let line = |source, start_ms, text: &str| LiveLine {
+            source,
+            start_ms,
+            end_ms: start_ms + 1000,
+            text: text.into(),
+            speaker: None,
+        };
+        let mut call = vec![line("system", 5_000, "Shall we start?"), line("mic", 1_000, "Morning all.")];
         assert_eq!(super::live_text(&call), "[00:01] You: Morning all.\n[00:05] Others: Shall we start?");
+        call.push(LiveLine { speaker: Some("Priya Shah".into()), ..line("system", 9_000, "Yes, let's.") });
+        assert!(super::live_text(&call).ends_with("[00:09] Priya Shah: Yes, let's."));
         let room = vec![line("mic", 65_000, "Let's begin.")];
         assert_eq!(super::live_text(&room), "[01:05] Room: Let's begin.");
     }

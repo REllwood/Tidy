@@ -22,7 +22,7 @@ mod live;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use tidy_core::store::recordings::CallRecord;
+use tidy_core::store::recordings::{CallRecord, Spoken};
 
 use crate::error::AppResult;
 
@@ -117,8 +117,13 @@ impl Drop for Watch {
 }
 
 /// Start reading the call window for a recording that began at `began`,
-/// when the option is on and macOS allows it.
-pub fn start(app: &AppHandle, began: std::time::Instant) -> Option<Watch> {
+/// when the option is on and macOS allows it. Who is shown speaking is kept
+/// in `live` as the call goes, so the live transcript can name them.
+pub fn start(
+    app: &AppHandle,
+    began: std::time::Instant,
+    live: std::sync::Arc<std::sync::Mutex<Vec<Spoken>>>,
+) -> Option<Watch> {
     if !enabled(app) || !allowed() {
         return None;
     }
@@ -129,13 +134,13 @@ pub fn start(app: &AppHandle, began: std::time::Instant) -> Option<Watch> {
         let report = crate::workspace::directory(app).join(REPORT_FILE);
         let handle = std::thread::Builder::new()
             .name("call-window".into())
-            .spawn(move || watch::run(began, &flag, Some(&report)))
+            .spawn(move || watch::run(began, &flag, Some(&report), Some(&live)))
             .ok()?;
         Some(Watch { stop, handle: Some(handle) })
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = began;
+        let _ = (began, live);
         None
     }
 }

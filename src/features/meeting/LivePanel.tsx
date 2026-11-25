@@ -9,10 +9,23 @@ import { MeetingAnswerText } from "./MeetingAnswerText";
 
 type Tab = "transcript" | "recap" | "ask";
 
-/** Who said a live line: "You" and "Others" on a call, nobody in a room. */
+/**
+ * Who said a live line: "You" and the person the call window showed
+ * speaking, or "Others", on a call. Nobody in a room.
+ */
 export function liveSpeaker(line: LiveLine, lines: LiveLine[]): string | null {
-  if (line.source === "system") return "Others";
+  if (line.source === "system") return line.speaker || "Others";
   return lines.some((l) => l.source === "system") ? "You" : null;
+}
+
+/**
+ * Add a live line, or replace the one it names again: a call line is sent
+ * again once the call window shows who said it.
+ */
+export function withLiveLine(lines: LiveLine[], line: LiveLine): LiveLine[] {
+  const at = lines.findIndex((l) => l.source === line.source && l.start_ms === line.start_ms);
+  if (at === -1) return [...lines, line];
+  return lines.map((l, i) => (i === at ? line : l));
 }
 
 function clock(ms: number) {
@@ -74,11 +87,12 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
             return (
               <div
                 key={`${line.source}-${line.start_ms}-${i}`}
-                className={`grid grid-cols-[4rem_1fr] gap-x-3 ${same ? "" : "pt-1.5"}`}
+                className={`grid grid-cols-[7rem_1fr] gap-x-3 ${same ? "" : "pt-1.5"}`}
                 title={clock(line.start_ms)}
               >
                 <span
-                  className={`pt-0.5 text-xs font-medium ${who === "You" ? "text-brand" : "text-text-faint"}`}
+                  className={`truncate pt-0.5 text-xs font-medium ${who === "You" ? "text-brand" : "text-text-faint"}`}
+                  title={same || !who ? undefined : who}
                 >
                   {same ? "" : (who ?? clock(line.start_ms))}
                 </span>

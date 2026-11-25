@@ -118,7 +118,7 @@ pub async fn start_recording(
         if let Some(session) = state.lock().as_mut() {
             session.event = event;
             // Names from the Teams or Meet window, when the person allowed it.
-            session.call_watch = crate::call_window::start(&app, session.began());
+            session.call_watch = crate::call_window::start(&app, session.began(), session.call_shown());
         }
     }
     if result.is_err() {

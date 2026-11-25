@@ -164,6 +164,6 @@ npm run build
 cargo test --workspace --locked
 ```
 
-The source passes 212 front-end, 116 shared-core and 125 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
+The source passes 214 front-end, 117 shared-core and 127 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
 
 Built with Tauri, React, TypeScript, SQLite, whisper.cpp, sherpa-onnx and llama.cpp. Distributed under AGPL-3.0-or-later. Maintainers can follow the [local signing and release guide](docs/RELEASING.md).
