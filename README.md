@@ -43,7 +43,7 @@ Tidy checks for updates automatically, and you choose when to download, install 
 ## Recording a call
 
 <p align="center">
-  <img src="docs/screenshots/meeting.gif" alt="Recording the next calendar meeting: audio meters for you and the other side, a marked moment, transcription on the Mac, then the meeting notes with a map of who spoke when, decisions and next steps." width="1000" />
+  <img src="docs/screenshots/meeting.gif" alt="Recording the next calendar meeting: audio meters for you and the other side, a marked moment, the live transcript with each person's name, live notes with a summary, questions to ask and decisions, a jump from a question to the line behind it, then the finished meeting notes with a map of who spoke when." width="1000" />
 </p>
 
 - **Tidy offers to record.** When Zoom, Teams, FaceTime, Slack or a browser starts using the microphone, a small window asks whether to record and reminds you to tell everyone. Nothing records until you choose **Record**. Turn this off under **Settings → Recording → Offer to record calls**.
@@ -139,7 +139,7 @@ Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors pa
 
 The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its `ingest_note` tool files raw text at once with the original wording kept, and Tidy's own local AI adds a checked summary and any tasks while Tidy is open, whichever model you have chosen. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
 
-**Share meetings live (optional).** Turn on **Settings → Share meetings live** and Claude Code or Codex can follow the meeting you are recording through the MCP server, with `live_meeting`, `live_transcript` and `post_live_note`, and their notes appear in Tidy's live notes. Claude Code can also have new lines pushed to it as a [channel](https://code.claude.com/docs/en/channels), a Claude Code research preview. You can also have Claude (Haiku) or Codex (GPT-6 Luna) write the live notes, using your own sign-in. While sharing is on, what they read is sent to Anthropic or OpenAI. Tidy removes the shared transcript when the recording stops.
+**Share meetings live (optional).** Turn on **Settings → Share meetings live** and Claude Code or Codex can follow the meeting you are recording through the MCP server, with `live_meeting`, `live_transcript` and `post_live_note`, and their notes appear in Tidy's live notes. Claude Code can also have new lines pushed to it as a [channel](https://code.claude.com/docs/en/channels), a Claude Code research preview. You can also have Claude (Haiku) or Codex (GPT-6 Luna) write the live notes, using your own sign-in. When you connect Claude or Codex, the meeting is shared with a third party: Anthropic for Claude, OpenAI for Codex. To keep meetings on your Mac, leave sharing off and let This Mac write the live notes. Transcription always runs on your Mac. Tidy removes the shared transcript when the recording stops.
 
 ## Run from source
 

@@ -96,9 +96,17 @@ export function LiveNotesPanel({
         </span>
       </div>
 
-      {!sharing && (
+      {by === "local" ? (
         <p className="text-xs text-text-faint">
-          Notes are written on this Mac. To have Claude or Codex write them, turn on sharing in Settings, under Agent connection.
+          {sharing
+            ? "Notes are written on this Mac and stay here."
+            : "Notes are written on this Mac and stay here. To have Claude or Codex write them, turn on Share meetings live in Settings. That shares the meeting with Anthropic or OpenAI."}
+        </p>
+      ) : (
+        <p className="text-xs text-text-faint">
+          {by === "claude"
+            ? "Claude reads this meeting, so it is shared with Anthropic. Choose This Mac to keep it on your Mac."
+            : "Codex reads this meeting, so it is shared with OpenAI. Choose This Mac to keep it on your Mac."}
         </p>
       )}
 
