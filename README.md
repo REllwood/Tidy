@@ -50,7 +50,7 @@ Tidy checks for updates automatically, and you choose when to download, install 
 - **Both sides, kept apart.** Your microphone and the other side of the call are recorded separately. Your words are labelled **You**, and only the other side is split into speakers, so their voice coming back through your speakers is not transcribed as yours.
 - **It stops by itself.** A recording stops when the call ends, after 3 minutes of silence, or 5 minutes after its calendar event ends. A 15-second countdown lets you choose **Keep recording**, and the meeting notes why it stopped.
 - **Mark a moment.** Press **Control-Option-M** in any app, or **Mark moment**, and the moment is listed in the notes.
-- **Help during the call.** A live transcript with You and Others side by side, **Recap so far**, and answers from past meetings without leaving the call.
+- **Help during the call.** A live transcript with You and the people on the call side by side, **Live notes** that update every minute or two, and answers from past meetings without leaving the call. Live notes can show a summary so far, questions to ask, decisions and next steps, what is still open, and anything else you ask them to track. Each note links to the line it came from.
 - **Names from Teams and Google Meet.** Optionally, Tidy reads the call window while it records to see who joined and who is shown speaking, then names the voices in the transcript after them. Google Meet needs captions turned on. Only names and times are kept, never caption text. Turn it on under **Settings → Recording → Names from Teams and Google Meet**, and allow Tidy under **Accessibility** in macOS Privacy and Security settings.
 
 Transcription runs on your Mac with Whisper. It skips silence, leaves out lines Whisper invents (such as "thanks for watching") and spells names the way you do, using the meeting's client, its invitees and **Settings → Recording → Names and terms**.
@@ -139,6 +139,8 @@ Tidy stores its workspace in local SQLite. An optional Markdown vault mirrors pa
 
 The bundled MCP server lets a connected tool such as Claude Code or Codex read and search the workspace. Writes require the token generated in Tidy Settings. Its `ingest_note` tool files raw text at once with the original wording kept, and Tidy's own local AI adds a checked summary and any tasks while Tidy is open, whichever model you have chosen. Connected agents can read your content, so their own data handling also applies. [MCP implementation](crates/mcp/src/main.rs).
 
+**Share meetings live (optional).** Turn on **Settings → Share meetings live** and Claude Code or Codex can follow the meeting you are recording through the MCP server, with `live_meeting`, `live_transcript` and `post_live_note`, and their notes appear in Tidy's live notes. Claude Code can also have new lines pushed to it as a [channel](https://code.claude.com/docs/en/channels), a Claude Code research preview. You can also have Claude (Haiku) or Codex (GPT-6 Luna) write the live notes, using your own sign-in. While sharing is on, what they read is sent to Anthropic or OpenAI. Tidy removes the shared transcript when the recording stops.
+
 ## Run from source
 
 Use Node.js 22.12+ with npm, Rust, Xcode command-line tools and CMake. The browser preview uses a mock backend and does not access your desktop workspace.
@@ -164,6 +166,6 @@ npm run build
 cargo test --workspace --locked
 ```
 
-The source passes 212 front-end, 116 shared-core and 125 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
+The source passes 216 front-end, 121 shared-core and 138 native unit tests. Ignored tests check notes, answers, speaker labels and transcription against the real local models with made-up meetings. These checks are not a general accuracy benchmark. [Evaluation details](docs/AI-QUALITY.md).
 
 Built with Tauri, React, TypeScript, SQLite, whisper.cpp, sherpa-onnx and llama.cpp. Distributed under AGPL-3.0-or-later. Maintainers can follow the [local signing and release guide](docs/RELEASING.md).

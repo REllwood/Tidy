@@ -336,6 +336,40 @@ pub fn migrations() -> Migrations<'static> {
         ALTER TABLE meeting ADD COLUMN call TEXT;
         "#,
     ),
+    // ---- v12 (sharing a meeting live with Claude or Codex) ----
+    M::up(
+        r#"
+        -- The meeting being recorded right now, when the person shares it
+        -- live with an assistant through the MCP server. One row at most,
+        -- removed when the recording stops.
+        CREATE TABLE live_meeting (
+            id         INTEGER PRIMARY KEY CHECK (id = 1),
+            started_at INTEGER NOT NULL,
+            title      TEXT
+        );
+        -- Its transcript so far. A line is written again when it gains the
+        -- name of who said it, and `seq` then moves on, so an assistant that
+        -- reads "since" a point sees the change.
+        CREATE TABLE live_line (
+            source   TEXT NOT NULL,
+            start_ms INTEGER NOT NULL,
+            end_ms   INTEGER NOT NULL,
+            text     TEXT NOT NULL,
+            speaker  TEXT,
+            seq      INTEGER NOT NULL,
+            PRIMARY KEY (source, start_ms)
+        );
+        CREATE INDEX idx_live_line_seq ON live_line(seq);
+        -- Notes an assistant posts back into Tidy's live panel.
+        CREATE TABLE live_note (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            author     TEXT NOT NULL,
+            view       TEXT NOT NULL,
+            text       TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        "#,
+    ),
     ])
 }
 

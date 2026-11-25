@@ -6,13 +6,16 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+use tidy_core::store::recordings::Spoken;
+use tidy_core::store::speaker_guess;
 
 use super::pipeline::WHISPER_RATE;
 use crate::whisper::assemble;
@@ -26,6 +29,28 @@ pub struct LiveLine {
     pub start_ms: i64,
     pub end_ms: i64,
     pub text: String,
+    /// Who said a line from the call, when the call window showed them
+    /// speaking through it.
+    pub speaker: Option<String>,
+}
+
+/// The call window can be a few seconds behind the audio, so call lines that
+/// ended this recently are named again as it catches up.
+const NAME_AGAIN_MS: i64 = 30_000;
+
+/// Name the call's lines that ended after `from_ms` from who the call window
+/// showed speaking, and return those whose name changed. A name, once
+/// given, is only replaced by another clear name.
+fn name_lines(lines: &mut [LiveLine], shown: &[Spoken], from_ms: i64) -> Vec<LiveLine> {
+    let mut changed = Vec::new();
+    for line in lines.iter_mut().filter(|l| l.source == "system" && l.end_ms >= from_ms) {
+        let name = speaker_guess::shown_during(shown, line.start_ms, line.end_ms);
+        if name.is_some() && name != line.speaker {
+            line.speaker = name;
+            changed.push(line.clone());
+        }
+    }
+    changed
 }
 
 const FRAME: usize = (WHISPER_RATE / 1000 * 30) as usize; // 30 ms
@@ -91,17 +116,27 @@ fn ms(samples: usize) -> i64 {
     (samples as i64 * 1000) / WHISPER_RATE as i64
 }
 
+/// What the live transcript works from and where its lines go.
+pub struct Live {
+    pub app: AppHandle,
+    pub stop: Arc<AtomicBool>,
+    /// Each chunk of audio as it is recorded: the microphone, then the call.
+    pub chunks: Receiver<(Vec<f32>, Vec<f32>)>,
+    /// The transcript so far, for the app.
+    pub lines: Arc<Mutex<Vec<LiveLine>>>,
+    /// Who the call window shows speaking.
+    pub call_shown: Arc<Mutex<Vec<Spoken>>>,
+    /// Each new or newly named line, for sharing with an assistant.
+    pub share: Sender<LiveLine>,
+    pub model_path: PathBuf,
+    pub language: String,
+}
+
 /// Transcribe utterances as they finish, until the recording stops.
-pub fn spawn(
-    app: AppHandle,
-    stop: Arc<AtomicBool>,
-    chunks: Receiver<(Vec<f32>, Vec<f32>)>,
-    lines: Arc<Mutex<Vec<LiveLine>>>,
-    model_path: PathBuf,
-    language: String,
-) -> JoinHandle<()> {
+pub fn spawn(live: Live) -> JoinHandle<()> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+    let Live { app, stop, chunks, lines, call_shown, share, model_path, language } = live;
     std::thread::spawn(move || {
         let ctx = match WhisperContext::new_with_params(&model_path, WhisperContextParameters::default()) {
             Ok(c) => c,
@@ -141,13 +176,32 @@ pub fn spawn(
                 .collect()
         };
 
+        // Lines already shown get their names as the call window catches up.
+        let name_again = |sides: &[Side; 2]| {
+            let Ok(shown) = call_shown.lock().map(|s| s.clone()) else { return };
+            if shown.is_empty() {
+                return;
+            }
+            let heard = ms(sides[1].offset + sides[1].pcm.len());
+            let Ok(mut all) = lines.lock() else { return };
+            let changed = name_lines(&mut all, &shown, heard - NAME_AGAIN_MS);
+            drop(all);
+            for line in changed {
+                let _ = share.send(line.clone());
+                let _ = app.emit("live-line", line);
+            }
+        };
+
         while !stop.load(Ordering::Relaxed) {
             match chunks.recv_timeout(Duration::from_millis(300)) {
                 Ok((mic, system)) => {
                     sides[0].pcm.extend(mic);
                     sides[1].pcm.extend(system);
                 }
-                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => {
+                    name_again(&sides);
+                    continue;
+                }
                 Err(RecvTimeoutError::Disconnected) => break,
             }
             for (index, side) in sides.iter_mut().enumerate() {
@@ -163,11 +217,18 @@ pub fn spawn(
                     if text.is_empty() {
                         continue;
                     }
+                    let (start_ms, end_ms) = (ms(side.offset + start), ms(side.offset + end));
+                    let speaker = if index == 0 {
+                        None
+                    } else {
+                        call_shown.lock().ok().and_then(|s| speaker_guess::shown_during(&s, start_ms, end_ms))
+                    };
                     let line = LiveLine {
                         source: if index == 0 { "mic" } else { "system" },
-                        start_ms: ms(side.offset + start),
-                        end_ms: ms(side.offset + end),
+                        start_ms,
+                        end_ms,
                         text,
+                        speaker,
                     };
                     let Ok(mut all) = lines.lock() else { return };
                     // The call's voice coming back through the speakers.
@@ -184,11 +245,13 @@ pub fn spawn(
                     }
                     all.push(line.clone());
                     drop(all);
+                    let _ = share.send(line.clone());
                     let _ = app.emit("live-line", line);
                 }
                 side.pcm.drain(..keep_from);
                 side.offset += keep_from;
             }
+            name_again(&sides);
         }
     })
 }
@@ -218,6 +281,28 @@ mod tests {
         assert!((ms(end) - 2_000).abs() <= 30, "ends when speech stops: {}", ms(end));
         // The second turn has not paused yet, so it is kept for next time.
         assert!((ms(keep_from) - 3_000).abs() <= 30, "{}", ms(keep_from));
+    }
+
+    #[test]
+    fn call_lines_are_named_as_the_call_window_catches_up() {
+        let line = |source, start_ms, end_ms| LiveLine { source, start_ms, end_ms, text: "Words.".into(), speaker: None };
+        let shown = |name: &str, from_ms, to_ms| Spoken { from_ms, to_ms, name: name.into() };
+        let mut lines = vec![line("system", 0, 2_000), line("mic", 2_500, 4_000), line("system", 40_000, 43_000)];
+
+        // The window has not shown anyone yet.
+        assert!(name_lines(&mut lines, &[], 0).is_empty());
+        // It catches up: only the call's lines are named, and only recent ones.
+        let seen = vec![shown("Priya Shah", 0, 2_000), shown("Priya Shah", 2_500, 4_000), shown("Tom Baker", 40_000, 43_000)];
+        let changed = name_lines(&mut lines, &seen, 10_000);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].speaker.as_deref(), Some("Tom Baker"));
+        assert_eq!(lines[0].speaker, None, "too long ago to look at again");
+        assert_eq!(lines[1].speaker, None, "the person recording's own line");
+        // Looked at again with nothing new, nothing changes and nothing is sent.
+        assert!(name_lines(&mut lines, &seen, 10_000).is_empty());
+        // A name is kept when the window later shows no one clearly.
+        assert!(name_lines(&mut lines, &[], 10_000).is_empty());
+        assert_eq!(lines[2].speaker.as_deref(), Some("Tom Baker"));
     }
 
     #[test]

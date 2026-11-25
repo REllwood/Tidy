@@ -1,18 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, MessageCircleQuestion, ScrollText, Sparkles } from "lucide-react";
-import { liveApi, type LiveLine, type LiveRecap } from "@/lib/api";
+import { Loader2, MessageCircleQuestion, NotebookPen, ScrollText } from "lucide-react";
+import type { LiveLine } from "@/lib/api";
 import { localAi, type MeetingAnswer } from "@/lib/localAi";
 import { errorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { MeetingAnswerText } from "./MeetingAnswerText";
+import { LiveNotesPanel } from "./LiveNotesPanel";
 
-type Tab = "transcript" | "recap" | "ask";
+type Tab = "transcript" | "notes" | "ask";
 
-/** Who said a live line: "You" and "Others" on a call, nobody in a room. */
+/**
+ * Who said a live line: "You" and the person the call window showed
+ * speaking, or "Others", on a call. Nobody in a room.
+ */
 export function liveSpeaker(line: LiveLine, lines: LiveLine[]): string | null {
-  if (line.source === "system") return "Others";
+  if (line.source === "system") return line.speaker || "Others";
   return lines.some((l) => l.source === "system") ? "You" : null;
+}
+
+/**
+ * Add a live line, or replace the one it names again: a call line is sent
+ * again once the call window shows who said it.
+ */
+export function withLiveLine(lines: LiveLine[], line: LiveLine): LiveLine[] {
+  const at = lines.findIndex((l) => l.source === line.source && l.start_ms === line.start_ms);
+  if (at === -1) return [...lines, line];
+  return lines.map((l, i) => (i === at ? line : l));
 }
 
 function clock(ms: number) {
@@ -28,11 +42,26 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
   const [tab, setTab] = useState<Tab>("transcript");
   const sorted = [...lines].sort((a, b) => a.start_ms - b.start_ms);
   const end = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // A line jumped to from the notes, by when it started.
+  const [found, setFound] = useState<number | null>(null);
   useEffect(() => {
-    if (tab === "transcript") end.current?.scrollIntoView({ block: "nearest" });
-  }, [lines.length, tab]);
+    if (tab === "transcript" && found == null) end.current?.scrollIntoView({ block: "nearest" });
+  }, [lines.length, tab, found]);
+  useEffect(() => {
+    if (found == null || tab !== "transcript") return;
+    list.current?.querySelector(`[data-start="${found}"]`)?.scrollIntoView({ block: "center" });
+    const id = setTimeout(() => setFound(null), 4000);
+    return () => clearTimeout(id);
+  }, [found, tab]);
+  const showLine = (atMs: number) => {
+    // Notes know the second a line started; the first line that second.
+    const line = sorted.find((l) => Math.floor(l.start_ms / 1000) * 1000 >= atMs) ?? sorted[sorted.length - 1];
+    if (!line) return;
+    setFound(line.start_ms);
+    setTab("transcript");
+  };
 
-  const recap = useMutation({ mutationFn: liveApi.recap });
   const [question, setQuestion] = useState("");
   const ask = useMutation({
     mutationFn: (q: string) => localAi.ask(q, null, null, null),
@@ -40,7 +69,7 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
 
   const tabs: { id: Tab; label: string; icon: typeof ScrollText }[] = [
     { id: "transcript", label: "Transcript", icon: ScrollText },
-    { id: "recap", label: "Recap so far", icon: Sparkles },
+    { id: "notes", label: "Live notes", icon: NotebookPen },
     { id: "ask", label: "Ask past meetings", icon: MessageCircleQuestion },
   ];
 
@@ -62,7 +91,7 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
       </div>
 
       {tab === "transcript" && (
-        <div className="max-h-72 space-y-1 overflow-y-auto">
+        <div ref={list} className="scroll-fade max-h-72 space-y-1 overflow-y-auto">
           {sorted.length === 0 && (
             <p className="text-sm text-text-faint">
               Lines appear here a moment after someone finishes speaking.
@@ -74,11 +103,13 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
             return (
               <div
                 key={`${line.source}-${line.start_ms}-${i}`}
-                className={`grid grid-cols-[4rem_1fr] gap-x-3 ${same ? "" : "pt-1.5"}`}
+                data-start={line.start_ms}
+                className={`grid grid-cols-[7rem_1fr] gap-x-3 rounded transition-colors ${same ? "" : "pt-1.5"} ${found === line.start_ms ? "bg-brand-soft" : ""}`}
                 title={clock(line.start_ms)}
               >
                 <span
-                  className={`pt-0.5 text-xs font-medium ${who === "You" ? "text-brand" : "text-text-faint"}`}
+                  className={`truncate pt-0.5 text-xs font-medium ${who === "You" ? "text-brand" : "text-text-faint"}`}
+                  title={same || !who ? undefined : who}
                 >
                   {same ? "" : (who ?? clock(line.start_ms))}
                 </span>
@@ -86,33 +117,11 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
               </div>
             );
           })}
-          <div ref={end} />
+          <div ref={end} className="h-4" aria-hidden />
         </div>
       )}
 
-      {tab === "recap" && (
-        <div className="space-y-3 text-sm">
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={recap.isPending || lines.length === 0}
-            onClick={() => recap.mutate()}
-          >
-            {recap.isPending && <Loader2 className="size-3 animate-spin" />}
-            {recap.data ? "Update recap" : "Recap the meeting so far"}
-          </Button>
-          {recap.error && (
-            <p role="alert" className="text-danger-c">
-              {errorMessage(recap.error)}
-            </p>
-          )}
-          {recap.data && <RecapView recap={recap.data} />}
-          <p className="text-xs text-text-faint">
-            Written on this Mac from the live transcript. Each point is checked
-            against what was said.
-          </p>
-        </div>
-      )}
+      {tab === "notes" && <LiveNotesPanel lines={sorted} onShowLine={showLine} />}
 
       {tab === "ask" && (
         <form
@@ -143,35 +152,6 @@ export function LivePanel({ lines }: { lines: LiveLine[] }) {
           {ask.data && <AnswerView answer={ask.data} />}
         </form>
       )}
-    </div>
-  );
-}
-
-function RecapView({ recap }: { recap: LiveRecap }) {
-  const groups = [
-    { title: "So far", points: recap.points },
-    { title: "Decisions", points: recap.decisions },
-    { title: "Next steps", points: recap.actions },
-    { title: "Still open", points: recap.open_questions },
-  ].filter((g) => g.points.length);
-  if (!groups.length)
-    return (
-      <p className="text-text-muted">
-        Nothing clear enough to recap yet. Try again in a few minutes.
-      </p>
-    );
-  return (
-    <div className="space-y-3">
-      {groups.map((g) => (
-        <section key={g.title}>
-          <h4 className="text-xs font-semibold text-text">{g.title}</h4>
-          <ul className="mt-1 list-disc space-y-1 pl-5 text-text-muted marker:text-brand">
-            {g.points.map((p, i) => (
-              <li key={i}>{p}</li>
-            ))}
-          </ul>
-        </section>
-      ))}
     </div>
   );
 }

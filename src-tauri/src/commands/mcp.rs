@@ -16,6 +16,12 @@ pub struct McpInfo {
     pub sidecar_path: String,
     /// A ready-to-paste `claude mcp add` command.
     pub claude_command: String,
+    /// The same for Codex.
+    pub codex_command: String,
+    /// Starts Claude Code with the meeting being recorded pushed to it, on a
+    /// cheaper model. Channels are a research preview, so Claude Code asks
+    /// to confirm the development flag each time.
+    pub claude_live_command: String,
 }
 
 /// Best-effort path to the sidecar next to the running executable (in a bundled
@@ -26,6 +32,22 @@ fn sidecar_path() -> String {
         .and_then(|exe| exe.parent().map(|p| p.join("tidy-mcp")))
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "tidy-mcp".to_string())
+}
+
+/// Claude Code following the meeting being recorded: a cheaper model, none
+/// of its own tools and no MCP server but Tidy's, so nothing said in the
+/// meeting can get it to run commands on this Mac, with Tidy loaded as a
+/// channel so new lines are pushed to it.
+fn claude_live_command(sidecar: &str, token: &str) -> String {
+    let config = serde_json::json!({
+        "mcpServers": { "tidy": { "type": "stdio", "command": sidecar, "env": { "TIDY_MCP_TOKEN": token } } }
+    });
+    // Quoted for the shell: a single quote ends the quoted text, so it is
+    // written as '\''.
+    let quoted = format!("'{}'", config.to_string().replace('\'', "'\\''"));
+    format!(
+        "claude --model haiku --tools \"\" --strict-mcp-config --mcp-config {quoted} --dangerously-load-development-channels server:tidy"
+    )
 }
 
 /// The existing token, or `None` if the user hasn't enabled writes yet.
@@ -50,10 +72,14 @@ pub async fn mcp_enable(app: AppHandle) -> AppResult<McpInfo> {
     let claude_command = format!(
         "claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN={token} tidy -- \"{sidecar}\""
     );
+    let codex_command = format!("codex mcp add tidy --env TIDY_MCP_TOKEN={token} -- \"{sidecar}\"");
+    let claude_live_command = claude_live_command(&sidecar, &token);
     Ok(McpInfo {
         token,
         sidecar_path: sidecar,
         claude_command,
+        codex_command,
+        claude_live_command,
     })
 }
 
@@ -67,4 +93,20 @@ pub async fn mcp_disable(app: AppHandle) -> AppResult<()> {
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn claude_follows_the_meeting_with_only_tidys_tools() {
+        let command = super::claude_live_command("/Applications/Tidy.app/Contents/MacOS/tidy-mcp", "tok");
+        assert!(command.starts_with("claude --model haiku --tools \"\" --strict-mcp-config --mcp-config '"));
+        assert!(command.ends_with("--dangerously-load-development-channels server:tidy"));
+        let config = command.split('\'').nth(1).unwrap();
+        let config: serde_json::Value = serde_json::from_str(config).unwrap();
+        assert_eq!(config["mcpServers"]["tidy"]["env"]["TIDY_MCP_TOKEN"], "tok");
+        // A quote in the path cannot end the shell quoting early.
+        let odd = super::claude_live_command("/Users/o'neil/tidy-mcp", "tok");
+        assert!(odd.contains("o'\\''neil"));
+    }
 }

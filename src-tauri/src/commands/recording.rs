@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult};
 pub struct RecorderState(pub Mutex<Option<RecordingSession>>);
 
 impl RecorderState {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<RecordingSession>> {
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Option<RecordingSession>> {
         // A panic elsewhere must not make Stop impossible to press.
         self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -116,9 +116,18 @@ pub async fn start_recording(
             event.as_ref().map(|e| crate::meeting_monitor::EventEnd { title: e.title.clone(), end_ms: e.end_ms }),
         );
         if let Some(session) = state.lock().as_mut() {
+            // A new recording starts with no live notes.
+            app.state::<crate::local_ai::LiveNotesState>().clear();
+            // Shared live with Claude or Codex, when the person turned that on.
+            crate::live_feed::begin(
+                &app,
+                session.started_at(),
+                event.as_ref().map(|e| e.title.as_str()),
+                &session.live_lines(),
+            );
             session.event = event;
             // Names from the Teams or Meet window, when the person allowed it.
-            session.call_watch = crate::call_window::start(&app, session.began());
+            session.call_watch = crate::call_window::start(&app, session.began(), session.call_shown());
         }
     }
     if result.is_err() {
@@ -143,6 +152,10 @@ fn finish(
     if let Some(watch) = session.call_watch.take() {
         session.call_seen = Some(watch.finish());
     }
+    // Nothing of the meeting stays shared once it stops, and live notes
+    // still being written on this Mac give way to the transcript.
+    crate::live_feed::end(app);
+    app.state::<crate::local_ai::AiState>().cancel_live();
     let mut recording = match recorder::stop(&mut session) {
         Ok(recording) => recording,
         Err(error) => return (Some(session), Err(error)),

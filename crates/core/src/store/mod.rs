@@ -5,6 +5,7 @@ pub mod databases;
 pub mod documents;
 pub mod ingest;
 pub mod knowledge;
+pub mod live;
 pub mod pages;
 pub mod search;
 pub mod speaker_guess;

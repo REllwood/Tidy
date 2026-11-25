@@ -2,10 +2,13 @@ import { createContext, useContext, useEffect, useRef, type ReactNode } from "re
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "@/lib/tauri";
 import { useMeetingFlow } from "./useMeetingFlow";
+import { LiveNotesContext, useLiveNotes } from "./useLiveNotes";
 const Context = createContext<ReturnType<typeof useMeetingFlow> | null>(null);
 export function MeetingFlowProvider({ children }: { children: ReactNode }) {
   const flow = useMeetingFlow();
   const { reconcile } = flow;
+  // Live notes keep updating whichever page or tab is open.
+  const liveNotes = useLiveNotes(flow.state.liveLines, flow.state.phase === "recording");
   // Ask the core once whether a recording is already running, so reloading the
   // webview mid-meeting reconnects the recorder instead of orphaning it.
   const checked = useRef(false);
@@ -34,7 +37,11 @@ export function MeetingFlowProvider({ children }: { children: ReactNode }) {
       for (const handle of handles) void handle.then((unlisten) => unlisten());
     };
   }, []);
-  return <Context.Provider value={flow}>{children}</Context.Provider>;
+  return (
+    <Context.Provider value={flow}>
+      <LiveNotesContext.Provider value={liveNotes}>{children}</LiveNotesContext.Provider>
+    </Context.Provider>
+  );
 }
 export function useSharedMeetingFlow() {
   const flow = useContext(Context);

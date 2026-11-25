@@ -137,6 +137,26 @@ impl AiState {
         self.progress(Progress::new(label, None));
         Ok(operation)
     }
+    /// Live notes during a call. They run only while a meeting is being
+    /// recorded and nothing else holds the gate, and they give way to
+    /// anything the person starts, as background work does.
+    pub fn begin_live(&self) -> AppResult<Operation<'_>> {
+        if !self.live.load(Ordering::SeqCst) {
+            return Err(AppError::Invalid("Live notes are written only while a meeting is being recorded.".into()));
+        }
+        let guard = self.gate.try_lock().map_err(|_| busy())?;
+        self.cancel.store(false, Ordering::SeqCst);
+        self.worker_origin.store(true, Ordering::SeqCst);
+        Ok(Operation { state: self, _guard: guard })
+    }
+    /// The recording stopped: a live notes update still running stops too.
+    /// While a meeting is recorded, background work never holds the gate,
+    /// so anything holding it as background work is live notes.
+    pub fn cancel_live(&self) {
+        if self.live.load(Ordering::SeqCst) && self.worker_origin.load(Ordering::SeqCst) {
+            self.cancel.store(true, Ordering::SeqCst);
+        }
+    }
     fn claim(&self, origin: Origin) -> AppResult<Operation<'_>> {
         let guard = self.gate.try_lock().map_err(|_| busy())?;
         self.claim_with(guard, origin)
@@ -477,7 +497,8 @@ pub async fn ask_meetings(
     service::ask(&app, &question, from, until, client_id).await
 }
 /// The live transcript as text for the model: "[mm:ss] You: …", with the
-/// call's side as Others. Without a call, everyone is in the room.
+/// call's side named when the call window showed who spoke, otherwise
+/// Others. Without a call, everyone is in the room.
 fn live_text(lines: &[crate::audio::live::LiveLine]) -> String {
     let call = lines.iter().any(|l| l.source == "system");
     let mut lines: Vec<&crate::audio::live::LiveLine> = lines.iter().collect();
@@ -487,7 +508,7 @@ fn live_text(lines: &[crate::audio::live::LiveLine]) -> String {
         .map(|l| {
             let s = l.start_ms.max(0) / 1000;
             let who = match (l.source, call) {
-                ("system", _) => "Others",
+                ("system", _) => l.speaker.as_deref().unwrap_or("Others"),
                 (_, true) => "You",
                 _ => "Room",
             };
@@ -497,22 +518,86 @@ fn live_text(lines: &[crate::audio::live::LiveLine]) -> String {
         .join("\n")
 }
 
-/// "Recap so far" while a meeting is being recorded.
+/// The latest live notes of the recording running now, and whether an
+/// update is running.
+#[derive(Default)]
+pub struct LiveNotesState {
+    latest: Mutex<Option<service::LiveNotes>>,
+    updating: AtomicBool,
+}
+
+impl LiveNotesState {
+    /// A new recording starts with no notes.
+    pub fn clear(&self) {
+        if let Ok(mut latest) = self.latest.lock() {
+            *latest = None;
+        }
+    }
+}
+
+/// Clears the "updating" mark however an update ends.
+struct Updating<'a>(&'a AtomicBool);
+impl Drop for Updating<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Update the live notes of the meeting being recorded, with the local model
+/// or, when the person shares meetings with them, Claude or Codex.
 #[tauri::command]
-pub async fn live_recap(app: AppHandle) -> AppResult<service::Recap> {
+pub async fn live_notes(
+    app: AppHandle,
+    views: Vec<String>,
+    custom: Option<String>,
+    by: Option<String>,
+) -> AppResult<service::LiveNotes> {
     let transcript = live_text(&crate::commands::recording::live_lines(&app));
     if transcript.trim().is_empty() {
-        return Err(AppError::Invalid(
-            "Nothing has been transcribed yet. Try again once people have spoken.".into(),
-        ));
+        return Err(AppError::Invalid("Nothing has been transcribed yet. Notes start once people have spoken.".into()));
     }
-    let state = app.state::<AiState>();
-    let _op = state.begin_now("Writing a recap").await?;
-    let config = db(&app, read_config_mut).await?;
-    let engine = runtime::Engine::start(&app, &config, false, &state).await?;
-    let result = service::recap(&engine, &transcript, &state).await;
-    engine.stop().await?;
-    result
+    let notes_state = app.state::<LiveNotesState>();
+    if notes_state.updating.swap(true, Ordering::SeqCst) {
+        return Err(AppError::Invalid("The live notes are already being updated.".into()));
+    }
+    let _updating = Updating(&notes_state.updating);
+    let previous = notes_state.latest.lock().ok().and_then(|l| l.clone());
+    let custom = custom.as_deref();
+    let notes = match by.as_deref().and_then(crate::assistant_cli::Assistant::from_id) {
+        Some(assistant) => {
+            if !crate::live_feed::enabled(&app) {
+                return Err(AppError::Invalid(format!(
+                    "Turn on sharing with Claude and Codex in Settings before {} writes the notes.",
+                    assistant.name()
+                )));
+            }
+            let ask = service::live_notes_ask(&views, custom, previous.as_ref(), &transcript, service::LIVE_TAIL_ASSISTANT);
+            let reply = crate::assistant_cli::ask(assistant, &ask.system, &ask.text, &ask.schema).await?;
+            service::live_notes_from(&reply, &views, custom, previous.as_ref(), &ask.evidence, assistant.name())
+        }
+        None => {
+            let state = app.state::<AiState>();
+            let _op = state.begin_live()?;
+            let config = db(&app, read_config_mut).await?;
+            let engine = runtime::Engine::start(&app, &config, false, &state).await?;
+            let result = service::live_notes_local(&engine, &views, custom, previous.as_ref(), &transcript, &state).await;
+            engine.stop().await?;
+            result?
+        }
+    };
+    // A recording that stopped or started again meanwhile keeps its own.
+    if crate::commands::recording::recording_in_flight(&app) {
+        if let Ok(mut latest) = notes_state.latest.lock() {
+            *latest = Some(notes.clone());
+        }
+    }
+    Ok(notes)
+}
+
+/// The live notes so far, for a panel opened during the recording.
+#[tauri::command]
+pub fn live_notes_latest(app: AppHandle) -> Option<service::LiveNotes> {
+    app.state::<LiveNotesState>().latest.lock().ok().and_then(|l| l.clone())
 }
 
 pub async fn generate(
@@ -630,12 +715,50 @@ mod tests {
         assert!(state.begin("during transcription").is_err());
     }
 
+    #[tokio::test]
+    async fn live_notes_run_during_a_call_and_give_way_to_the_person_and_to_stopping() {
+        let state = AiState::default();
+        assert!(state.begin_live().is_err(), "only while a meeting is being recorded");
+        state.pause_for_recording().await.unwrap();
+        state.live.store(true, Ordering::SeqCst);
+        {
+            let notes = state.begin_live().expect("live notes may run during the call");
+            assert!(state.begin_live().is_err(), "one update at a time");
+            // A question the person asks stops the update, which lets go.
+            let question = async { state.begin_now("a question").await.map(|_| ()) };
+            let update = async {
+                state.cancelled().await;
+                drop(notes);
+            };
+            let (asked, ()) = tokio::join!(question, update);
+            assert!(asked.is_ok(), "the question runs once the update has stopped");
+        }
+        {
+            let _notes = state.begin_live().unwrap();
+            assert!(!state.cancel.load(Ordering::SeqCst));
+            state.cancel_live();
+            assert!(state.cancel.load(Ordering::SeqCst), "stopping the recording stops the update");
+        }
+        // A question the person asked is never cancelled by stopping.
+        let _question = state.begin_now("a question").await.unwrap();
+        state.cancel_live();
+        assert!(!state.cancel.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn the_live_transcript_reads_as_you_and_others_or_the_room() {
         use crate::audio::live::LiveLine;
-        let line = |source, start_ms, text: &str| LiveLine { source, start_ms, end_ms: start_ms + 1000, text: text.into() };
-        let call = vec![line("system", 5_000, "Shall we start?"), line("mic", 1_000, "Morning all.")];
+        let line = |source, start_ms, text: &str| LiveLine {
+            source,
+            start_ms,
+            end_ms: start_ms + 1000,
+            text: text.into(),
+            speaker: None,
+        };
+        let mut call = vec![line("system", 5_000, "Shall we start?"), line("mic", 1_000, "Morning all.")];
         assert_eq!(super::live_text(&call), "[00:01] You: Morning all.\n[00:05] Others: Shall we start?");
+        call.push(LiveLine { speaker: Some("Priya Shah".into()), ..line("system", 9_000, "Yes, let's.") });
+        assert!(super::live_text(&call).ends_with("[00:09] Priya Shah: Yes, let's."));
         let room = vec![line("mic", 65_000, "Let's begin.")];
         assert_eq!(super::live_text(&room), "[01:05] Room: Let's begin.");
     }

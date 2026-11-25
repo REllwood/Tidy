@@ -344,6 +344,35 @@ pub fn from_call(turns: &[Turn], speaking: &[Spoken], app: &str) -> Vec<Guess> {
     guesses
 }
 
+/// A live line is named when one person was shown speaking for at least this
+/// share of the line, at least this long, and for most of the time anyone
+/// was shown during it.
+const LINE_PART: f64 = 0.3;
+const LINE_MIN_MS: i64 = 300;
+const LINE_SHARE: f64 = 0.6;
+
+/// Who said one line of the live transcript, from who the call window showed
+/// speaking while it was said. Nobody when the window showed no one clearly.
+pub fn shown_during(speaking: &[Spoken], from_ms: i64, to_ms: i64) -> Option<String> {
+    let mut names: Vec<(&str, i64)> = Vec::new();
+    for s in speaking {
+        let ms = overlap((from_ms, to_ms), (s.from_ms, s.to_ms));
+        if ms == 0 {
+            continue;
+        }
+        match names.iter_mut().find(|(n, _)| *n == s.name) {
+            Some((_, total)) => *total += ms,
+            None => names.push((&s.name, ms)),
+        }
+    }
+    names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let total: i64 = names.iter().map(|(_, ms)| ms).sum();
+    let &(name, ms) = names.first()?;
+    let long = (to_ms - from_ms).max(0) as f64 * LINE_PART;
+    let clear = ms >= LINE_MIN_MS && ms as f64 >= long && ms as f64 / total as f64 >= LINE_SHARE;
+    clear.then(|| name.to_string())
+}
+
 /// One guess per label, from the call window where it saw enough, otherwise
 /// from the conversation. A name the call window gave a voice is not also
 /// given to another voice from the conversation.
@@ -493,6 +522,27 @@ mod tests {
         assert!(!priya.certain);
         assert!(guesses.iter().all(|g| g.label != "Speaker 2"), "{guesses:?}");
         assert!(guesses.iter().all(|g| g.label != "Speaker 3"), "nobody shown");
+    }
+
+    #[test]
+    fn a_live_line_is_named_after_who_was_shown_speaking_through_it() {
+        let speaking = vec![
+            shown("Priya Shah", 0, 6),
+            shown("Tom Baker", 6, 7),
+            shown("Tom Baker", 9, 10),
+            shown("Mia Chen", 10, 11),
+        ];
+        // Priya through most of it, Tom only as it ends.
+        assert_eq!(shown_during(&speaking, 1_000, 6_500).as_deref(), Some("Priya Shah"));
+        // A one-word line in the middle of a stretch.
+        assert_eq!(shown_during(&speaking, 3_000, 3_400).as_deref(), Some("Priya Shah"));
+        // Tom and Mia half each: no name.
+        assert_eq!(shown_during(&speaking, 9_000, 11_000), None);
+        // Shown for only a moment of a long line: no name.
+        assert_eq!(shown_during(&speaking, 5_800, 20_000), None);
+        // Nobody shown.
+        assert_eq!(shown_during(&speaking, 30_000, 32_000), None);
+        assert_eq!(shown_during(&[], 0, 1_000), None);
     }
 
     #[test]
