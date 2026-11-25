@@ -761,7 +761,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         sidecar_path: sidecar,
         claude_command: `claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN=${token} tidy -- "${sidecar}"`,
         codex_command: `codex mcp add tidy --env TIDY_MCP_TOKEN=${token} -- "${sidecar}"`,
-        claude_live_command: "claude --model haiku --dangerously-load-development-channels server:tidy",
+        claude_live_command: `claude --model haiku --tools "" --strict-mcp-config --mcp-config '{"mcpServers":{"tidy":{"type":"stdio","command":"${sidecar}","env":{"TIDY_MCP_TOKEN":"${token}"}}}}' --dangerously-load-development-channels server:tidy`,
       } as T;
     }
     case "mcp_disable": {

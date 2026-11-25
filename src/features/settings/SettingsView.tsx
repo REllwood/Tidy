@@ -434,7 +434,7 @@ function LiveFeedSettings() {
           {info.data ? (
             <>
               <CopyCommand
-                label="To have Claude Code follow the meeting as it happens, start it like this (live updates are a Claude Code research preview, so it asks you to confirm each time):"
+                label="To have Claude Code follow the meeting as it happens, start it like this. It runs Claude Haiku with only Tidy's tools, so nothing said in the meeting can get it to run commands on your Mac. Live updates are a Claude Code research preview, so it asks you to confirm each time:"
                 command={info.data.claude_live_command}
               />
               <p className="text-note text-text-muted">

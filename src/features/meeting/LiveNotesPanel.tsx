@@ -1,21 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
-import {
-  liveApi,
-  liveFeedApi,
-  type AgentNote,
-  type LiveLine,
-  type LiveNotes,
-  type LiveNotesBy,
-  type LiveView,
-} from "@/lib/api";
-import { errorMessage } from "@/lib/errors";
-import { isTauri } from "@/lib/tauri";
+import type { AgentNote, LiveLine, LiveNotesBy, LiveView } from "@/lib/api";
 import { useUi } from "@/store/ui";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { useSharedLiveNotes } from "./useLiveNotes";
 
 export const LIVE_VIEWS: { id: LiveView; label: string }[] = [
   { id: "summary", label: "Summary so far" },
@@ -31,21 +19,6 @@ const AGENT_VIEWS: Record<AgentNote["view"], string> = {
   open: "Still open",
   note: "Note",
 };
-
-/** How often the notes update by themselves, and how much new speech they wait for. */
-export const UPDATE_EVERY_MS = 90_000;
-export const UPDATE_AFTER_CHARS = 300;
-const CHECK_EVERY_MS = 15_000;
-
-/** Whether the notes are due an update by themselves. */
-export function updateDue(now: number, lastRun: number, heard: number, heardAtLast: number): boolean {
-  return now - lastRun >= UPDATE_EVERY_MS && heard - heardAtLast >= UPDATE_AFTER_CHARS;
-}
-
-/** Errors an update made by itself keeps quiet about: it tries again later. */
-function quiet(message: string): boolean {
-  return /cancelled|already being updated|Another local AI operation|Nothing has been transcribed/i.test(message);
-}
 
 function clock(ms: number) {
   const s = Math.floor(ms / 1000);
@@ -63,7 +36,9 @@ function ago(ms: number) {
  * Notes that keep up with the meeting: a summary, questions to ask,
  * decisions and next steps, what is still open and the person's own view,
  * written by the local model or, when meetings are shared, Claude or Codex.
- * Notes Claude or Codex post through Tidy's MCP server are shown too.
+ * Notes Claude or Codex post through Tidy's MCP server are shown too. The
+ * notes and their updates belong to the recording, so this panel only
+ * shows them.
  */
 export function LiveNotesPanel({
   lines,
@@ -78,105 +53,9 @@ export function LiveNotesPanel({
   const setViews = useUi((s) => s.setLiveNotesViews);
   const custom = useUi((s) => s.liveNotesCustom);
   const setCustom = useUi((s) => s.setLiveNotesCustom);
-  const chosenBy = useUi((s) => s.liveNotesBy);
   const setBy = useUi((s) => s.setLiveNotesBy);
-
-  const feed = useQuery({ queryKey: ["live-feed-status"], queryFn: liveFeedApi.status, staleTime: 30_000 });
-  const can = (by: LiveNotesBy) => by === "local" || (!!feed.data?.enabled && !!feed.data?.[by]);
-  const by: LiveNotesBy = can(chosenBy) ? chosenBy : "local";
-
-  const [notes, setNotes] = useState<LiveNotes | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const running = useRef(false);
-  const lastRun = useRef(0);
-  const heardAtLast = useRef(0);
-  const heard = useMemo(() => lines.reduce((n, l) => n + l.text.length, 0), [lines]);
-
-  // Notes written before this panel opened.
-  useEffect(() => {
-    liveApi
-      .latest()
-      .then((n) => {
-        if (n) {
-          setNotes(n);
-          lastRun.current = n.updated_at;
-        }
-      })
-      .catch(() => {});
-  }, []);
-
+  const { notes, error, busy, by, can, sharing, agentNotes, now, update } = useSharedLiveNotes();
   const asked = views.filter((v) => v !== "custom" || custom.trim());
-  const update = useCallback(
-    async (byHand: boolean) => {
-      if (running.current || asked.length === 0) return;
-      running.current = true;
-      setBusy(true);
-      const heardNow = heard;
-      try {
-        const next = await liveApi.notes(asked, custom.trim() || null, by);
-        setNotes(next);
-        setError(null);
-        heardAtLast.current = heardNow;
-      } catch (e) {
-        const message = errorMessage(e);
-        if (byHand || !quiet(message)) setError(message);
-      } finally {
-        lastRun.current = Date.now();
-        running.current = false;
-        setBusy(false);
-      }
-    },
-    [asked, custom, by, heard],
-  );
-
-  // Updates by themselves, once enough new speech has come in.
-  const latestUpdate = useRef(update);
-  latestUpdate.current = update;
-  const latestHeard = useRef(heard);
-  latestHeard.current = heard;
-  useEffect(() => {
-    const tick = () => {
-      setNow(Date.now());
-      if (auto && updateDue(Date.now(), lastRun.current, latestHeard.current, heardAtLast.current)) {
-        void latestUpdate.current(false);
-      }
-    };
-    tick();
-    const id = setInterval(tick, CHECK_EVERY_MS);
-    return () => clearInterval(id);
-  }, [auto]);
-
-  // Notes Claude or Codex post through Tidy's MCP server.
-  const [agentNotes, setAgentNotes] = useState<AgentNote[]>([]);
-  const lastAgentNote = useRef(0);
-  const sharing = !!feed.data?.enabled;
-  useEffect(() => {
-    if (!sharing) return;
-    let gone = false;
-    const fetchNew = () =>
-      liveApi
-        .agentNotes(lastAgentNote.current)
-        .then((more) => {
-          if (gone || more.length === 0) return;
-          lastAgentNote.current = more[more.length - 1].id;
-          setAgentNotes((all) => [...all, ...more]);
-        })
-        .catch(() => {});
-    void fetchNew();
-    let stop: (() => void) | undefined;
-    if (isTauri()) {
-      void listen("live-notes-posted", () => void fetchNew()).then((un) => {
-        if (gone) un();
-        else stop = un;
-      });
-    }
-    return () => {
-      gone = true;
-      stop?.();
-    };
-  }, [sharing]);
 
   const toggle = (id: LiveView) =>
     setViews(views.includes(id) ? views.filter((v) => v !== id) : LIVE_VIEWS.map((v) => v.id).filter((v) => v === id || views.includes(v)));
@@ -217,7 +96,7 @@ export function LiveNotesPanel({
         </span>
       </div>
 
-      {!feed.data?.enabled && (
+      {!sharing && (
         <p className="text-xs text-text-faint">
           Notes are written on this Mac. To have Claude or Codex write them, turn on sharing in Settings, under Agent connection.
         </p>

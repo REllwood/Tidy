@@ -152,8 +152,10 @@ fn finish(
     if let Some(watch) = session.call_watch.take() {
         session.call_seen = Some(watch.finish());
     }
-    // Nothing of the meeting stays shared once it stops.
+    // Nothing of the meeting stays shared once it stops, and live notes
+    // still being written on this Mac give way to the transcript.
     crate::live_feed::end(app);
+    app.state::<crate::local_ai::AiState>().cancel_live();
     let mut recording = match recorder::stop(&mut session) {
         Ok(recording) => recording,
         Err(error) => return (Some(session), Err(error)),

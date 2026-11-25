@@ -149,6 +149,14 @@ impl AiState {
         self.worker_origin.store(true, Ordering::SeqCst);
         Ok(Operation { state: self, _guard: guard })
     }
+    /// The recording stopped: a live notes update still running stops too.
+    /// While a meeting is recorded, background work never holds the gate,
+    /// so anything holding it as background work is live notes.
+    pub fn cancel_live(&self) {
+        if self.live.load(Ordering::SeqCst) && self.worker_origin.load(Ordering::SeqCst) {
+            self.cancel.store(true, Ordering::SeqCst);
+        }
+    }
     fn claim(&self, origin: Origin) -> AppResult<Operation<'_>> {
         let guard = self.gate.try_lock().map_err(|_| busy())?;
         self.claim_with(guard, origin)
@@ -705,6 +713,36 @@ mod tests {
         // Transcribing afterwards is not live: everything waits again.
         state.live.store(false, Ordering::SeqCst);
         assert!(state.begin("during transcription").is_err());
+    }
+
+    #[tokio::test]
+    async fn live_notes_run_during_a_call_and_give_way_to_the_person_and_to_stopping() {
+        let state = AiState::default();
+        assert!(state.begin_live().is_err(), "only while a meeting is being recorded");
+        state.pause_for_recording().await.unwrap();
+        state.live.store(true, Ordering::SeqCst);
+        {
+            let notes = state.begin_live().expect("live notes may run during the call");
+            assert!(state.begin_live().is_err(), "one update at a time");
+            // A question the person asks stops the update, which lets go.
+            let question = async { state.begin_now("a question").await.map(|_| ()) };
+            let update = async {
+                state.cancelled().await;
+                drop(notes);
+            };
+            let (asked, ()) = tokio::join!(question, update);
+            assert!(asked.is_ok(), "the question runs once the update has stopped");
+        }
+        {
+            let _notes = state.begin_live().unwrap();
+            assert!(!state.cancel.load(Ordering::SeqCst));
+            state.cancel_live();
+            assert!(state.cancel.load(Ordering::SeqCst), "stopping the recording stops the update");
+        }
+        // A question the person asked is never cancelled by stopping.
+        let _question = state.begin_now("a question").await.unwrap();
+        state.cancel_live();
+        assert!(!state.cancel.load(Ordering::SeqCst));
     }
 
     #[test]
