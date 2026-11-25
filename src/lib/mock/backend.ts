@@ -21,6 +21,18 @@ import type {
 // ---- mock meeting state (browser preview only) ----
 let mockMarks = 0;
 let mockRecording = false;
+/** When the preview's recording started, so its live transcript can grow. */
+let mockRecordingStartedAt = 0;
+/** The preview's live transcript: a short sync about a beta, said over the first 20 seconds. */
+const MOCK_LIVE_LINES: { source: "mic" | "system"; start_ms: number; text: string; speaker: string | null }[] = [
+  { source: "mic", start_ms: 2_000, text: "Morning both. Shall we start with the beta?", speaker: null },
+  { source: "system", start_ms: 5_000, text: "Yes, the beta build is ready and the release notes are drafted.", speaker: "Ana Ruiz" },
+  { source: "system", start_ms: 8_000, text: "The store review is the risk. If it is slow, we slip a week.", speaker: "Ben Ito" },
+  { source: "system", start_ms: 11_000, text: "Then let's send it to testers on Friday and keep the public date flexible.", speaker: "Ana Ruiz" },
+  { source: "mic", start_ms: 14_000, text: "Agreed. Ben, can you send the testers the invite?", speaker: null },
+  { source: "system", start_ms: 17_000, text: "I'll send it this afternoon.", speaker: "Ben Ito" },
+  { source: "system", start_ms: 20_000, text: "We still need someone to own the support page.", speaker: "Ana Ruiz" },
+];
 let mockRecordingKeepAudio = false;
 const cancelledTranscriptions = new Set<string>();
 const cancelledDownloads = new Set<string>();
@@ -1033,6 +1045,7 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return undefined as T;
     }
     case "start_recording":
+      mockRecordingStartedAt = Date.now();
       mockRecordingKeepAudio = d.settings["recording.keep_audio"] === "true";
       mockRecording = true;
       mockMarks = 0;
@@ -1043,17 +1056,33 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return (mockMarks * 30_000) as T;
     case "meeting_hud_state":
       return { kind: "none" } as T;
-    case "live_transcript":
-      return [] as T;
+    case "live_transcript": {
+      if (!mockRecording) return [] as T;
+      const heard = Date.now() - mockRecordingStartedAt;
+      return MOCK_LIVE_LINES.filter((l) => l.start_ms + 1_500 <= heard).map((l) => ({
+        ...l,
+        end_ms: l.start_ms + 1_500,
+      })) as T;
+    }
     case "live_notes": {
       const views = (args.views as string[]) ?? [];
       const by = args.by === "claude" ? "Claude" : args.by === "codex" ? "Codex" : "This Mac";
-      const sample: Record<string, { text: string; quote: string; at_ms: number; new: boolean }[]> = {
-        summary: [{ text: "Preview: the team reviewed the recorder beta.", quote: "Let's look at the beta.", at_ms: 5_000, new: false }],
-        questions: [{ text: "Who will send the release notes, and by when?", quote: "Someone should write the notes.", at_ms: 64_000, new: true }],
-        decisions: [{ text: "The beta ships on Friday.", quote: "We ship it Friday.", at_ms: 92_000, new: true }],
-        open: [],
-        custom: [{ text: "The release date depends on the store review.", quote: "If the review is slow we slip.", at_ms: 120_000, new: true }],
+      const note = (text: string, quote: string, at_ms: number, isNew = false) => ({ text, quote, at_ms, new: isNew });
+      const sample: Record<string, ReturnType<typeof note>[]> = {
+        summary: [
+          note("The beta build is ready and the release notes are drafted.", "Yes, the beta build is ready and the release notes are drafted.", 5_000),
+          note("Ben sees the store review as the main risk to the date.", "The store review is the risk. If it is slow, we slip a week.", 8_000),
+        ],
+        questions: [
+          note("Who will own the support page before Friday?", "We still need someone to own the support page.", 20_000, true),
+          note("What happens to the public date if the review takes over a week?", "The store review is the risk. If it is slow, we slip a week.", 8_000, true),
+        ],
+        decisions: [
+          note("Testers get the beta on Friday, and the public date stays flexible.", "Then let's send it to testers on Friday and keep the public date flexible.", 11_000),
+          note("Ben sends the testers the invite this afternoon.", "I'll send it this afternoon.", 17_000, true),
+        ],
+        open: [note("Nobody owns the support page yet.", "We still need someone to own the support page.", 20_000, true)],
+        custom: [note("The store review could delay the launch by a week.", "The store review is the risk. If it is slow, we slip a week.", 8_000, true)],
       };
       return {
         views: Object.fromEntries(views.map((v) => [v, sample[v] ?? []])),
@@ -1171,6 +1200,8 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         audio_path: rec.audio_path,
         duration_ms: rec.duration_ms,
         page_id: note.page_id,
+        // Named after the calendar's meeting, as the desktop app does.
+        title: previewCalendar ? "Weekly product sync" : null,
       } as T;
     }
     case "recording_history":

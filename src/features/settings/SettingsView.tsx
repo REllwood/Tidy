@@ -102,7 +102,7 @@ export function SettingsView() {
 
         <Section
           title="Share meetings live"
-          desc="Let Claude or Codex follow the meeting you are recording and write live notes. Off by default: while it is on, the meeting leaves this Mac."
+          desc="Let Claude or Codex follow the meeting you are recording and write live notes. Off by default."
         >
           <LiveFeedSettings />
         </Section>
@@ -412,12 +412,17 @@ function LiveFeedSettings() {
         />
       </label>
       <p className="text-xs text-text-muted">
-        While you record, the transcript so far is kept in Tidy's database, where
+        When you connect Claude or Codex, the meeting you are recording is shared
+        with a third party: Anthropic for Claude, OpenAI for Codex, under their own
+        policies. To keep your meetings on your Mac, leave this off and let This
+        Mac write the live notes. Transcription always runs on your Mac.
+      </p>
+      <p className="text-xs text-text-muted">
+        While it is on, the transcript so far is kept in Tidy's database, where
         Claude Code or Codex can read it through Tidy's MCP server and post notes
         to your live notes. You can also choose Claude or Codex to write the live
         notes, using the cheaper Claude Haiku or GPT-6 Luna and your own sign-in.
-        What they read is sent to Anthropic or OpenAI. Tidy removes the shared
-        transcript when the recording stops.
+        Tidy removes the shared transcript when the recording stops.
       </p>
       {change.error && (
         <p role="alert" className="text-note text-danger-c">

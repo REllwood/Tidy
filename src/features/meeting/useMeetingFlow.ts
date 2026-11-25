@@ -195,7 +195,18 @@ export function useMeetingFlow() {
 
   const startMockMeters = useCallback(() => {
     const t0 = Date.now();
+    let ticks = 0;
     mockTimer.current = setInterval(() => {
+      // The preview has no live transcript events: ask for the lines so far
+      // about once a second instead.
+      if (ticks++ % 7 === 0) {
+        void liveApi
+          .transcript()
+          .then((lines) =>
+            setState((s) => (s.liveLines.length === lines.length ? s : { ...s, liveLines: lines })),
+          )
+          .catch(() => {});
+      }
       patch({
         elapsedMs: Date.now() - t0,
         levels: {
