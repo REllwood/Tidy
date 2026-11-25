@@ -4,6 +4,8 @@ mod calendar;
 mod call_window;
 mod commands;
 mod lifecycle;
+mod assistant_cli;
+mod live_feed;
 mod local_ai;
 mod meeting_monitor;
 mod vault;
@@ -53,6 +55,8 @@ fn spawn_mcp_change_poller(app: tauri::AppHandle) {
                 drained
             };
             let Some(pages) = changed else { continue };
+            // Claude or Codex may have posted a note to the live panel.
+            let _ = app.emit("live-notes-posted", ());
             let _ = app.emit("pages-changed", ());
             let _ = app.emit("database-changed", ());
             let _ = app.emit("links-changed", ());
@@ -111,6 +115,8 @@ pub fn run() {
                 std::io::Error::other(e.to_string())
             })?;
             app.manage(database);
+            // A meeting shared live when Tidy last closed is not shared now.
+            live_feed::end(app.handle());
             app.manage(RecorderState::default());
             app.manage(meeting_monitor::MonitorState::default());
             app.manage(commands::updates::UpdateState::default());
@@ -118,6 +124,7 @@ pub fn run() {
             app.manage(VaultState::default());
             app.manage(CloseState::default());
             app.manage(local_ai::AiState::default());
+            app.manage(local_ai::LiveNotesState::default());
             local_ai::start_worker(app.handle().clone());
             meeting_monitor::start(app.handle().clone());
 
@@ -214,7 +221,8 @@ pub fn run() {
             commands::recording_preferences::get_transcription_vocabulary,
             commands::recording::mark_moment,
             commands::recording::live_transcript,
-            local_ai::live_recap,
+            local_ai::live_notes,
+            local_ai::live_notes_latest,
             meeting_monitor::meeting_hud_state,
             meeting_monitor::meeting_hud_respond,
             meeting_monitor::get_meeting_automation,
@@ -224,6 +232,10 @@ pub fn run() {
             calendar::calendar_disconnect,
             calendar::calendar_events,
             call_window::call_names_status,
+            live_feed::live_feed_status,
+            live_feed::live_feed_enable,
+            live_feed::live_feed_disable,
+            live_feed::live_feed_notes,
             call_window::call_names_enable,
             call_window::call_names_disable,
             call_window::call_names_open_settings,

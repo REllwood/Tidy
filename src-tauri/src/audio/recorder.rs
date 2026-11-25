@@ -126,6 +126,11 @@ impl RecordingSession {
         self.lines.lock().map(|l| l.clone()).unwrap_or_default()
     }
 
+    /// When recording began, in ms since 1970.
+    pub fn started_at(&self) -> i64 {
+        self.started_at
+    }
+
     /// Where the call window puts who it shows speaking, as the call goes.
     pub fn call_shown(&self) -> Arc<Mutex<Vec<tidy_core::store::recordings::Spoken>>> {
         self.call_shown.clone()
@@ -189,7 +194,16 @@ pub fn start(
     // The live transcript, line by line. The saved transcript still comes
     // from the recorded file once it stops.
     let live_handle = model_path.map(|mp| {
-        super::live::spawn(app.clone(), stop.clone(), live_rx, lines.clone(), call_shown.clone(), mp, language)
+        super::live::spawn(super::live::Live {
+            app: app.clone(),
+            stop: stop.clone(),
+            chunks: live_rx,
+            lines: lines.clone(),
+            call_shown: call_shown.clone(),
+            share: crate::live_feed::writer(app.clone()),
+            model_path: mp,
+            language,
+        })
     });
 
     Ok(RecordingSession {

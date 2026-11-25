@@ -276,16 +276,55 @@ export interface LiveLine {
   /** Who said a line from the call, when the call window showed them. */
   speaker?: string | null;
 }
-/** "Recap so far" during a recording. */
-export interface LiveRecap {
-  points: string[];
-  decisions: string[];
-  actions: string[];
-  open_questions: string[];
+/** The views live notes can show. */
+export type LiveView = "summary" | "questions" | "decisions" | "open" | "custom";
+/** Who writes the live notes: the local model, Claude or Codex. */
+export type LiveNotesBy = "local" | "claude" | "codex";
+/** One item of live notes, with the line it came from. */
+export interface LiveNote {
+  text: string;
+  quote: string;
+  /** When the quote was said, in ms from the start of the recording. */
+  at_ms: number | null;
+  /** Added in the latest update. */
+  new: boolean;
+}
+/** Notes kept while a meeting is recorded. */
+export interface LiveNotes {
+  views: Partial<Record<LiveView, LiveNote[]>>;
+  /** The person's own instruction behind the "custom" view. */
+  custom: string | null;
+  /** "This Mac", "Claude" or "Codex". */
+  by: string;
+  updated_at: number;
+}
+/** A note Claude or Codex posted to the live panel through Tidy's MCP server. */
+export interface AgentNote {
+  id: number;
+  author: string;
+  view: "summary" | "questions" | "decisions" | "open" | "note";
+  text: string;
+  created_at: number;
 }
 export const liveApi = {
   transcript: () => invoke<LiveLine[]>("live_transcript"),
-  recap: () => invoke<LiveRecap>("live_recap"),
+  notes: (views: LiveView[], custom: string | null, by: LiveNotesBy) =>
+    invoke<LiveNotes>("live_notes", { views, custom, by: by === "local" ? null : by }),
+  latest: () => invoke<LiveNotes | null>("live_notes_latest"),
+  agentNotes: (after: number) => invoke<AgentNote[]>("live_feed_notes", { after }),
+};
+
+/** Sharing meetings live with Claude and Codex. */
+export interface LiveFeedStatus {
+  enabled: boolean;
+  /** The Claude Code and Codex command-line tools were found on this Mac. */
+  claude: boolean;
+  codex: boolean;
+}
+export const liveFeedApi = {
+  status: () => invoke<LiveFeedStatus>("live_feed_status"),
+  enable: () => invoke<LiveFeedStatus>("live_feed_enable"),
+  disable: () => invoke<void>("live_feed_disable"),
 };
 
 export const recordingApi = {
@@ -424,6 +463,10 @@ export interface McpInfo {
   token: string;
   sidecar_path: string;
   claude_command: string;
+  /** The same connector for Codex. */
+  codex_command: string;
+  /** Starts Claude Code with live meeting updates pushed to it. */
+  claude_live_command: string;
 }
 
 export const mcpApi = {

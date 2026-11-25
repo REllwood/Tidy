@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { readStoredValue } from "@/lib/storage";
 import { createJSONStorage, persist } from "zustand/middleware";
+import type { LiveNotesBy, LiveView } from "@/lib/api";
 
 export type Theme = "light" | "dark" | "system";
 
@@ -62,6 +63,18 @@ interface UiState {
 
   // meeting: speaker diarization preference
   diarizeEnabled: boolean;
+  /** Live notes: update by themselves while recording. */
+  liveNotesAuto: boolean;
+  setLiveNotesAuto: (v: boolean) => void;
+  /** Which views the live notes show. */
+  liveNotesViews: LiveView[];
+  setLiveNotesViews: (v: LiveView[]) => void;
+  /** The person's own instruction for the "Your own" view. */
+  liveNotesCustom: string;
+  setLiveNotesCustom: (v: string) => void;
+  /** Who writes the live notes. */
+  liveNotesBy: LiveNotesBy;
+  setLiveNotesBy: (v: LiveNotesBy) => void;
   setDiarizeEnabled: (v: boolean) => void;
 }
 
@@ -144,6 +157,14 @@ export const useUi = create<UiState>()(
 
       diarizeEnabled: true,
       setDiarizeEnabled: (diarizeEnabled) => set({ diarizeEnabled }),
+      liveNotesAuto: true,
+      setLiveNotesAuto: (liveNotesAuto) => set({ liveNotesAuto }),
+      liveNotesViews: ["summary", "questions", "decisions", "open"],
+      setLiveNotesViews: (liveNotesViews) => set({ liveNotesViews }),
+      liveNotesCustom: "",
+      setLiveNotesCustom: (liveNotesCustom) => set({ liveNotesCustom }),
+      liveNotesBy: "local",
+      setLiveNotesBy: (liveNotesBy) => set({ liveNotesBy }),
     }),
     {
       name: "tidy-ui",
@@ -157,6 +178,10 @@ export const useUi = create<UiState>()(
         expanded: s.expanded,
         dbActiveView: s.dbActiveView,
         diarizeEnabled: s.diarizeEnabled,
+        liveNotesAuto: s.liveNotesAuto,
+        liveNotesViews: s.liveNotesViews,
+        liveNotesCustom: s.liveNotesCustom,
+        liveNotesBy: s.liveNotesBy,
         onboarded: s.onboarded,
         dismissedTips: s.dismissedTips,
       }),

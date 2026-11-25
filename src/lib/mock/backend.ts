@@ -760,6 +760,8 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
         token,
         sidecar_path: sidecar,
         claude_command: `claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN=${token} tidy -- "${sidecar}"`,
+        codex_command: `codex mcp add tidy --env TIDY_MCP_TOKEN=${token} -- "${sidecar}"`,
+        claude_live_command: "claude --model haiku --dangerously-load-development-channels server:tidy",
       } as T;
     }
     case "mcp_disable": {
@@ -1043,13 +1045,37 @@ export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
       return { kind: "none" } as T;
     case "live_transcript":
       return [] as T;
-    case "live_recap":
+    case "live_notes": {
+      const views = (args.views as string[]) ?? [];
+      const by = args.by === "claude" ? "Claude" : args.by === "codex" ? "Codex" : "This Mac";
+      const sample: Record<string, { text: string; quote: string; at_ms: number; new: boolean }[]> = {
+        summary: [{ text: "Preview: the team reviewed the recorder beta.", quote: "Let's look at the beta.", at_ms: 5_000, new: false }],
+        questions: [{ text: "Who will send the release notes, and by when?", quote: "Someone should write the notes.", at_ms: 64_000, new: true }],
+        decisions: [{ text: "The beta ships on Friday.", quote: "We ship it Friday.", at_ms: 92_000, new: true }],
+        open: [],
+        custom: [{ text: "The release date depends on the store review.", quote: "If the review is slow we slip.", at_ms: 120_000, new: true }],
+      };
       return {
-        points: ["Preview: the team reviewed the recorder beta."],
-        decisions: ["Ship the beta on Friday."],
-        actions: ["You will send the release notes."],
-        open_questions: [],
+        views: Object.fromEntries(views.map((v) => [v, sample[v] ?? []])),
+        custom: (args.custom as string | null) ?? null,
+        by,
+        updated_at: Date.now(),
       } as T;
+    }
+    case "live_notes_latest":
+      return null as T;
+    case "live_feed_status":
+      return { enabled: d.settings["live_feed.enabled"] === "true", claude: true, codex: true } as T;
+    case "live_feed_enable":
+      d.settings["live_feed.enabled"] = "true";
+      commit();
+      return { enabled: true, claude: true, codex: true } as T;
+    case "live_feed_disable":
+      d.settings["live_feed.enabled"] = "false";
+      commit();
+      return undefined as T;
+    case "live_feed_notes":
+      return [] as T;
     case "call_names_status":
       return { enabled: d.settings["call_names.enabled"] === "true", allowed: true, supported: true } as T;
     case "call_names_enable":

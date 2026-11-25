@@ -16,6 +16,7 @@ import {
   Timer,
 } from "lucide-react";
 import {
+  liveFeedApi,
   modelsApi,
   recordingHistoryApi,
   recordingPreferencesApi,
@@ -74,6 +75,8 @@ export function MeetingRecorder() {
     queryFn: localAi.status,
   });
   const clients = useQuery({ queryKey: meetingJobsKey, queryFn: localAi.jobs });
+  // Whether the meeting is shared live with Claude and Codex.
+  const sharing = useQuery({ queryKey: ["live-feed-status"], queryFn: liveFeedApi.status, staleTime: 30_000 });
   const selected = models?.find((m) => m.selected && m.downloaded);
   const keepAudio = keepAudioNotice(state.phase, state.keepAudio, retention.data);
   const now = useMeetingNow(state.client);
@@ -200,7 +203,9 @@ export function MeetingRecorder() {
                 Recording
               </span>
               <span className="ml-auto text-xs text-text-faint">
-                On this Mac · nothing is uploaded
+                {sharing.data?.enabled
+                  ? "Shared live with Claude and Codex"
+                  : "On this Mac · nothing is uploaded"}
               </span>
             </div>
             <div className="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">

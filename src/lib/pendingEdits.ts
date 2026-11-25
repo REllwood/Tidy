@@ -28,7 +28,12 @@ const READ_COMMANDS = new Set([
   "meeting_speakers",
   "meeting_hud_state",
   "live_transcript",
-  "live_recap",
+  // Live notes are kept in memory only, and an update can take minutes:
+  // closing Tidy must not wait for one.
+  "live_notes",
+  "live_notes_latest",
+  "live_feed_status",
+  "live_feed_notes",
   "note_templates",
   "meeting_last_time",
   "meeting_event",

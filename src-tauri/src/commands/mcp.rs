@@ -16,6 +16,12 @@ pub struct McpInfo {
     pub sidecar_path: String,
     /// A ready-to-paste `claude mcp add` command.
     pub claude_command: String,
+    /// The same for Codex.
+    pub codex_command: String,
+    /// Starts Claude Code with the meeting being recorded pushed to it, on a
+    /// cheaper model. Channels are a research preview, so Claude Code asks
+    /// to confirm the development flag each time.
+    pub claude_live_command: String,
 }
 
 /// Best-effort path to the sidecar next to the running executable (in a bundled
@@ -50,10 +56,14 @@ pub async fn mcp_enable(app: AppHandle) -> AppResult<McpInfo> {
     let claude_command = format!(
         "claude mcp add --scope user --transport stdio --env TIDY_MCP_TOKEN={token} tidy -- \"{sidecar}\""
     );
+    let codex_command = format!("codex mcp add tidy --env TIDY_MCP_TOKEN={token} -- \"{sidecar}\"");
+    let claude_live_command = "claude --model haiku --dangerously-load-development-channels server:tidy".to_string();
     Ok(McpInfo {
         token,
         sidecar_path: sidecar,
         claude_command,
+        codex_command,
+        claude_live_command,
     })
 }
 

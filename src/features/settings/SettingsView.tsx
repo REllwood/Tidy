@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, Circle, RefreshCw, Lock } from "lucide-react";
 import { useUi, type Theme } from "@/store/ui";
-import { diarizeApi, vaultApi, mcpApi } from "@/lib/api";
+import { diarizeApi, vaultApi, mcpApi, liveFeedApi } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -100,13 +100,20 @@ export function SettingsView() {
           <McpSettings />
         </Section>
 
+        <Section
+          title="Share meetings live"
+          desc="Let Claude or Codex follow the meeting you are recording and write live notes. Off by default: while it is on, the meeting leaves this Mac."
+        >
+          <LiveFeedSettings />
+        </Section>
+
         <Section title="Updates"><UpdateSettings /></Section>
 
         <Section title="Privacy & data">
           <div className="flex items-start gap-2.5 rounded-lg bg-brand-soft px-4 py-3 text-sm text-text-muted">
             <Lock className="mt-0.5 size-4 shrink-0" />
             <span>
-              Your notes and transcripts stay on this Mac. Audio is only kept if you enable it. Model downloads use Hugging Face; update checks and downloads use GitHub. Meeting content is never sent with these requests. AI processing runs locally.
+              Your notes and transcripts stay on this Mac. Audio is only kept if you enable it. Model downloads use Hugging Face; update checks and downloads use GitHub. Meeting content is never sent with these requests. AI processing runs locally, unless you share meetings live with Claude or Codex.
             </span>
           </div>
         </Section>
@@ -248,8 +255,6 @@ function McpSettings() {
     queryKey: ["mcp-token"],
     queryFn: () => mcpApi.getToken(),
   });
-  const [copied, setCopied] = useState(false);
-
   // While write access is on, ask the core for the connector details so the
   // registration command is always on screen, not only in the session that
   // switched it on. `mcp_enable` is idempotent and reuses the saved token.
@@ -332,26 +337,116 @@ function McpSettings() {
         </p>
       )}
       {cmd && (
-        <div className="space-y-1.5">
+        <CopyCommand
+          label="Register the connector for Claude Code by running this once in your terminal:"
+          command={cmd}
+        />
+      )}
+      {enabled && (info.data?.codex_command ?? enable.data?.codex_command) && (
+        <CopyCommand
+          label="Or for Codex:"
+          command={(info.data?.codex_command ?? enable.data?.codex_command)!}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A command to run in the terminal, with a button that copies it. */
+function CopyCommand({ label, command }: { label: string; command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="space-y-1.5">
+      <p className="text-note text-text-muted">{label}</p>
+      <div className="flex items-start gap-2">
+        <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre rounded bg-surface px-2.5 py-2 text-xs text-text">
+          {command}
+        </code>
+        <Button
+          size="sm"
+          variant="secondary"
+          aria-label={copied ? "Copied" : "Copy the command"}
+          onClick={() => {
+            navigator.clipboard?.writeText(command);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+        >
+          {copied ? <Check className="size-3.5" /> : "Copy"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Sharing the meeting being recorded with Claude and Codex: through Tidy's
+ * MCP server, and for writing live notes with the person's own Claude Code
+ * or Codex.
+ */
+function LiveFeedSettings() {
+  const qc = useQueryClient();
+  const status = useQuery({ queryKey: ["live-feed-status"], queryFn: liveFeedApi.status });
+  const { data: token } = useQuery({ queryKey: ["mcp-token"], queryFn: () => mcpApi.getToken() });
+  const info = useQuery({
+    queryKey: ["mcp-info"],
+    queryFn: () => mcpApi.enable(),
+    enabled: !!token,
+    staleTime: Infinity,
+  });
+  const change = useMutation({
+    mutationFn: async (on: boolean) => (on ? liveFeedApi.enable() : liveFeedApi.disable()),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["live-feed-status"] }),
+  });
+  const on = status.data?.enabled ?? false;
+  const found = [status.data?.claude && "Claude Code", status.data?.codex && "Codex"].filter(Boolean);
+
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center justify-between gap-4 text-sm">
+        <span>Share meetings live with Claude and Codex</span>
+        <Switch
+          checked={on}
+          disabled={status.isPending || status.isError || change.isPending}
+          onCheckedChange={(v) => change.mutate(v)}
+        />
+      </label>
+      <p className="text-xs text-text-muted">
+        While you record, the transcript so far is kept in Tidy's database, where
+        Claude Code or Codex can read it through Tidy's MCP server and post notes
+        to your live notes. You can also choose Claude or Codex to write the live
+        notes, using the cheaper Claude Haiku or GPT-6 Luna and your own sign-in.
+        What they read is sent to Anthropic or OpenAI. Tidy removes the shared
+        transcript when the recording stops.
+      </p>
+      {change.error && (
+        <p role="alert" className="text-note text-danger-c">
+          {errorMessage(change.error)}
+        </p>
+      )}
+      {on && (
+        <div className="space-y-3 border-t border-border pt-3">
           <p className="text-note text-text-muted">
-            Register the connector by running this once in your terminal:
+            {found.length
+              ? `Found on this Mac: ${found.join(" and ")}. Choose who writes the notes in the recorder's Live notes tab.`
+              : "Claude Code and Codex were not found on this Mac, so live notes are written here. Install one to have it write them."}
           </p>
-          <div className="flex items-start gap-2">
-            <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre rounded bg-surface px-2.5 py-2 text-xs text-text">
-              {cmd}
-            </code>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                navigator.clipboard?.writeText(cmd);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              {copied ? <Check className="size-3.5" /> : "Copy"}
-            </Button>
-          </div>
+          {info.data ? (
+            <>
+              <CopyCommand
+                label="To have Claude Code follow the meeting as it happens, start it like this (live updates are a Claude Code research preview, so it asks you to confirm each time):"
+                command={info.data.claude_live_command}
+              />
+              <p className="text-note text-text-muted">
+                Then ask it something like “follow my meeting in Tidy and post questions I should ask”.
+                Codex can follow along too: ask it to read the live transcript from Tidy every minute.
+              </p>
+            </>
+          ) : (
+            <p className="text-note text-text-muted">
+              To let Claude Code or Codex connect and post notes, enable write access under Agent connection above.
+            </p>
+          )}
         </div>
       )}
     </div>

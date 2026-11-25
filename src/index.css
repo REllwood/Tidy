@@ -334,3 +334,12 @@ button:not(:disabled),
 ::highlight(transcript-line-found) {
   background-color: var(--brand-soft);
 }
+
+/* A scrolling list whose content fades gradually as it passes the top and
+   bottom edges. The padding matches the fade, so nothing is faded at rest. */
+.scroll-fade {
+  --fade: 1rem;
+  padding-block: var(--fade);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+}

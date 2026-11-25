@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -116,18 +116,27 @@ fn ms(samples: usize) -> i64 {
     (samples as i64 * 1000) / WHISPER_RATE as i64
 }
 
+/// What the live transcript works from and where its lines go.
+pub struct Live {
+    pub app: AppHandle,
+    pub stop: Arc<AtomicBool>,
+    /// Each chunk of audio as it is recorded: the microphone, then the call.
+    pub chunks: Receiver<(Vec<f32>, Vec<f32>)>,
+    /// The transcript so far, for the app.
+    pub lines: Arc<Mutex<Vec<LiveLine>>>,
+    /// Who the call window shows speaking.
+    pub call_shown: Arc<Mutex<Vec<Spoken>>>,
+    /// Each new or newly named line, for sharing with an assistant.
+    pub share: Sender<LiveLine>,
+    pub model_path: PathBuf,
+    pub language: String,
+}
+
 /// Transcribe utterances as they finish, until the recording stops.
-pub fn spawn(
-    app: AppHandle,
-    stop: Arc<AtomicBool>,
-    chunks: Receiver<(Vec<f32>, Vec<f32>)>,
-    lines: Arc<Mutex<Vec<LiveLine>>>,
-    call_shown: Arc<Mutex<Vec<Spoken>>>,
-    model_path: PathBuf,
-    language: String,
-) -> JoinHandle<()> {
+pub fn spawn(live: Live) -> JoinHandle<()> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+    let Live { app, stop, chunks, lines, call_shown, share, model_path, language } = live;
     std::thread::spawn(move || {
         let ctx = match WhisperContext::new_with_params(&model_path, WhisperContextParameters::default()) {
             Ok(c) => c,
@@ -178,6 +187,7 @@ pub fn spawn(
             let changed = name_lines(&mut all, &shown, heard - NAME_AGAIN_MS);
             drop(all);
             for line in changed {
+                let _ = share.send(line.clone());
                 let _ = app.emit("live-line", line);
             }
         };
@@ -235,6 +245,7 @@ pub fn spawn(
                     }
                     all.push(line.clone());
                     drop(all);
+                    let _ = share.send(line.clone());
                     let _ = app.emit("live-line", line);
                 }
                 side.pcm.drain(..keep_from);
